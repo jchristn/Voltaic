@@ -4,6 +4,7 @@ vendor/
 packages/
 
 # Build outputs
+.vs/
 dist/
 build/
 out/

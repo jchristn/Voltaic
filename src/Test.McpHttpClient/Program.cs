@@ -1,10 +1,9 @@
-namespace ClientProgram
+namespace McpHttpClientProgram
 {
-    using Voltaic.JsonRpc;
     using System;
-    using System.Net.Sockets;
     using System.Text.Json;
     using System.Threading.Tasks;
+    using Voltaic.Mcp;
 
     class Program
     {
@@ -12,7 +11,7 @@ namespace ClientProgram
         {
             if (args.Length != 1)
             {
-                Console.WriteLine("Usage: Test.JsonRpcClient <port>");
+                Console.WriteLine("Usage: Test.McpHttpClient <port>");
                 return;
             }
 
@@ -22,12 +21,12 @@ namespace ClientProgram
                 return;
             }
 
-            Console.WriteLine("=== JSON-RPC 2.0 Client ===");
-            Console.WriteLine($"Default port: {port}");
+            Console.WriteLine("=== MCP HTTP Client ===");
+            Console.WriteLine();
 
-            JsonRpcClient client = new JsonRpcClient();
+            McpHttpClient client = new McpHttpClient();
 
-            // Subscribe to log events
+            // Subscribe to logs
             client.Log += (sender, message) => Console.WriteLine(message);
 
             // Subscribe to notifications from server
@@ -37,12 +36,14 @@ namespace ClientProgram
                 Console.Write("> ");
             };
 
-            Console.WriteLine("\nAvailable commands:");
-            Console.WriteLine("  connect [host] [port]   - Connect to server (default: localhost and specified port)");
+            Console.WriteLine("Available commands:");
+            Console.WriteLine("  connect [url]           - Connect to HTTP server");
             Console.WriteLine("  disconnect              - Disconnect from server");
-            Console.WriteLine("  call <method> [json]    - Call RPC method with optional JSON params");
-            Console.WriteLine("  notify <method> [json]  - Send notification (no response expected)");
+            Console.WriteLine("  startsse                - Start SSE connection for notifications");
+            Console.WriteLine("  stopsse                 - Stop SSE connection");
+            Console.WriteLine("  call <method> [json]    - Call RPC method");
             Console.WriteLine("  status                  - Show connection status");
+            Console.WriteLine("  session                 - Show session ID");
             Console.WriteLine("  examples                - Show example commands");
             Console.WriteLine("  exit                    - Exit program");
             Console.WriteLine();
@@ -64,21 +65,17 @@ namespace ClientProgram
                     switch (command)
                     {
                         case "connect":
-                            string host = "localhost";
-                            int connectPort = port;
+                            string url = $"http://localhost:{port}";
 
                             if (parts.Length > 1)
                             {
-                                string[] connectParts = parts[1].Split(' ');
-                                if (connectParts.Length > 0)
-                                    host = connectParts[0];
-                                if (connectParts.Length > 1 && int.TryParse(connectParts[1], out int p))
-                                    connectPort = p;
+                                url = parts[1];
                             }
 
-                            if (await client.ConnectAsync(host, connectPort))
+                            if (await client.ConnectAsync(url).ConfigureAwait(false))
                             {
                                 Console.WriteLine("Connected successfully!");
+                                Console.WriteLine($"Session ID: {client.SessionId}");
                             }
                             else
                             {
@@ -88,6 +85,28 @@ namespace ClientProgram
 
                         case "disconnect":
                             client.Disconnect();
+                            break;
+
+                        case "startsse":
+                            if (!client.IsConnected)
+                            {
+                                Console.WriteLine("Not connected. Use 'connect' first.");
+                                break;
+                            }
+
+                            if (await client.StartSseAsync().ConfigureAwait(false))
+                            {
+                                Console.WriteLine("SSE connection started");
+                            }
+                            else
+                            {
+                                Console.WriteLine("Failed to start SSE");
+                            }
+                            break;
+
+                        case "stopsse":
+                            client.StopSse();
+                            Console.WriteLine("SSE connection stopped");
                             break;
 
                         case "call":
@@ -122,8 +141,8 @@ namespace ClientProgram
 
                             try
                             {
-                                object? result = await client.CallAsync(method, callParams);
-                                Console.WriteLine($"Result: {result}");
+                                object? result = await client.CallAsync<object>(method, callParams).ConfigureAwait(false);
+                                Console.WriteLine($"Result: {JsonSerializer.Serialize(result)}");
                             }
                             catch (Exception callEx)
                             {
@@ -131,56 +150,34 @@ namespace ClientProgram
                             }
                             break;
 
-                        case "notify":
-                            if (!client.IsConnected)
-                            {
-                                Console.WriteLine("Not connected. Use 'connect' first.");
-                                break;
-                            }
-
-                            if (parts.Length < 2)
-                            {
-                                Console.WriteLine("Usage: notify <method> [json_params]");
-                                break;
-                            }
-
-                            string[] notifyParts = parts[1].Split(' ', 2);
-                            string notifyMethod = notifyParts[0];
-                            object? notifyParams = null;
-
-                            if (notifyParts.Length > 1)
-                            {
-                                try
-                                {
-                                    notifyParams = JsonSerializer.Deserialize<JsonElement>(notifyParts[1]);
-                                }
-                                catch
-                                {
-                                    Console.WriteLine("Invalid JSON parameters");
-                                    break;
-                                }
-                            }
-
-                            await client.NotifyAsync(notifyMethod, notifyParams);
-                            Console.WriteLine("Notification sent");
-                            break;
-
                         case "status":
                             Console.WriteLine($"Connection status: {(client.IsConnected ? "Connected" : "Disconnected")}");
+                            Console.WriteLine($"SSE status: {(client.IsSseConnected ? "Connected" : "Disconnected")}");
+                            break;
+
+                        case "session":
+                            if (String.IsNullOrEmpty(client.SessionId))
+                            {
+                                Console.WriteLine("No session established");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Session ID: {client.SessionId}");
+                            }
                             break;
 
                         case "examples":
                             Console.WriteLine("\nExample commands:");
-                            Console.WriteLine("  connect                            - Connect to localhost on default port");
-                            Console.WriteLine("  connect 192.168.1.100 8080         - Connect to specific host and port");
-                            Console.WriteLine("  call ping                          - Simple call without parameters");
-                            Console.WriteLine("  call echo {\"message\":\"Hello\"}  - Call with parameters");
-                            Console.WriteLine("  call add {\"a\":5,\"b\":3}         - Call add method");
-                            Console.WriteLine("  call multiply {\"x\":4,\"y\":7}    - Call multiply method");
-                            Console.WriteLine("  call greet {\"name\":\"Alice\"}    - Call greet method");
-                            Console.WriteLine("  call getTime                       - Get server time");
-                            Console.WriteLine("  call getClients                    - Get list of connected clients");
-                            Console.WriteLine("  notify log {\"message\":\"Test\"}  - Send notification");
+                            Console.WriteLine("  connect                             - Connect to localhost on default port");
+                            Console.WriteLine("  connect http://192.168.1.100:8080   - Connect to specific URL");
+                            Console.WriteLine("  startsse                            - Start receiving notifications");
+                            Console.WriteLine("  call ping                           - Simple call without parameters");
+                            Console.WriteLine("  call echo {\"message\":\"Hello\"}     - Call with parameters");
+                            Console.WriteLine("  call add {\"a\":5,\"b\":3}            - Call add method");
+                            Console.WriteLine("  call multiply {\"x\":4,\"y\":7}       - Call multiply method");
+                            Console.WriteLine("  call greet {\"name\":\"Alice\"}       - Call greet method");
+                            Console.WriteLine("  call getTime                        - Get server time");
+                            Console.WriteLine("  call getSessions                    - Get list of active sessions");
                             break;
 
                         case "exit":
@@ -191,11 +188,13 @@ namespace ClientProgram
 
                         case "help":
                             Console.WriteLine("Available commands:");
-                            Console.WriteLine("  connect [host] [port]   - Connect to server");
+                            Console.WriteLine("  connect [url]           - Connect to HTTP server");
                             Console.WriteLine("  disconnect              - Disconnect from server");
+                            Console.WriteLine("  startsse                - Start SSE connection for notifications");
+                            Console.WriteLine("  stopsse                 - Stop SSE connection");
                             Console.WriteLine("  call <method> [json]    - Call RPC method");
-                            Console.WriteLine("  notify <method> [json]  - Send notification");
                             Console.WriteLine("  status                  - Show connection status");
+                            Console.WriteLine("  session                 - Show session ID");
                             Console.WriteLine("  examples                - Show example commands");
                             Console.WriteLine("  exit                    - Exit program");
                             break;

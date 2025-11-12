@@ -1,10 +1,9 @@
-namespace ClientProgram
+namespace McpWebsocketsClientProgram
 {
-    using Voltaic.JsonRpc;
     using System;
-    using System.Net.Sockets;
     using System.Text.Json;
     using System.Threading.Tasks;
+    using Voltaic.Mcp;
 
     class Program
     {
@@ -12,7 +11,7 @@ namespace ClientProgram
         {
             if (args.Length != 1)
             {
-                Console.WriteLine("Usage: Test.JsonRpcClient <port>");
+                Console.WriteLine("Usage: Test.McpWebsocketsClient <port>");
                 return;
             }
 
@@ -22,12 +21,12 @@ namespace ClientProgram
                 return;
             }
 
-            Console.WriteLine("=== JSON-RPC 2.0 Client ===");
-            Console.WriteLine($"Default port: {port}");
+            Console.WriteLine("=== MCP WebSocket Client ===");
+            Console.WriteLine();
 
-            JsonRpcClient client = new JsonRpcClient();
+            McpWebsocketsClient client = new McpWebsocketsClient();
 
-            // Subscribe to log events
+            // Subscribe to logs
             client.Log += (sender, message) => Console.WriteLine(message);
 
             // Subscribe to notifications from server
@@ -37,11 +36,11 @@ namespace ClientProgram
                 Console.Write("> ");
             };
 
-            Console.WriteLine("\nAvailable commands:");
-            Console.WriteLine("  connect [host] [port]   - Connect to server (default: localhost and specified port)");
+            Console.WriteLine("Available commands:");
+            Console.WriteLine("  connect [url]           - Connect to WebSocket server");
             Console.WriteLine("  disconnect              - Disconnect from server");
-            Console.WriteLine("  call <method> [json]    - Call RPC method with optional JSON params");
-            Console.WriteLine("  notify <method> [json]  - Send notification (no response expected)");
+            Console.WriteLine("  call <method> [json]    - Call RPC method");
+            Console.WriteLine("  notify <method> [json]  - Send notification");
             Console.WriteLine("  status                  - Show connection status");
             Console.WriteLine("  examples                - Show example commands");
             Console.WriteLine("  exit                    - Exit program");
@@ -64,19 +63,14 @@ namespace ClientProgram
                     switch (command)
                     {
                         case "connect":
-                            string host = "localhost";
-                            int connectPort = port;
+                            string url = $"ws://localhost:{port}/mcp";
 
                             if (parts.Length > 1)
                             {
-                                string[] connectParts = parts[1].Split(' ');
-                                if (connectParts.Length > 0)
-                                    host = connectParts[0];
-                                if (connectParts.Length > 1 && int.TryParse(connectParts[1], out int p))
-                                    connectPort = p;
+                                url = parts[1];
                             }
 
-                            if (await client.ConnectAsync(host, connectPort))
+                            if (await client.ConnectAsync(url).ConfigureAwait(false))
                             {
                                 Console.WriteLine("Connected successfully!");
                             }
@@ -122,8 +116,8 @@ namespace ClientProgram
 
                             try
                             {
-                                object? result = await client.CallAsync(method, callParams);
-                                Console.WriteLine($"Result: {result}");
+                                object? result = await client.CallAsync<object>(method, callParams).ConfigureAwait(false);
+                                Console.WriteLine($"Result: {JsonSerializer.Serialize(result)}");
                             }
                             catch (Exception callEx)
                             {
@@ -161,7 +155,7 @@ namespace ClientProgram
                                 }
                             }
 
-                            await client.NotifyAsync(notifyMethod, notifyParams);
+                            await client.NotifyAsync(notifyMethod, notifyParams).ConfigureAwait(false);
                             Console.WriteLine("Notification sent");
                             break;
 
@@ -171,16 +165,16 @@ namespace ClientProgram
 
                         case "examples":
                             Console.WriteLine("\nExample commands:");
-                            Console.WriteLine("  connect                            - Connect to localhost on default port");
-                            Console.WriteLine("  connect 192.168.1.100 8080         - Connect to specific host and port");
-                            Console.WriteLine("  call ping                          - Simple call without parameters");
-                            Console.WriteLine("  call echo {\"message\":\"Hello\"}  - Call with parameters");
-                            Console.WriteLine("  call add {\"a\":5,\"b\":3}         - Call add method");
-                            Console.WriteLine("  call multiply {\"x\":4,\"y\":7}    - Call multiply method");
-                            Console.WriteLine("  call greet {\"name\":\"Alice\"}    - Call greet method");
-                            Console.WriteLine("  call getTime                       - Get server time");
-                            Console.WriteLine("  call getClients                    - Get list of connected clients");
-                            Console.WriteLine("  notify log {\"message\":\"Test\"}  - Send notification");
+                            Console.WriteLine("  connect                             - Connect to localhost on default port");
+                            Console.WriteLine("  connect ws://192.168.1.100:8080/mcp - Connect to specific URL");
+                            Console.WriteLine("  call ping                           - Simple call without parameters");
+                            Console.WriteLine("  call echo {\"message\":\"Hello\"}     - Call with parameters");
+                            Console.WriteLine("  call add {\"a\":5,\"b\":3}            - Call add method");
+                            Console.WriteLine("  call multiply {\"x\":4,\"y\":7}       - Call multiply method");
+                            Console.WriteLine("  call greet {\"name\":\"Alice\"}       - Call greet method");
+                            Console.WriteLine("  call getTime                        - Get server time");
+                            Console.WriteLine("  call getClients                     - Get list of connected clients");
+                            Console.WriteLine("  notify log {\"message\":\"Test\"}     - Send notification");
                             break;
 
                         case "exit":
@@ -191,7 +185,7 @@ namespace ClientProgram
 
                         case "help":
                             Console.WriteLine("Available commands:");
-                            Console.WriteLine("  connect [host] [port]   - Connect to server");
+                            Console.WriteLine("  connect [url]           - Connect to WebSocket server");
                             Console.WriteLine("  disconnect              - Disconnect from server");
                             Console.WriteLine("  call <method> [json]    - Call RPC method");
                             Console.WriteLine("  notify <method> [json]  - Send notification");

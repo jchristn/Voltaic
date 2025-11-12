@@ -8,13 +8,13 @@
 
 **Modern, lightweight JSON-RPC 2.0 and MCP implementations for .NET 8.0**
 
-Voltaic provides client and server implementations for JSON-RPC 2.0 and the Model Context Protocol (MCP). Whether you're building microservices, AI integrations, or distributed systems, Voltaic gives you the tools to communicate clearly and reliably.
+Voltaic provides client and server implementations for JSON-RPC 2.0 and the Model Context Protocol (MCP). Whether you're building microservices, AI integrations, or distributed systems—Voltaic gives you the tools to communicate clearly and reliably.
 
 ---
 
 ## What's Inside
 
-Voltaic is split into two focused libraries:
+Voltaic consists of two focused libraries, available separately or together:
 
 ### Voltaic.JsonRpc
 A complete JSON-RPC 2.0 implementation with TCP-based client and server. Perfect for building RPC-based APIs, microservices, and distributed applications.
@@ -29,12 +29,14 @@ A complete JSON-RPC 2.0 implementation with TCP-based client and server. Perfect
 - Thread-safe concurrent request handling
 
 ### Voltaic.Mcp
-Client and server implementations for Anthropic's Model Context Protocol (MCP), supporting both stdio and TCP transports.
+Client and server implementations for Anthropic's Model Context Protocol (MCP), supporting multiple transport options.
 
 **Features:**
-- Stdio transport for subprocess-based MCP servers (standard MCP pattern)
-- TCP transport for network-based MCP communication
-- Full JSON-RPC 2.0 foundation (built on Voltaic.JsonRpc)
+- **Stdio transport**: Subprocess-based MCP servers (standard MCP pattern)
+- **TCP transport**: Network-based MCP communication with LSP-style framing
+- **HTTP transport**: HTTP-based MCP communication with Server-Sent Events (SSE) for notifications
+- **WebSocket transport**: Full-duplex bidirectional communication
+- Implements JSON-RPC 2.0 protocol across all transports
 - Process lifecycle management for subprocess servers
 - Event-driven notification handling
 - Compatible with MCP server ecosystem
@@ -51,10 +53,12 @@ Voltaic is designed for developers who need:
 
 - **Microservice Communication**: Build services that talk to each other using a standard RPC protocol
 - **AI Tool Integration**: Connect to MCP servers for AI assistant integrations (Claude, etc.)
-- **Custom RPC APIs**: Implement your own remote procedure call interfaces without the overhead of HTTP
+- **Custom RPC APIs**: Implement your own remote procedure call interfaces
 - **Subprocess Orchestration**: Launch and communicate with child processes using stdio transport
 - **Language Server Protocols**: Build LSP-style applications that use Content-Length framing
 - **Real-time Systems**: Low-latency RPC communication over TCP sockets
+- **Web-based Integration**: HTTP and WebSocket transports for browser-compatible communication
+- **Flexible Transport Options**: Choose the right transport for your architecture
 
 If you're building .NET applications that need structured, bidirectional communication, Voltaic has you covered.
 
@@ -69,9 +73,10 @@ If you're building .NET applications that need structured, bidirectional communi
 dotnet add package Voltaic
 ```
 
-### Quick Start: JSON-RPC Server
+### Quick Start: JSON-RPC Server (TCP)
 
 ```csharp
+using System.Text.Json;
 using Voltaic.JsonRpc;
 
 JsonRpcServer server = new JsonRpcServer(8080);
@@ -93,7 +98,7 @@ Console.WriteLine("Server running on port 8080");
 await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ```
 
-### Quick Start: JSON-RPC Client
+### Quick Start: JSON-RPC Client (TCP)
 
 ```csharp
 using Voltaic.JsonRpc;
@@ -112,6 +117,7 @@ await client.NotifyAsync("logEvent", new { level = "info", message = "User logge
 ### Quick Start: MCP Server (stdio)
 
 ```csharp
+using System.Text.Json;
 using Voltaic.Mcp;
 
 McpServer server = new McpServer();
@@ -147,15 +153,143 @@ JsonRpcResponse response = await client.CallAsync("tools/list");
 Console.WriteLine(response.Result);
 ```
 
+### Quick Start: MCP Server (TCP)
+
+```csharp
+using System.Text.Json;
+using Voltaic.Mcp;
+
+McpTcpServer server = new McpTcpServer(8080);
+
+// Register MCP methods
+server.RegisterMethod("tools/list", (JsonElement? args) =>
+{
+    return new
+    {
+        tools = new[]
+        {
+            new { name = "calculator", description = "Performs calculations" }
+        }
+    };
+});
+
+// Start the server
+await server.StartAsync();
+Console.WriteLine("MCP server running on port 8080");
+await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
+```
+
+### Quick Start: MCP Client (TCP)
+
+```csharp
+using Voltaic.Mcp;
+
+McpTcpClient client = new McpTcpClient();
+
+// Connect to the TCP server
+await client.ConnectAsync("localhost", 8080);
+
+// Call methods on the server
+JsonRpcResponse response = await client.CallAsync("tools/list");
+Console.WriteLine(response.Result);
+```
+
+### Quick Start: MCP Server (HTTP)
+
+```csharp
+using System.Text.Json;
+using Voltaic.Mcp;
+
+McpHttpServer server = new McpHttpServer(8080);
+
+// Register MCP methods
+server.RegisterMethod("tools/list", (JsonElement? args) =>
+{
+    return new
+    {
+        tools = new[]
+        {
+            new { name = "calculator", description = "Performs calculations" }
+        }
+    };
+});
+
+// Start the server
+await server.StartAsync();
+Console.WriteLine("MCP HTTP server running on http://localhost:8080");
+await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
+```
+
+### Quick Start: MCP Client (HTTP)
+
+```csharp
+using Voltaic.Mcp;
+
+McpHttpClient client = new McpHttpClient();
+
+// Connect to the HTTP server
+await client.ConnectAsync("http://localhost:8080");
+
+// Start SSE connection for server notifications
+await client.StartSseAsync();
+
+// Call methods on the server
+object? result = await client.CallAsync<object>("tools/list");
+Console.WriteLine(result);
+```
+
+### Quick Start: MCP Server (WebSocket)
+
+```csharp
+using System.Text.Json;
+using Voltaic.Mcp;
+
+McpWebsocketsServer server = new McpWebsocketsServer(8080);
+
+// Register MCP methods
+server.RegisterMethod("tools/list", (JsonElement? args) =>
+{
+    return new
+    {
+        tools = new[]
+        {
+            new { name = "calculator", description = "Performs calculations" }
+        }
+    };
+});
+
+// Start the server
+await server.StartAsync();
+Console.WriteLine("MCP WebSocket server running on ws://localhost:8080");
+await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
+```
+
+### Quick Start: MCP Client (WebSocket)
+
+```csharp
+using Voltaic.Mcp;
+
+McpWebsocketsClient client = new McpWebsocketsClient();
+
+// Connect to the WebSocket server
+await client.ConnectAsync("ws://localhost:8080/mcp");
+
+// Call methods on the server
+object? result = await client.CallAsync<object>("tools/list");
+Console.WriteLine(result);
+
+// Send a notification
+await client.NotifyAsync("log", new { message = "Hello from WebSocket client" });
+```
+
 ---
 
 ## When NOT to Use This
 
 Voltaic might not be the right fit if you need:
 
-- **HTTP-based RPC**: Use gRPC, REST APIs, or ASP.NET Core Web APIs instead
-- **Language Interop**: If you need to communicate across languages, consider gRPC or plain HTTP
-- **Browser Clients**: JSON-RPC over TCP doesn't work in browsers; use WebSockets or HTTP
+- **gRPC Features**: If you need streaming, advanced load balancing, or language-agnostic service definitions, use gRPC
+- **REST Conventions**: If you need resource-oriented APIs with standard HTTP verbs, use ASP.NET Core Web APIs
 - **Legacy .NET**: Voltaic targets .NET 8.0+; older frameworks aren't supported
 - **High-level Abstractions**: Voltaic is a protocol library, not a framework—you'll write your own business logic
 
@@ -168,30 +302,46 @@ Voltaic might not be the right fit if you need:
 **Server API:**
 - `JsonRpcServer(int port)` - Create a server listening on the specified port
 - `RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an RPC method
-- `StartAsync()` - Start accepting connections
-- `BroadcastNotificationAsync(string method, object? params)` - Send notifications to all clients
-- `Stop()` - Gracefully shut down the server
+- `Task StartAsync()` - Start accepting connections
+- `Task BroadcastNotificationAsync(string method, object? parameters)` - Send notifications to all clients
+- `void Stop()` - Gracefully shut down the server
 
 **Client API:**
-- `ConnectAsync(string host, int port)` - Connect to a server
-- `CallAsync(string method, object? params)` - Make an RPC call and await response
-- `NotifyAsync(string method, object? params)` - Send a notification (no response)
+- `Task<bool> ConnectAsync(string host, int port)` - Connect to a server
+- `Task<JsonRpcResponse> CallAsync(string method, object? parameters)` - Make an RPC call and await response
+- `Task NotifyAsync(string method, object? parameters)` - Send a notification (no response)
 - `NotificationReceived` event - Handle notifications from the server
-- `Disconnect()` - Close the connection
+- `void Disconnect()` - Close the connection
 
 ### Voltaic.Mcp
 
 **McpServer (stdio):**
-- `RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an MCP method
-- `RunAsync(CancellationToken token)` - Run the server (blocks until stdin closes)
+- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an MCP method
+- `Task RunAsync(CancellationToken token = default)` - Run the server (blocks until stdin closes)
 
 **McpClient (stdio):**
-- `LaunchServerAsync(string executable, string[] args)` - Launch subprocess server
-- `CallAsync(string method, object? params)` - Call server method
+- `Task<bool> LaunchServerAsync(string executable, string[] args)` - Launch subprocess server
+- `Task<JsonRpcResponse> CallAsync(string method, object? parameters)` - Call server method
 - `NotificationReceived` event - Handle server notifications
 
 **TCP Variants:**
-- `McpTcpServer` and `McpTcpClient` provide network-based MCP communication
+- `McpTcpServer(int port)` - TCP-based MCP server
+- `McpTcpClient()` - TCP-based MCP client
+- Same API as JsonRpcServer/JsonRpcClient
+
+**HTTP Variants:**
+- `McpHttpServer(int port)` - HTTP-based MCP server with SSE support
+- `McpHttpClient()` - HTTP-based MCP client
+- Additional methods:
+  - `Task<bool> ConnectAsync(string baseUrl)` - Connect to HTTP server
+  - `Task<bool> StartSseAsync()` - Start Server-Sent Events connection for notifications
+  - `void StopSse()` - Stop SSE connection
+  - `string? SessionId` property - Get session ID assigned by server
+
+**WebSocket Variants:**
+- `McpWebsocketsServer(int port)` - WebSocket-based MCP server
+- `McpWebsocketsClient()` - WebSocket-based MCP client
+- Same API as JsonRpcClient with bidirectional messaging
 
 ---
 
@@ -199,20 +349,34 @@ Voltaic might not be the right fit if you need:
 
 Check out the `src/Test.*` projects for working examples:
 
-- **Test.JsonRpcServer** / **Test.JsonRpcClient**: Interactive JSON-RPC demos
+- **Test.JsonRpcServer** / **Test.JsonRpcClient**: Interactive JSON-RPC demos over TCP
 - **Test.McpServer** / **Test.McpClient**: MCP stdio examples
+- **Test.McpHttpServer** / **Test.McpHttpClient**: MCP HTTP with SSE examples
+- **Test.McpWebsocketsServer** / **Test.McpWebsocketsClient**: MCP WebSocket examples
 - **Test.Automated**: Comprehensive test suite showing various usage patterns
 
 Run examples:
 ```bash
-# JSON-RPC Server
-dotnet run --project src/Test.JsonRpcServer -- 8080
+# JSON-RPC Server (TCP)
+dotnet run --project src/Test.JsonRpcServer/Test.JsonRpcServer.csproj -- 8080
 
-# JSON-RPC Client
-dotnet run --project src/Test.JsonRpcClient -- 8080
+# JSON-RPC Client (TCP)
+dotnet run --project src/Test.JsonRpcClient/Test.JsonRpcClient.csproj -- 8080
 
-# MCP Client (launches server subprocess)
-dotnet run --project src/Test.McpClient
+# MCP Stdio Client (launches server subprocess)
+dotnet run --project src/Test.McpClient/Test.McpClient.csproj
+
+# MCP HTTP Server
+dotnet run --project src/Test.McpHttpServer/Test.McpHttpServer.csproj -- 8080
+
+# MCP HTTP Client
+dotnet run --project src/Test.McpHttpClient/Test.McpHttpClient.csproj -- 8080
+
+# MCP WebSocket Server
+dotnet run --project src/Test.McpWebsocketsServer/Test.McpWebsocketsServer.csproj -- 8080
+
+# MCP WebSocket Client
+dotnet run --project src/Test.McpWebsocketsClient/Test.McpWebsocketsClient.csproj -- 8080
 ```
 
 ---
@@ -225,9 +389,19 @@ dotnet build src/Voltaic.sln
 
 # Build specific library
 dotnet build src/Voltaic.JsonRpc/Voltaic.JsonRpc.csproj
+dotnet build src/Voltaic.Mcp/Voltaic.Mcp.csproj
 
-# Run automated tests
+# Run automated tests (all transports)
 dotnet run --project src/Test.Automated/Test.Automated.csproj
+
+# Run automated tests for specific transport
+dotnet run --project src/Test.Automated/Test.Automated.csproj -- -stdio
+dotnet run --project src/Test.Automated/Test.Automated.csproj -- -tcp
+dotnet run --project src/Test.Automated/Test.Automated.csproj -- -http
+dotnet run --project src/Test.Automated/Test.Automated.csproj -- -ws
+
+# Run automated tests for multiple transports
+dotnet run --project src/Test.Automated/Test.Automated.csproj -- -tcp -http -ws
 ```
 
 ---

@@ -11,7 +11,13 @@
       "Bash(dotnet remove:*)",
       "Bash(dotnet clean:*)",
       "Bash(dir \"C:\\Code\\Voltaic\\src\" /B)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(taskkill:*)",
+      "Bash(nul)",
+      "Bash(timeout:*)",
+      "Bash(Test.Automated.exe:*)",
+      "Bash(dotnet:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []
