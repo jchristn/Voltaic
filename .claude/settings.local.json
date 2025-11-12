@@ -19,7 +19,8 @@
       "Bash(dotnet:*)",
       "Bash(dir:*)",
       "WebFetch(domain:spec.modelcontextprotocol.io)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(exit 0)"
     ],
     "deny": [],
     "ask": []
