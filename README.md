@@ -381,6 +381,29 @@ dotnet run --project src/Test.McpWebsocketsServer/Test.McpWebsocketsServer.cspro
 dotnet run --project src/Test.McpWebsocketsClient/Test.McpWebsocketsClient.csproj -- 8080
 ```
 
+### Connecting with MCP Inspector
+
+The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a visual tool for testing and debugging MCP servers. To connect MCP Inspector to a Voltaic MCP HTTP server:
+
+1. **Start your MCP HTTP server**:
+   ```bash
+   dotnet run --project src/Test.McpHttpServer/Test.McpHttpServer.csproj -- 8080
+   ```
+
+2. **Open MCP Inspector** in your web browser
+
+3. **Configure the connection**:
+   - **Transport Type**: Select `Streamable HTTP`
+   - **URL**: Enter `http://{hostname}:{port}/rpc`
+     - For example: `http://localhost:8080/rpc`
+     - If you specified a custom `rpcPath` when creating the server, use that instead of `/rpc`
+
+4. **Click Connect**
+
+5. **Verify the connection**: The inspector should display the list of registered tools and allow you to call them interactively
+
+**Note**: MCP Inspector currently supports HTTP transport via Streamable HTTP. For other transports (TCP, WebSocket, stdio), use the corresponding client implementations or command-line tools.
+
 ---
 
 ## Building

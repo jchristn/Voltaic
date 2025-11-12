@@ -183,9 +183,32 @@
             Default is true to support browser-based clients.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.CorsHeaders">
+            <summary>
+            Headers to use when CORS support is enabled.
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.TokenSource">
             <summary>
             Gets the cancellation token source for the server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version.
+            Default is "2025-03-26".
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ServerName">
+            <summary>
+            Gets or sets the server name for MCP serverInfo.
+            Default is "Voltaic.Mcp.HttpServer".
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ServerVersion">
+            <summary>
+            Gets or sets the server version for MCP serverInfo.
+            Default is "1.0.0".
             </summary>
         </member>
         <member name="E:Voltaic.Mcp.McpHttpServer.Log">
@@ -211,6 +234,17 @@
             <param name="name">The name of the method to register.</param>
             <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with metadata for MCP protocol tool discovery.
+            This registers both the method handler and the tool definition for tools/list.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.StartAsync(System.Threading.CancellationToken)">
             <summary>
@@ -264,7 +298,7 @@
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterBuiltInMethods">
             <summary>
-            Registers the built-in MCP methods: ping, echo, getTime, and getSessions.
+            Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
             This method is virtual to allow derived classes to customize the set of built-in methods.
             </summary>
         </member>
@@ -322,6 +356,24 @@
             This class extends JsonRpcServer with MCP-specific defaults and semantics.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version.
+            Default is "2025-03-26".
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.ServerName">
+            <summary>
+            Gets or sets the server name for MCP serverInfo.
+            Default is "Voltaic.Mcp.TcpServer".
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.ServerVersion">
+            <summary>
+            Gets or sets the server version for MCP serverInfo.
+            Default is "1.0.0".
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.#ctor(System.Net.IPAddress,System.Int32,System.Boolean)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpTcpServer"/> class.
@@ -332,7 +384,7 @@
         </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.RegisterBuiltInMethods">
             <summary>
-            Registers the built-in MCP methods: ping, echo, getTime, and getClients.
+            Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
             Note: Unlike JsonRpcServer, this does not include the 'add' method.
             </summary>
         </member>
@@ -439,6 +491,24 @@
             Occurs when a log message is generated.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version.
+            Default is "2025-03-26".
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.ServerName">
+            <summary>
+            Gets or sets the server name for MCP serverInfo.
+            Default is "Voltaic.Mcp.WebSocketsServer".
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.ServerVersion">
+            <summary>
+            Gets or sets the server version for MCP serverInfo.
+            Default is "1.0.0".
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.#ctor(System.String,System.Int32,System.String,System.Boolean)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpWebsocketsServer"/> class.
@@ -501,7 +571,7 @@
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterBuiltInMethods">
             <summary>
-            Registers the built-in MCP methods: ping, echo, getTime, and getClients.
+            Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
             This method is virtual to allow derived classes to customize the set of built-in methods.
             </summary>
         </member>
@@ -568,6 +638,31 @@
         <member name="M:Voltaic.Mcp.NotificationQueue.Dispose">
             <summary>
             Releases all resources used by the <see cref="T:Voltaic.Mcp.NotificationQueue"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.ToolDefinition">
+            <summary>
+            Represents a tool definition for MCP protocol tool discovery.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.ToolDefinition.Name">
+            <summary>
+            Gets or sets the name of the tool.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.ToolDefinition.Description">
+            <summary>
+            Gets or sets the description of what the tool does.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.ToolDefinition.InputSchema">
+            <summary>
+            Gets or sets the JSON schema for the tool's input parameters.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.ToolDefinition.#ctor">
+            <summary>
+            Represents a tool definition for MCP protocol tool discovery.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.WebSocketConnection">

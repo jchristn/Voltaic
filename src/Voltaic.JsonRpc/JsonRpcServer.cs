@@ -81,6 +81,24 @@
         }
 
         /// <summary>
+        /// Attempts to invoke a registered method by name with the given parameters.
+        /// </summary>
+        /// <param name="methodName">The name of the method to invoke.</param>
+        /// <param name="parameters">The parameters to pass to the method.</param>
+        /// <param name="result">The result of the method invocation if successful.</param>
+        /// <returns>True if the method was found and invoked successfully; otherwise, false.</returns>
+        protected bool TryInvokeMethod(string methodName, JsonElement? parameters, out object? result)
+        {
+            result = null;
+            if (_Methods.ContainsKey(methodName))
+            {
+                result = _Methods[methodName](parameters);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Starts the server and begins listening for client connections asynchronously.
         /// This method will continue running until Stop() is called.
         /// </summary>

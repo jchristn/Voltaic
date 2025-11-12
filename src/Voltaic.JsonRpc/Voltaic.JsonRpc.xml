@@ -288,6 +288,15 @@
             <param name="name">The name of the method to register.</param>
             <param name="handler">The function that handles the method invocation.</param>
         </member>
+        <member name="M:Voltaic.JsonRpc.JsonRpcServer.TryInvokeMethod(System.String,System.Nullable{System.Text.Json.JsonElement},System.Object@)">
+            <summary>
+            Attempts to invoke a registered method by name with the given parameters.
+            </summary>
+            <param name="methodName">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method.</param>
+            <param name="result">The result of the method invocation if successful.</param>
+            <returns>True if the method was found and invoked successfully; otherwise, false.</returns>
+        </member>
         <member name="M:Voltaic.JsonRpc.JsonRpcServer.StartAsync(System.Threading.CancellationToken)">
             <summary>
             Starts the server and begins listening for client connections asynchronously.

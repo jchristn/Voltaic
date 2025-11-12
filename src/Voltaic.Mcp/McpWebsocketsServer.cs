@@ -70,6 +70,39 @@ namespace Voltaic.Mcp
         private int _MaxMessageSize = 1048576; // 1 MB
         private int _KeepAliveIntervalSeconds = 30;
         private volatile bool _IsStopping = false;
+        private string _ProtocolVersion = "2025-03-26";
+        private string _ServerName = "Voltaic.Mcp.WebSocketsServer";
+        private string _ServerVersion = "1.0.0";
+
+        /// <summary>
+        /// Gets or sets the MCP protocol version.
+        /// Default is "2025-03-26".
+        /// </summary>
+        public string ProtocolVersion
+        {
+            get => _ProtocolVersion;
+            set => _ProtocolVersion = value ?? "2025-03-26";
+        }
+
+        /// <summary>
+        /// Gets or sets the server name for MCP serverInfo.
+        /// Default is "Voltaic.Mcp.WebSocketsServer".
+        /// </summary>
+        public string ServerName
+        {
+            get => _ServerName;
+            set => _ServerName = value ?? "Voltaic.Mcp.WebSocketsServer";
+        }
+
+        /// <summary>
+        /// Gets or sets the server version for MCP serverInfo.
+        /// Default is "1.0.0".
+        /// </summary>
+        public string ServerVersion
+        {
+            get => _ServerVersion;
+            set => _ServerVersion = value ?? "1.0.0";
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpWebsocketsServer"/> class.
@@ -234,11 +267,85 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Registers the built-in MCP methods: ping, echo, getTime, and getClients.
+        /// Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
         /// This method is virtual to allow derived classes to customize the set of built-in methods.
         /// </summary>
         protected virtual void RegisterBuiltInMethods()
         {
+            // MCP Protocol Methods
+            RegisterMethod("initialize", (args) =>
+            {
+                // Read the client's requested protocol version from params
+                string ClientProtocolVersion = _ProtocolVersion;
+                if (args.HasValue && args.Value.TryGetProperty("protocolVersion", out JsonElement protocolVersionProp))
+                {
+                    ClientProtocolVersion = protocolVersionProp.GetString() ?? _ProtocolVersion;
+                }
+
+                // The initialize method returns server capabilities and info
+                return new
+                {
+                    protocolVersion = ClientProtocolVersion,
+                    capabilities = new
+                    {
+                        tools = new
+                        {
+                            listChanged = true
+                        }
+                    },
+                    serverInfo = new
+                    {
+                        name = _ServerName,
+                        version = _ServerVersion
+                    }
+                };
+            });
+
+            RegisterMethod("tools/call", (args) =>
+            {
+                // MCP tools/call handler - invokes a tool by name with arguments
+                if (!args.HasValue)
+                {
+                    throw new ArgumentException("tools/call requires params with 'name' and 'arguments'");
+                }
+
+                // Extract tool name from params.name
+                if (!args.Value.TryGetProperty("name", out JsonElement nameElement))
+                {
+                    throw new ArgumentException("tools/call requires 'name' parameter");
+                }
+
+                string toolName = nameElement.GetString() ?? throw new ArgumentException("Tool name cannot be null");
+
+                // Extract arguments from params.arguments
+                JsonElement? toolArguments = null;
+                if (args.Value.TryGetProperty("arguments", out JsonElement argsElement))
+                {
+                    toolArguments = argsElement;
+                }
+
+                // Look up and invoke the tool
+                if (!_Methods.ContainsKey(toolName))
+                {
+                    throw new ArgumentException($"Tool '{toolName}' not found");
+                }
+
+                object result = _Methods[toolName](toolArguments);
+
+                // Return result in MCP format with content array
+                return new
+                {
+                    content = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = result.ToString()
+                        }
+                    }
+                };
+            });
+
             RegisterMethod("ping", (_) => "pong");
             RegisterMethod("echo", (args) =>
             {

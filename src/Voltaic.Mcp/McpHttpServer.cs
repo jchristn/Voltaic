@@ -45,11 +45,50 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Headers to use when CORS support is enabled.
+        /// </summary>
+        public Dictionary<string, string> CorsHeaders
+        {
+            get => _CorsHeaders;
+            set => _CorsHeaders = (value != null ? value : new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase));
+        }
+
+        /// <summary>
         /// Gets the cancellation token source for the server.
         /// </summary>
         public CancellationTokenSource? TokenSource
         {
             get => _TokenSource;
+        }
+
+        /// <summary>
+        /// Gets or sets the MCP protocol version.
+        /// Default is "2025-03-26".
+        /// </summary>
+        public string ProtocolVersion
+        {
+            get => _ProtocolVersion;
+            set => _ProtocolVersion = value ?? "2025-03-26";
+        }
+
+        /// <summary>
+        /// Gets or sets the server name for MCP serverInfo.
+        /// Default is "Voltaic.Mcp.HttpServer".
+        /// </summary>
+        public string ServerName
+        {
+            get => _ServerName;
+            set => _ServerName = value ?? "Voltaic.Mcp.HttpServer";
+        }
+
+        /// <summary>
+        /// Gets or sets the server version for MCP serverInfo.
+        /// Default is "1.0.0".
+        /// </summary>
+        public string ServerVersion
+        {
+            get => _ServerVersion;
+            set => _ServerVersion = value ?? "1.0.0";
         }
 
         /// <summary>
@@ -65,10 +104,22 @@ namespace Voltaic.Mcp
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, NotificationQueue> _Sessions;
         private readonly Dictionary<string, Func<JsonElement?, object>> _Methods;
+        private readonly List<ToolDefinition> _Tools;
         private Task? _CleanupTask;
         private int _SessionTimeoutSeconds = 300; // 5 minutes
         private bool _EnableCors = true;
+        private Dictionary<string, string> _CorsHeaders = new Dictionary<string, string>
+        {
+            { "Access-Control-Allow-Origin", "*" },
+            { "Access-Control-Allow-Methods", "POST, GET, OPTIONS" },
+            { "Access-Control-Allow-Headers", "*"},
+            { "Access-Control-Expose-Headers", "X-Session-Id"},
+            { "Access-Control-Max-Age", "86400" }
+        };
         private volatile bool _IsStopping = false;
+        private string _ProtocolVersion = "2025-03-26";
+        private string _ServerName = "Voltaic.Mcp.HttpServer";
+        private string _ServerVersion = "1.0.0";
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpHttpServer"/> class.
@@ -90,7 +141,8 @@ namespace Voltaic.Mcp
             _EventsPath = String.IsNullOrEmpty(eventsPath) ? "/events" : eventsPath;
             _Sessions = new ConcurrentDictionary<string, NotificationQueue>();
             _Methods = new Dictionary<string, Func<JsonElement?, object>>();
-            
+            _Tools = new List<ToolDefinition>();
+
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
 
@@ -106,6 +158,34 @@ namespace Voltaic.Mcp
             if (handler == null) throw new ArgumentNullException(nameof(handler));
 
             _Methods[name] = handler;
+        }
+
+        /// <summary>
+        /// Registers a tool with metadata for MCP protocol tool discovery.
+        /// This registers both the method handler and the tool definition for tools/list.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
+            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            // Register the method handler
+            RegisterMethod(name, handler);
+
+            // Register the tool metadata
+            _Tools.Add(new ToolDefinition
+            {
+                Name = name,
+                Description = description,
+                InputSchema = inputSchema
+            });
         }
 
         /// <summary>
@@ -259,20 +339,164 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Registers the built-in MCP methods: ping, echo, getTime, and getSessions.
+        /// Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
         /// This method is virtual to allow derived classes to customize the set of built-in methods.
         /// </summary>
         protected virtual void RegisterBuiltInMethods()
         {
-            RegisterMethod("ping", (_) => "pong");
-            RegisterMethod("echo", (args) =>
+            // MCP Protocol Methods
+            RegisterMethod("initialize", (args) =>
             {
-                if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
-                    return messageProp.GetString() ?? "empty";
-                return "empty";
+                // Read the client's requested protocol version from params
+                string ClientProtocolVersion = _ProtocolVersion;
+                if (args.HasValue && args.Value.TryGetProperty("protocolVersion", out JsonElement protocolVersionProp))
+                {
+                    ClientProtocolVersion = protocolVersionProp.GetString() ?? _ProtocolVersion;
+                }
+
+                // The initialize method returns server capabilities and info
+                return new
+                {
+                    protocolVersion = ClientProtocolVersion,
+                    capabilities = new
+                    {
+                        tools = new
+                        {
+                            listChanged = true
+                        }
+                    },
+                    serverInfo = new
+                    {
+                        name = _ServerName,
+                        version = _ServerVersion
+                    }
+                };
             });
-            RegisterMethod("getTime", (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
-            RegisterMethod("getSessions", (_) => GetActiveSessions());
+
+            RegisterMethod("tools/list", (args) =>
+            {
+                // Return all registered tools
+                List<object> toolsList = new List<object>();
+                foreach (ToolDefinition tool in _Tools)
+                {
+                    toolsList.Add(new
+                    {
+                        name = tool.Name,
+                        description = tool.Description,
+                        inputSchema = tool.InputSchema
+                    });
+                }
+
+                return new
+                {
+                    tools = toolsList
+                };
+            });
+
+            RegisterMethod("tools/call", (args) =>
+            {
+                // MCP tools/call handler - invokes a tool by name with arguments
+                if (!args.HasValue)
+                {
+                    throw new ArgumentException("tools/call requires params with 'name' and 'arguments'");
+                }
+
+                // Extract tool name from params.name
+                if (!args.Value.TryGetProperty("name", out JsonElement nameElement))
+                {
+                    throw new ArgumentException("tools/call requires 'name' parameter");
+                }
+
+                string toolName = nameElement.GetString() ?? throw new ArgumentException("Tool name cannot be null");
+
+                // Extract arguments from params.arguments
+                JsonElement? toolArguments = null;
+                if (args.Value.TryGetProperty("arguments", out JsonElement argsElement))
+                {
+                    toolArguments = argsElement;
+                }
+
+                // Look up and invoke the tool
+                if (!_Methods.ContainsKey(toolName))
+                {
+                    throw new ArgumentException($"Tool '{toolName}' not found");
+                }
+
+                object result = _Methods[toolName](toolArguments);
+
+                // Return result in MCP format with content array
+                return new
+                {
+                    content = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = result.ToString()
+                        }
+                    }
+                };
+            });
+
+            // Handle the initialized notification (no response needed, but we should handle it)
+            RegisterMethod("notifications/initialized", (args) =>
+            {
+                LogMessage("Received initialized notification from client");
+                return new { }; // Return empty object, though response won't be sent for notifications
+            });
+
+            // Register built-in tools with proper MCP tool metadata
+            RegisterTool("ping",
+                "Returns 'pong' to verify server connectivity",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => "pong");
+
+            RegisterTool("echo",
+                "Echoes back the provided message",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        message = new
+                        {
+                            type = "string",
+                            description = "The message to echo back"
+                        }
+                    },
+                    required = new[] { "message" }
+                },
+                (args) =>
+                {
+                    if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
+                        return messageProp.GetString() ?? "empty";
+                    return "empty";
+                });
+
+            RegisterTool("getTime",
+                "Returns the current UTC time in ISO format",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+
+            RegisterTool("getSessions",
+                "Returns a list of all active session IDs",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => GetActiveSessions());
         }
 
         private async Task<HttpListenerContext?> AcceptContextAsync(CancellationToken token)
@@ -350,11 +574,10 @@ namespace Voltaic.Mcp
         {
             if (_EnableCors)
             {
-                context.Response.AddHeader("Access-Control-Allow-Origin", "*");
-                context.Response.AddHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-                context.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type, X-Session-Id");
-                context.Response.AddHeader("Access-Control-Max-Age", "86400");
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
             }
+
             context.Response.StatusCode = 204;
             context.Response.Close();
         }
@@ -387,8 +610,8 @@ namespace Voltaic.Mcp
             // Send response
             if (_EnableCors)
             {
-                context.Response.AddHeader("Access-Control-Allow-Origin", "*");
-                context.Response.AddHeader("Access-Control-Expose-Headers", "X-Session-Id");
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
             }
 
             context.Response.AddHeader("X-Session-Id", sessionId);

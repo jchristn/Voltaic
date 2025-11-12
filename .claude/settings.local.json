@@ -17,7 +17,9 @@
       "Bash(timeout:*)",
       "Bash(Test.Automated.exe:*)",
       "Bash(dotnet:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "WebFetch(domain:spec.modelcontextprotocol.io)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

@@ -28,48 +28,108 @@ namespace McpHttpServerProgram
             Console.WriteLine($"Starting server on port {port}...");
 
             McpHttpServer server = new McpHttpServer("localhost", port);
+            server.EnableCors = true;
 
             // Subscribe to log events
             server.Log += (sender, message) => Console.WriteLine(message);
 
-            // Register custom methods
-            server.RegisterMethod("greet", (args) =>
-            {
-                string name = "Anonymous";
-                if (args.HasValue && args.Value.TryGetProperty("name", out JsonElement nameProp))
-                    name = nameProp.GetString() ?? "Anonymous";
-                return $"Hello, {name}!";
-            });
+            // Set server info for MCP protocol
+            server.ServerName = "MCP Test HTTP Server";
+            server.ServerVersion = "1.0.0";
 
-            server.RegisterMethod("add", (args) =>
-            {
-                double a = 0;
-                double b = 0;
-
-                if (args.HasValue)
+            // Register custom tools with MCP metadata
+            server.RegisterTool("greet",
+                "Greets a person by name",
+                new
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
-                }
-                return a + b;
-            });
-
-            server.RegisterMethod("multiply", (args) =>
-            {
-                double x = 0;
-                double y = 0;
-
-                if (args.HasValue)
+                    type = "object",
+                    properties = new
+                    {
+                        name = new
+                        {
+                            type = "string",
+                            description = "The name of the person to greet"
+                        }
+                    },
+                    required = new string[] { }
+                },
+                (args) =>
                 {
-                    if (args.Value.TryGetProperty("x", out JsonElement xProp))
-                        x = xProp.GetDouble();
-                    if (args.Value.TryGetProperty("y", out JsonElement yProp))
-                        y = yProp.GetDouble();
-                }
-                return x * y;
-            });
+                    string name = "Anonymous";
+                    if (args.HasValue && args.Value.TryGetProperty("name", out JsonElement nameProp))
+                        name = nameProp.GetString() ?? "Anonymous";
+                    return $"Hello, {name}!";
+                });
+
+            server.RegisterTool("add",
+                "Adds two numbers together",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        a = new
+                        {
+                            type = "number",
+                            description = "The first number"
+                        },
+                        b = new
+                        {
+                            type = "number",
+                            description = "The second number"
+                        }
+                    },
+                    required = new[] { "a", "b" }
+                },
+                (args) =>
+                {
+                    double a = 0;
+                    double b = 0;
+
+                    if (args.HasValue)
+                    {
+                        if (args.Value.TryGetProperty("a", out JsonElement aProp))
+                            a = aProp.GetDouble();
+                        if (args.Value.TryGetProperty("b", out JsonElement bProp))
+                            b = bProp.GetDouble();
+                    }
+                    return a + b;
+                });
+
+            server.RegisterTool("multiply",
+                "Multiplies two numbers together",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        x = new
+                        {
+                            type = "number",
+                            description = "The first number"
+                        },
+                        y = new
+                        {
+                            type = "number",
+                            description = "The second number"
+                        }
+                    },
+                    required = new[] { "x", "y" }
+                },
+                (args) =>
+                {
+                    double x = 0;
+                    double y = 0;
+
+                    if (args.HasValue)
+                    {
+                        if (args.Value.TryGetProperty("x", out JsonElement xProp))
+                            x = xProp.GetDouble();
+                        if (args.Value.TryGetProperty("y", out JsonElement yProp))
+                            y = yProp.GetDouble();
+                    }
+                    return x * y;
+                });
 
             // Start server in background
             Task serverTask = Task.Run(async () => await server.StartAsync());
