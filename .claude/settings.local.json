@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\Code\\Voltaic\\src\\Voltaic\" /B)",
+      "Bash(dotnet new:*)",
+      "Bash(dotnet add:*)",
+      "Bash(dotnet sln:*)",
+      "Bash(dotnet build:*)",
+      "Bash(dotnet run:*)",
+      "WebSearch",
+      "Bash(dotnet remove:*)",
+      "Bash(dotnet clean:*)",
+      "Bash(dir \"C:\\Code\\Voltaic\\src\" /B)",
+      "WebFetch(domain:github.com)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "Voltaic/0.1.0": {
+        "dependencies": {
+          "Voltaic.JsonRpc": "0.1.0",
+          "Voltaic.Mcp": "0.1.0"
+        },
+        "runtime": {
+          "Voltaic.dll": {}
+        }
+      },
+      "Voltaic.JsonRpc/0.1.0": {
+        "runtime": {
+          "Voltaic.JsonRpc.dll": {
+            "assemblyVersion": "0.1.0.0",
+            "fileVersion": "0.1.0.0"
+          }
+        }
+      },
+      "Voltaic.Mcp/0.1.0": {
+        "dependencies": {
+          "Voltaic.JsonRpc": "0.1.0"
+        },
+        "runtime": {
+          "Voltaic.Mcp.dll": {
+            "assemblyVersion": "0.1.0.0",
+            "fileVersion": "0.1.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Voltaic/0.1.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Voltaic.JsonRpc/0.1.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Voltaic.Mcp/0.1.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

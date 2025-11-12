@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+vendor/
+packages/
+
+# Build outputs
+dist/
+build/
+out/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+*.test.cache
+.pytest_cache/
+
+# OS generated files
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

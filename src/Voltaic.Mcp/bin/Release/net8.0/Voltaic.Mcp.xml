@@ -1,0 +1,141 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>Voltaic.Mcp</name>
+    </assembly>
+    <members>
+        <member name="T:Voltaic.Mcp.McpClient">
+            <summary>
+            MCP client using stdio transport for subprocess-based MCP servers.
+            Implements Model Context Protocol stdio transport specification.
+            </summary>
+        </member>
+        <member name="E:Voltaic.Mcp.McpClient.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.Mcp.McpClient.NotificationReceived">
+            <summary>
+            Occurs when a notification (request without an ID) is received from the server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpClient.IsConnected">
+            <summary>
+            Gets a value indicating whether the client is currently connected to a server.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpClient"/> class.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.LaunchServerAsync(System.String,System.String[],System.Threading.CancellationToken)">
+            <summary>
+            Launches an MCP server as a subprocess and connects to it via stdio.
+            </summary>
+            <param name="executable">The path to the MCP server executable.</param>
+            <param name="args">The command-line arguments to pass to the server.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result is true if the launch was successful; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.CallAsync``1(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously invokes a remote method and returns the result as the specified type.
+            </summary>
+            <typeparam name="T">The type to deserialize the result into.</typeparam>
+            <param name="method">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000 (30 seconds).</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the method result.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.NotifyAsync(System.String,System.Object,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously sends a notification to the server.
+            Notifications are fire-and-forget and do not expect a response.
+            </summary>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.Shutdown">
+            <summary>
+            Shuts down the MCP server gracefully by closing stdin.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.Mcp.McpClient"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpServer">
+            <summary>
+            MCP server using stdio transport for subprocess-based operation.
+            Implements Model Context Protocol stdio transport specification.
+            </summary>
+        </member>
+        <member name="E:Voltaic.Mcp.McpServer.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.#ctor(System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpServer"/> class.
+            </summary>
+            <param name="includeDefaultMethods">True to include default methods such as echo, ping, and getTime.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a custom RPC method with the specified handler.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The function that handles the method invocation.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.RunAsync(System.Threading.CancellationToken)">
+            <summary>
+            Runs the MCP server, reading from stdin and writing to stdout.
+            Blocks until stdin is closed or cancellation is requested.
+            </summary>
+            <param name="token">Cancellation token to stop the server.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.Mcp.McpServer"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpTcpClient">
+            <summary>
+            Provides a TCP-based MCP (Model Context Protocol) client implementation for making remote procedure calls over a network.
+            This class extends JsonRpcClient with MCP-specific semantics and branding.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpClient.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpTcpClient"/> class.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpTcpServer">
+            <summary>
+            Provides a TCP-based MCP (Model Context Protocol) server implementation for handling remote procedure calls over a network.
+            This class extends JsonRpcServer with MCP-specific defaults and semantics.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.#ctor(System.Int32,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpTcpServer"/> class.
+            </summary>
+            <param name="port">The port number to listen on.</param>
+            <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterBuiltInMethods">
+            <summary>
+            Registers the built-in MCP methods: ping, echo, getTime, and getClients.
+            Note: Unlike JsonRpcServer, this does not include the 'add' method.
+            </summary>
+        </member>
+    </members>
+</doc>

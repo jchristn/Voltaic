@@ -1,0 +1,12 @@
+C:\Code\Voltaic\src\Voltaic.JsonRpc\bin\Debug\net8.0\Voltaic.JsonRpc.deps.json
+C:\Code\Voltaic\src\Voltaic.JsonRpc\bin\Debug\net8.0\Voltaic.JsonRpc.dll
+C:\Code\Voltaic\src\Voltaic.JsonRpc\bin\Debug\net8.0\Voltaic.JsonRpc.pdb
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\Voltaic.JsonRpc.GeneratedMSBuildEditorConfig.editorconfig
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\Voltaic.JsonRpc.AssemblyInfoInputs.cache
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\Voltaic.JsonRpc.AssemblyInfo.cs
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\Voltaic.JsonRpc.csproj.CoreCompileInputs.cache
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\Voltaic.JsonRpc.dll
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\refint\Voltaic.JsonRpc.dll
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\Voltaic.JsonRpc.pdb
+C:\Code\Voltaic\src\Voltaic.JsonRpc\obj\Debug\net8.0\ref\Voltaic.JsonRpc.dll
+C:\Code\Voltaic\src\Voltaic.JsonRpc\bin\Debug\net8.0\Voltaic.JsonRpc.xml

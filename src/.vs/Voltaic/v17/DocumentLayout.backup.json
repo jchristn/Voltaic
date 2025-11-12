@@ -1,0 +1,68 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Code\\Voltaic\\src\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{E723410B-E82E-44ED-BA11-8537F106A29C}|Voltaic.Mcp\\Voltaic.Mcp.csproj|c:\\code\\voltaic\\src\\voltaic.mcp\\voltaic.mcp.csproj||{04B8AB82-A572-4FEF-95CE-5222444B6B64}|",
+      "RelativeMoniker": "D:0:0:{E723410B-E82E-44ED-BA11-8537F106A29C}|Voltaic.Mcp\\Voltaic.Mcp.csproj|solutionrelative:voltaic.mcp\\voltaic.mcp.csproj||{04B8AB82-A572-4FEF-95CE-5222444B6B64}|"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{EFC663D4-87DE-4A73-83F3-9C37BA48BE2D}|Voltaic.JsonRpc\\Voltaic.JsonRpc.csproj|c:\\code\\voltaic\\src\\voltaic.jsonrpc\\voltaic.jsonrpc.csproj||{04B8AB82-A572-4FEF-95CE-5222444B6B64}|",
+      "RelativeMoniker": "D:0:0:{EFC663D4-87DE-4A73-83F3-9C37BA48BE2D}|Voltaic.JsonRpc\\Voltaic.JsonRpc.csproj|solutionrelative:voltaic.jsonrpc\\voltaic.jsonrpc.csproj||{04B8AB82-A572-4FEF-95CE-5222444B6B64}|"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{95692C4A-9E43-4F6B-8FD0-85B149D136ED}|Voltaic\\Voltaic.csproj|c:\\code\\voltaic\\src\\voltaic\\voltaic.csproj||{04B8AB82-A572-4FEF-95CE-5222444B6B64}|",
+      "RelativeMoniker": "D:0:0:{95692C4A-9E43-4F6B-8FD0-85B149D136ED}|Voltaic\\Voltaic.csproj|solutionrelative:voltaic\\voltaic.csproj||{04B8AB82-A572-4FEF-95CE-5222444B6B64}|"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Voltaic.Mcp",
+              "DocumentMoniker": "C:\\Code\\Voltaic\\src\\Voltaic.Mcp\\Voltaic.Mcp.csproj",
+              "RelativeDocumentMoniker": "Voltaic.Mcp\\Voltaic.Mcp.csproj",
+              "ToolTip": "C:\\Code\\Voltaic\\src\\Voltaic.Mcp\\Voltaic.Mcp.csproj",
+              "RelativeToolTip": "Voltaic.Mcp\\Voltaic.Mcp.csproj",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000758|",
+              "WhenOpened": "2025-11-11T23:37:30.159Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "Voltaic.JsonRpc",
+              "DocumentMoniker": "C:\\Code\\Voltaic\\src\\Voltaic.JsonRpc\\Voltaic.JsonRpc.csproj",
+              "RelativeDocumentMoniker": "Voltaic.JsonRpc\\Voltaic.JsonRpc.csproj",
+              "ToolTip": "C:\\Code\\Voltaic\\src\\Voltaic.JsonRpc\\Voltaic.JsonRpc.csproj",
+              "RelativeToolTip": "Voltaic.JsonRpc\\Voltaic.JsonRpc.csproj",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000758|",
+              "WhenOpened": "2025-11-11T23:30:29.281Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "Voltaic",
+              "DocumentMoniker": "C:\\Code\\Voltaic\\src\\Voltaic\\Voltaic.csproj",
+              "RelativeDocumentMoniker": "Voltaic\\Voltaic.csproj",
+              "ToolTip": "C:\\Code\\Voltaic\\src\\Voltaic\\Voltaic.csproj",
+              "RelativeToolTip": "Voltaic\\Voltaic.csproj",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000758|",
+              "WhenOpened": "2025-11-11T23:27:15.642Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s /b *.sln)",
+      "Bash(dotnet build:*)",
+      "Bash(dotnet run:*)",
+      "Bash(move TestRpc.cs Test.SimpleProgram.cs)",
+      "Bash(move TestRpc.csproj Test.SimpleTest.Simple.csproj)",
+      "Bash(taskkill:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(cat:*)",
+      "Bash(del \"C:\\Code\\Voltaic\\src\\Voltaic\\JsonRpcMessages.cs\")",
+      "Bash(dotnet clean:*)",
+      "Bash(dir /s /b *.csproj)",
+      "Bash(powershell -Command \"Remove-Item -Path ''C:\\Code\\Voltaic\\src\\Voltaic'' -Recurse -Force\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
