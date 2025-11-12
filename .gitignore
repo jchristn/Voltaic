@@ -7,6 +7,8 @@ packages/
 dist/
 build/
 out/
+bin/
+obj/
 *.exe
 *.dll
 *.so
