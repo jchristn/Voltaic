@@ -20,7 +20,10 @@
       "Bash(dir:*)",
       "WebFetch(domain:spec.modelcontextprotocol.io)",
       "Bash(curl:*)",
-      "Bash(exit 0)"
+      "Bash(exit 0)",
+      "Bash(del \"C:\\Code\\Voltaic\\src\\Voltaic.Mcp\\WebSocketConnection.cs\")",
+      "Bash(del \"C:\\Code\\Voltaic\\src\\Voltaic.Mcp\\NotificationQueue.cs\")",
+      "Bash(move \"C:\\Code\\Voltaic\\src\\Voltaic\\PendingRequest.cs\" \"C:\\Code\\Voltaic\\src\\Voltaic\\ServerPendingRequest.cs\")"
     ],
     "deny": [],
     "ask": []
