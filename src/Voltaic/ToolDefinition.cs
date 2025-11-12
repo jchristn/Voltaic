@@ -1,4 +1,4 @@
-﻿namespace Voltaic.Mcp
+﻿namespace Voltaic
 {
     using System;
     using System.Collections.Generic;

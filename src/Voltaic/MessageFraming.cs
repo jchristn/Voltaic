@@ -1,4 +1,4 @@
-namespace Voltaic.JsonRpc
+namespace Voltaic
 {
     using System;
     using System.IO;

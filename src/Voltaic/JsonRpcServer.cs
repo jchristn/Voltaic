@@ -1,4 +1,4 @@
-﻿namespace Voltaic.JsonRpc
+﻿namespace Voltaic
 {
     using System;
     using System.Collections.Concurrent;
@@ -28,9 +28,45 @@
         }
 
         /// <summary>
+        /// Gets or sets the maximum number of notifications that can be queued per client connection.
+        /// When the limit is reached, oldest notifications are discarded.
+        /// Default is 100 notifications. Minimum is 1.
+        /// This value is applied to new client connections when they are established.
+        /// </summary>
+        public int MaxQueueSize
+        {
+            get => _MaxQueueSize;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "Max queue size must be at least 1");
+                _MaxQueueSize = value;
+            }
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
+
+        /// <summary>
+        /// Occurs when a client connects to the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientConnected;
+
+        /// <summary>
+        /// Occurs when a client disconnects from the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientDisconnected;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC request is received from a client.
+        /// </summary>
+        public event EventHandler<JsonRpcRequestEventArgs>? RequestReceived;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC response is sent to a client.
+        /// </summary>
+        public event EventHandler<JsonRpcResponseEventArgs>? ResponseSent;
 
         /// <summary>
         /// Gets or sets the default Content-Type header value used when sending messages.
@@ -50,6 +86,7 @@
         private readonly Dictionary<string, Func<JsonElement?, object>> _Methods;
         private int _ClientIdCounter = 0;
         private string _DefaultContentType = "application/json; charset=utf-8";
+        private int _MaxQueueSize = 100;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="JsonRpcServer"/> class.
@@ -261,11 +298,13 @@
         {
             string clientId = $"client_{Interlocked.Increment(ref _ClientIdCounter)}";
             ClientConnection client = new ClientConnection(clientId, tcpClient);
+            client.MaxQueueSize = _MaxQueueSize;
 
             try
             {
                 _Clients.TryAdd(clientId, client);
                 LogMessage($"Client connected: {clientId} from {tcpClient.Client.RemoteEndPoint}");
+                RaiseClientConnected(client);
 
                 byte[] buffer = MessageFraming.CreateBuffer();
                 NetworkStream stream = tcpClient.GetStream();
@@ -317,6 +356,7 @@
             finally
             {
                 _Clients.TryRemove(clientId, out _);
+                RaiseClientDisconnected(client);
                 client.Dispose();
                 LogMessage($"Client disconnected: {clientId}");
             }
@@ -324,20 +364,26 @@
 
         private async Task ProcessRequestAsync(ClientConnection client, string requestString, CancellationToken token = default)
         {
+            ServerPendingRequest? pendingRequest = null;
+
             try
             {
-                LogMessage($"Received from {client.Id}: {requestString}");
+                LogMessage($"Received from {client.SessionId}: {requestString}");
 
                 JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString);
                 if (request == null)
                 {
-                    await SendResponseAsync(client, new JsonRpcResponse
+                    JsonRpcResponse invalidResponse = new JsonRpcResponse
                     {
                         Error = JsonRpcError.InvalidRequest(),
                         Id = null
-                    }, token).ConfigureAwait(false);
+                    };
+                    await SendResponseAsync(client, null, invalidResponse, token).ConfigureAwait(false);
                     return;
                 }
+
+                pendingRequest = new ServerPendingRequest(request.Id, client, request);
+                RaiseRequestReceived(pendingRequest);
 
                 JsonRpcResponse response;
 
@@ -384,31 +430,40 @@
                 // Only send response if request has an id (not a notification)
                 if (request.Id != null)
                 {
-                    await SendResponseAsync(client, response, token).ConfigureAwait(false);
+                    await SendResponseAsync(client, pendingRequest, response, token).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
                 LogMessage($"Error processing request: {ex.Message}");
-                await SendResponseAsync(client, new JsonRpcResponse
+                JsonRpcResponse errorResponse = new JsonRpcResponse
                 {
                     Error = JsonRpcError.ParseError(),
                     Id = null
-                }, token).ConfigureAwait(false);
+                };
+                await SendResponseAsync(client, null, errorResponse, token).ConfigureAwait(false);
             }
         }
 
-        private async Task SendResponseAsync(ClientConnection client, JsonRpcResponse response, CancellationToken token = default)
+        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default)
         {
             try
             {
                 string json = JsonSerializer.Serialize(response);
-                await MessageFraming.WriteMessageAsync(client.Stream, json, _DefaultContentType, token).ConfigureAwait(false);
-                LogMessage($"Sent to {client.Id}: {json}");
+                if (client.Stream != null)
+                {
+                    await MessageFraming.WriteMessageAsync(client.Stream, json, _DefaultContentType, token).ConfigureAwait(false);
+                }
+                LogMessage($"Sent to {client.SessionId}: {json}");
+
+                if (pendingRequest != null)
+                {
+                    RaiseResponseSent(pendingRequest, response);
+                }
             }
             catch (Exception ex)
             {
-                LogMessage($"Error sending response to {client.Id}: {ex.Message}");
+                LogMessage($"Error sending response to {client.SessionId}: {ex.Message}");
             }
         }
 
@@ -416,11 +471,92 @@
         {
             try
             {
-                await MessageFraming.WriteMessageAsync(client.Stream, message, _DefaultContentType, token).ConfigureAwait(false);
+                if (client.Stream != null)
+                {
+                    await MessageFraming.WriteMessageAsync(client.Stream, message, _DefaultContentType, token).ConfigureAwait(false);
+                }
             }
             catch
             {
                 // Client might be disconnected
+            }
+        }
+
+        private void RaiseClientConnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientConnected != null)
+            {
+                foreach (Delegate handler in ClientConnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseClientDisconnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientDisconnected != null)
+            {
+                foreach (Delegate handler in ClientDisconnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseRequestReceived(ServerPendingRequest pendingRequest)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (RequestReceived != null)
+            {
+                JsonRpcRequestEventArgs eventArgs = new JsonRpcRequestEventArgs(pendingRequest);
+                foreach (Delegate handler in RequestReceived.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcRequestEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseResponseSent(ServerPendingRequest pendingRequest, JsonRpcResponse response)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ResponseSent != null)
+            {
+                JsonRpcResponseEventArgs eventArgs = new JsonRpcResponseEventArgs(pendingRequest, response);
+                foreach (Delegate handler in ResponseSent.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcResponseEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
             }
         }
 

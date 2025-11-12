@@ -1,10 +1,10 @@
-namespace McpServerProgram
+namespace Test.McpServer
 {
     using System;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic.Mcp;
+    using Voltaic;
 
     class Program
     {

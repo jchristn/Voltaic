@@ -1,4 +1,4 @@
-namespace Voltaic.JsonRpc
+namespace Voltaic
 {
     using System.Text.Json.Serialization;
 

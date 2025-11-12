@@ -1,10 +1,10 @@
-namespace ClientProgram
+namespace Test.JsonRpcClient
 {
-    using Voltaic.JsonRpc;
     using System;
     using System.Net.Sockets;
     using System.Text.Json;
     using System.Threading.Tasks;
+    using Voltaic;
 
     class Program
     {
@@ -29,6 +29,33 @@ namespace ClientProgram
 
             // Subscribe to log events
             client.Log += (sender, message) => Console.WriteLine(message);
+
+            // Subscribe to events
+            client.Connected += (sender, message) => Console.WriteLine("Connected to server at " + message.ConnectedUtc);
+            client.Disconnected += (sender, message) => Console.WriteLine("Disconnected from server at " + message.DisconnectedUtc);
+
+            // Subscribe to connection events
+            client.Connected += (sender, e) =>
+            {
+                Console.WriteLine($"[Connected] {e.Endpoint} at {e.ConnectedUtc:HH:mm:ss.fff} (Type: {e.ConnectionType})");
+            };
+
+            client.Disconnected += (sender, e) =>
+            {
+                Console.WriteLine($"[Disconnected] {e.Endpoint} - Reason: {e.Reason}, Duration: {e.ConnectionDuration.TotalSeconds:F2}s");
+            };
+
+            // Subscribe to request/response events
+            client.RequestSent += (sender, e) =>
+            {
+                Console.WriteLine($"[Request Sent] {e.Method} (ID: {e.RequestId}) at {e.SentUtc:HH:mm:ss.fff}");
+            };
+
+            client.ResponseReceived += (sender, e) =>
+            {
+                string status = e.IsSuccess ? "Success" : "Error";
+                Console.WriteLine($"[Response Received] {e.Method} - {status}, Duration: {e.Duration.TotalMilliseconds:F2}ms");
+            };
 
             // Subscribe to notifications from server
             client.NotificationReceived += (sender, notification) =>

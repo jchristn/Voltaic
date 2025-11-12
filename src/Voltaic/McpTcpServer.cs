@@ -1,9 +1,8 @@
-namespace Voltaic.Mcp
+namespace Voltaic
 {
     using System;
     using System.Net;
     using System.Text.Json;
-    using Voltaic.JsonRpc;
 
     /// <summary>
     /// Provides a TCP-based MCP (Model Context Protocol) server implementation for handling remote procedure calls over a network.

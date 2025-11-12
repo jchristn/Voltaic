@@ -1,4 +1,4 @@
-namespace Voltaic.Mcp
+namespace Voltaic
 {
     using System;
     using System.Collections.Concurrent;
@@ -10,7 +10,6 @@ namespace Voltaic.Mcp
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic.JsonRpc;
 
     /// <summary>
     /// Provides an HTTP-based MCP (Model Context Protocol) server implementation.
@@ -30,6 +29,22 @@ namespace Voltaic.Mcp
             {
                 if (value < 10) throw new ArgumentOutOfRangeException(nameof(value), "Session timeout must be at least 10 seconds");
                 _SessionTimeoutSeconds = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the maximum number of notifications that can be queued per client connection.
+        /// When the limit is reached, oldest notifications are discarded.
+        /// Default is 100 notifications. Minimum is 1.
+        /// This value is applied to new client connections when they are established.
+        /// </summary>
+        public int MaxQueueSize
+        {
+            get => _MaxQueueSize;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "Max queue size must be at least 1");
+                _MaxQueueSize = value;
             }
         }
 
@@ -96,17 +111,38 @@ namespace Voltaic.Mcp
         /// </summary>
         public event EventHandler<string>? Log;
 
+        /// <summary>
+        /// Occurs when a client connects to the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientConnected;
+
+        /// <summary>
+        /// Occurs when a client disconnects from the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientDisconnected;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC request is received from a client.
+        /// </summary>
+        public event EventHandler<JsonRpcRequestEventArgs>? RequestReceived;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC response is sent to a client.
+        /// </summary>
+        public event EventHandler<JsonRpcResponseEventArgs>? ResponseSent;
+
         private readonly string _Hostname;
         private readonly int _Port;
         private readonly string _RpcPath;
         private readonly string _EventsPath;
         private HttpListener? _Listener;
         private CancellationTokenSource? _TokenSource;
-        private readonly ConcurrentDictionary<string, NotificationQueue> _Sessions;
+        private readonly ConcurrentDictionary<string, ClientConnection> _Sessions;
         private readonly Dictionary<string, Func<JsonElement?, object>> _Methods;
         private readonly List<ToolDefinition> _Tools;
         private Task? _CleanupTask;
         private int _SessionTimeoutSeconds = 300; // 5 minutes
+        private int _MaxQueueSize = 100;
         private bool _EnableCors = true;
         private Dictionary<string, string> _CorsHeaders = new Dictionary<string, string>
         {
@@ -139,7 +175,7 @@ namespace Voltaic.Mcp
             _Port = port;
             _RpcPath = String.IsNullOrEmpty(rpcPath) ? "/rpc" : rpcPath;
             _EventsPath = String.IsNullOrEmpty(eventsPath) ? "/events" : eventsPath;
-            _Sessions = new ConcurrentDictionary<string, NotificationQueue>();
+            _Sessions = new ConcurrentDictionary<string, ClientConnection>();
             _Methods = new Dictionary<string, Func<JsonElement?, object>>();
             _Tools = new List<ToolDefinition>();
 
@@ -237,14 +273,14 @@ namespace Voltaic.Mcp
         /// <returns>True if the notification was queued; false if the session does not exist.</returns>
         public bool SendNotificationToSession(string sessionId, string method, object? parameters = null)
         {
-            if (_Sessions.TryGetValue(sessionId, out NotificationQueue? queue))
+            if (_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
             {
                 JsonRpcRequest notification = new JsonRpcRequest
                 {
                     Method = method,
                     Params = parameters
                 };
-                queue.Enqueue(notification);
+                connection.Enqueue(notification);
                 return true;
             }
             return false;
@@ -264,9 +300,9 @@ namespace Voltaic.Mcp
                 Params = parameters
             };
 
-            foreach (NotificationQueue queue in _Sessions.Values)
+            foreach (ClientConnection connection in _Sessions.Values)
             {
-                queue.Enqueue(notification);
+                connection.Enqueue(notification);
             }
 
             LogMessage($"Broadcast notification: {method}");
@@ -282,15 +318,42 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets a list of all currently connected client IDs.
+        /// </summary>
+        /// <returns>A list of client IDs.</returns>
+        public List<string> GetConnectedClients()
+        {
+            return _Sessions.Keys.ToList();
+        }
+
+        /// <summary>
+        /// Kicks a client by disconnecting them from the server.
+        /// </summary>
+        /// <param name="clientId">The ID of the client to kick.</param>
+        /// <returns>True if the client was found and kicked; otherwise, false.</returns>
+        public bool KickClient(string clientId)
+        {
+            if (_Sessions.TryRemove(clientId, out ClientConnection? connection))
+            {
+                RaiseClientDisconnected(connection);
+                connection.Dispose();
+                LogMessage($"Kicked client: {clientId}");
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Removes a session and its notification queue.
         /// </summary>
         /// <param name="sessionId">The session ID to remove.</param>
         /// <returns>True if the session was found and removed; otherwise, false.</returns>
         public bool RemoveSession(string sessionId)
         {
-            if (_Sessions.TryRemove(sessionId, out NotificationQueue? queue))
+            if (_Sessions.TryRemove(sessionId, out ClientConnection? connection))
             {
-                queue.Dispose();
+                RaiseClientDisconnected(connection);
+                connection.Dispose();
                 LogMessage($"Removed session: {sessionId}");
                 return true;
             }
@@ -307,9 +370,9 @@ namespace Voltaic.Mcp
 
             _TokenSource?.Cancel();
 
-            foreach (NotificationQueue queue in _Sessions.Values)
+            foreach (ClientConnection connection in _Sessions.Values)
             {
-                queue.Dispose();
+                connection.Dispose();
             }
             _Sessions.Clear();
 
@@ -593,7 +656,18 @@ namespace Voltaic.Mcp
 
             // Get or create session
             string sessionId = context.Request.Headers["X-Session-Id"] ?? Guid.NewGuid().ToString();
-            NotificationQueue queue = _Sessions.GetOrAdd(sessionId, (id) => new NotificationQueue(id));
+            bool isNewSession = !_Sessions.ContainsKey(sessionId);
+            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+            {
+                ClientConnection newConnection = new ClientConnection(id);
+                newConnection.MaxQueueSize = _MaxQueueSize;
+                return newConnection;
+            });
+
+            if (isNewSession && _Sessions.ContainsKey(sessionId))
+            {
+                RaiseClientConnected(connection);
+            }
 
             // Read request body
             string requestBody;
@@ -605,7 +679,7 @@ namespace Voltaic.Mcp
             LogMessage($"RPC request from session {sessionId}: {requestBody}");
 
             // Process JSON-RPC request
-            JsonRpcResponse response = ProcessRpcRequest(requestBody);
+            JsonRpcResponse response = ProcessRpcRequest(connection, requestBody);
 
             // Send response
             if (_EnableCors)
@@ -637,7 +711,7 @@ namespace Voltaic.Mcp
             }
 
             string sessionId = context.Request.Headers["X-Session-Id"] ?? context.Request.QueryString["session"] ?? "";
-            if (String.IsNullOrEmpty(sessionId) || !_Sessions.TryGetValue(sessionId, out NotificationQueue? queue))
+            if (String.IsNullOrEmpty(sessionId) || !_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
             {
                 context.Response.StatusCode = 400;
                 byte[] errorBytes = Encoding.UTF8.GetBytes("Missing or invalid session ID");
@@ -670,7 +744,7 @@ namespace Voltaic.Mcp
 
                         try
                         {
-                            JsonRpcRequest? notification = await queue.DequeueAsync(timeoutCts.Token).ConfigureAwait(false);
+                            JsonRpcRequest? notification = await connection.DequeueAsync(timeoutCts.Token).ConfigureAwait(false);
 
                             if (notification != null)
                             {
@@ -703,19 +777,28 @@ namespace Voltaic.Mcp
             }
         }
 
-        private JsonRpcResponse ProcessRpcRequest(string requestString)
+        private JsonRpcResponse ProcessRpcRequest(ClientConnection connection, string requestString)
         {
+            ServerPendingRequest? pendingRequest = null;
+
             try
             {
                 JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString);
                 if (request == null)
                 {
-                    return new JsonRpcResponse
+                    JsonRpcResponse invalidResponse = new JsonRpcResponse
                     {
                         Error = JsonRpcError.InvalidRequest(),
                         Id = null
                     };
+                    RaiseResponseSent(connection, null, invalidResponse);
+                    return invalidResponse;
                 }
+
+                pendingRequest = new ServerPendingRequest(request.Id, connection, request);
+                RaiseRequestReceived(pendingRequest);
+
+                JsonRpcResponse response;
 
                 if (_Methods.ContainsKey(request.Method))
                 {
@@ -728,7 +811,7 @@ namespace Voltaic.Mcp
                         }
 
                         object result = _Methods[request.Method](paramsElement);
-                        return new JsonRpcResponse
+                        response = new JsonRpcResponse
                         {
                             Result = result,
                             Id = request.Id
@@ -736,7 +819,7 @@ namespace Voltaic.Mcp
                     }
                     catch (Exception ex)
                     {
-                        return new JsonRpcResponse
+                        response = new JsonRpcResponse
                         {
                             Error = new JsonRpcError
                             {
@@ -750,20 +833,25 @@ namespace Voltaic.Mcp
                 }
                 else
                 {
-                    return new JsonRpcResponse
+                    response = new JsonRpcResponse
                     {
                         Error = JsonRpcError.MethodNotFound(),
                         Id = request.Id
                     };
                 }
+
+                RaiseResponseSent(connection, pendingRequest, response);
+                return response;
             }
             catch (JsonException)
             {
-                return new JsonRpcResponse
+                JsonRpcResponse parseErrorResponse = new JsonRpcResponse
                 {
                     Error = JsonRpcError.ParseError(),
                     Id = null
                 };
+                RaiseResponseSent(connection, null, parseErrorResponse);
+                return parseErrorResponse;
             }
         }
 
@@ -795,6 +883,95 @@ namespace Voltaic.Mcp
                 catch (Exception ex)
                 {
                     LogMessage($"Session cleanup error: {ex.Message}");
+                }
+            }
+        }
+
+        private void RaiseClientConnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientConnected != null)
+            {
+                foreach (Delegate handler in ClientConnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseClientDisconnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientDisconnected != null)
+            {
+                foreach (Delegate handler in ClientDisconnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseRequestReceived(ServerPendingRequest pendingRequest)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (RequestReceived != null)
+            {
+                JsonRpcRequestEventArgs eventArgs = new JsonRpcRequestEventArgs(pendingRequest);
+                foreach (Delegate handler in RequestReceived.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcRequestEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseResponseSent(ClientConnection connection, ServerPendingRequest? pendingRequest, JsonRpcResponse response)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ResponseSent != null)
+            {
+                JsonRpcResponseEventArgs eventArgs;
+                if (pendingRequest != null)
+                {
+                    eventArgs = new JsonRpcResponseEventArgs(pendingRequest, response);
+                }
+                else
+                {
+                    // Create a minimal request for error cases where we don't have a pendingRequest
+                    JsonRpcRequest dummyRequest = new JsonRpcRequest { Method = "unknown", Id = response.Id };
+                    eventArgs = new JsonRpcResponseEventArgs(connection, dummyRequest, response, DateTime.UtcNow);
+                }
+
+                foreach (Delegate handler in ResponseSent.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcResponseEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
                 }
             }
         }

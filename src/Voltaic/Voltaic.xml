@@ -4,5 +4,1671 @@
         <name>Voltaic</name>
     </assembly>
     <members>
+        <member name="T:Voltaic.ClientConnectedEventArgs">
+            <summary>
+            Provides data for client connection events.
+            Contains information about the connection establishment including the connection endpoint and timestamp.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnectedEventArgs.ConnectedUtc">
+            <summary>
+            Gets the timestamp when the connection was established (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnectedEventArgs.Endpoint">
+            <summary>
+            Gets the connection endpoint (e.g., "localhost:8080" for TCP, "http://localhost:8080" for HTTP, "ws://localhost:8080" for WebSocket).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnectedEventArgs.ConnectionType">
+            <summary>
+            Gets the connection type identifier (e.g., "TCP", "HTTP", "WebSocket", "Stdio").
+            </summary>
+        </member>
+        <member name="M:Voltaic.ClientConnectedEventArgs.#ctor(System.String,Voltaic.ClientConnectionTypeEnum)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ClientConnectedEventArgs"/> class.
+            </summary>
+            <param name="endpoint">The connection endpoint.</param>
+            <param name="connectionType">The connection type.</param>
+        </member>
+        <member name="T:Voltaic.ClientConnection">
+            <summary>
+            Represents a connected client with its associated resources and metadata.
+            Supports multiple connection types: TCP, WebSocket, HTTP, and Stdio.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.Type">
+            <summary>
+            Gets the type of client connection.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.SessionId">
+            <summary>
+            Gets the unique identifier or session ID for this client connection.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.LastActivity">
+            <summary>
+            Gets the timestamp of the last activity on this connection.
+            Updated when notifications are enqueued or dequeued.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.MaxQueueSize">
+            <summary>
+            Gets or sets the maximum number of notifications that can be queued.
+            When the limit is reached, oldest notifications are discarded.
+            Default is 100 notifications. Minimum is 1.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.TcpClient">
+            <summary>
+            Gets the underlying TCP client.
+            Only applicable for TCP connection types.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.Stream">
+            <summary>
+            Gets the network stream for reading and writing data.
+            Only applicable for TCP connection types.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.WebSocket">
+            <summary>
+            Gets the underlying WebSocket instance.
+            Only applicable for WebSocket connection types.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientConnection.TokenSource">
+            <summary>
+            Gets the cancellation token source for this connection.
+            </summary>
+        </member>
+        <member name="M:Voltaic.ClientConnection.#ctor(System.String,System.Net.Sockets.TcpClient)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ClientConnection"/> class for TCP connections.
+            </summary>
+            <param name="sessionId">The unique identifier for this client.</param>
+            <param name="tcpClient">The TCP client connection.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when sessionId is null or empty, or tcpClient is null.</exception>
+        </member>
+        <member name="M:Voltaic.ClientConnection.#ctor(System.String,System.Net.WebSockets.WebSocket)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ClientConnection"/> class for WebSocket connections.
+            </summary>
+            <param name="sessionId">The unique identifier for this connection.</param>
+            <param name="webSocket">The WebSocket instance.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when sessionId is null or empty, or webSocket is null.</exception>
+        </member>
+        <member name="M:Voltaic.ClientConnection.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ClientConnection"/> class for HTTP sessions.
+            </summary>
+            <param name="sessionId">The unique identifier for this session.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when sessionId is null or empty.</exception>
+        </member>
+        <member name="M:Voltaic.ClientConnection.#ctor(System.String,Voltaic.ClientConnectionTypeEnum)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ClientConnection"/> class with a specified connection type.
+            </summary>
+            <param name="sessionId">The unique identifier for this connection.</param>
+            <param name="type">The type of connection.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when sessionId is null or empty.</exception>
+        </member>
+        <member name="M:Voltaic.ClientConnection.Enqueue(Voltaic.JsonRpcRequest)">
+            <summary>
+            Enqueues a notification into the queue.
+            If the queue is at maximum capacity, the oldest notification will be discarded.
+            </summary>
+            <param name="notification">The notification to enqueue.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when notification is null.</exception>
+            <exception cref="T:System.ObjectDisposedException">Thrown when the connection has been disposed.</exception>
+        </member>
+        <member name="M:Voltaic.ClientConnection.DequeueAsync(System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously waits for and dequeues a notification from the queue.
+            This method will block until a notification is available or the cancellation token is triggered.
+            </summary>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the dequeued notification, or null if the operation was cancelled.</returns>
+        </member>
+        <member name="M:Voltaic.ClientConnection.DequeueAll">
+            <summary>
+            Gets all notifications currently in the queue and clears it.
+            </summary>
+            <returns>A list of all notifications that were in the queue.</returns>
+        </member>
+        <member name="M:Voltaic.ClientConnection.Count">
+            <summary>
+            Gets the number of notifications currently in the queue.
+            </summary>
+            <returns>The number of notifications in the queue.</returns>
+        </member>
+        <member name="M:Voltaic.ClientConnection.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.ClientConnection"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.ClientConnectionTypeEnum">
+            <summary>
+            Specifies the type of client connection.
+            </summary>
+        </member>
+        <member name="F:Voltaic.ClientConnectionTypeEnum.Stdio">
+            <summary>
+            Standard input/output connection.
+            </summary>
+        </member>
+        <member name="F:Voltaic.ClientConnectionTypeEnum.Tcp">
+            <summary>
+            TCP socket connection.
+            </summary>
+        </member>
+        <member name="F:Voltaic.ClientConnectionTypeEnum.Http">
+            <summary>
+            HTTP-based connection with Server-Sent Events for notifications.
+            </summary>
+        </member>
+        <member name="F:Voltaic.ClientConnectionTypeEnum.Websockets">
+            <summary>
+            WebSocket connection.
+            </summary>
+        </member>
+        <member name="T:Voltaic.ClientDisconnectedEventArgs">
+            <summary>
+            Provides data for client disconnection events.
+            Contains information about the disconnection including timestamp, reason, and connection duration.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientDisconnectedEventArgs.ConnectedUtc">
+            <summary>
+            Gets the timestamp when the connection was established (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientDisconnectedEventArgs.DisconnectedUtc">
+            <summary>
+            Gets the timestamp when the disconnection occurred (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientDisconnectedEventArgs.ConnectionDuration">
+            <summary>
+            Gets the total duration the connection was active.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientDisconnectedEventArgs.Reason">
+            <summary>
+            Gets the reason for disconnection.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientDisconnectedEventArgs.Endpoint">
+            <summary>
+            Gets the connection endpoint (e.g., "localhost:8080" for TCP, "http://localhost:8080" for HTTP, "ws://localhost:8080" for WebSocket).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientDisconnectedEventArgs.ConnectionType">
+            <summary>
+            Gets the connection type identifier (e.g., "TCP", "HTTP", "WebSocket", "Stdio").
+            </summary>
+        </member>
+        <member name="M:Voltaic.ClientDisconnectedEventArgs.#ctor(System.DateTime,System.String,Voltaic.ClientConnectionTypeEnum,System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ClientDisconnectedEventArgs"/> class.
+            </summary>
+            <param name="connectedUtc">The timestamp when the connection was established (UTC).</param>
+            <param name="endpoint">The connection endpoint.</param>
+            <param name="connectionType">The connection type.</param>
+            <param name="reason">The reason for disconnection.</param>
+        </member>
+        <member name="T:Voltaic.ClientPendingRequest">
+            <summary>
+            Tracks the state of an in-flight JSON-RPC request on the client side.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientPendingRequest.RequestId">
+            <summary>
+            Gets the unique request identifier.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientPendingRequest.Request">
+            <summary>
+            Gets the JSON-RPC request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientPendingRequest.SentUtc">
+            <summary>
+            Gets the timestamp when the request was sent (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientPendingRequest.TaskCompletionSource">
+            <summary>
+            Gets the task completion source for awaiting the response.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientPendingRequest.ReceivedUtc">
+            <summary>
+            Gets or sets the timestamp when the response was received (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ClientPendingRequest.Duration">
+            <summary>
+            Gets the round-trip duration, if the response has been received.
+            </summary>
+        </member>
+        <member name="M:Voltaic.ClientPendingRequest.#ctor(System.Object,Voltaic.JsonRpcRequest,System.Threading.Tasks.TaskCompletionSource{Voltaic.JsonRpcResponse})">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ClientPendingRequest"/> class.
+            </summary>
+            <param name="requestId">The unique request identifier.</param>
+            <param name="request">The JSON-RPC request.</param>
+            <param name="taskCompletionSource">The task completion source for awaiting the response.</param>
+        </member>
+        <member name="T:Voltaic.JsonRpcClient">
+            <summary>
+            Provides a TCP-based JSON-RPC 2.0 client implementation for making remote procedure calls.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcClient.TcpClient">
+            <summary>
+            Underlying TCP client.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcClient.TokenSource">
+            <summary>
+            Cancellation token source.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcClient.IsConnected">
+            <summary>
+            Gets a value indicating whether the client is currently connected to a server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcClient.DefaultContentType">
+            <summary>
+            Gets or sets the default Content-Type header value used when sending messages.
+            This will default to application/json; charset=utf-8 if the supplied value is null.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcClient.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcClient.NotificationReceived">
+            <summary>
+            Occurs when a notification (request without an ID) is received from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcClient.Connected">
+            <summary>
+            Occurs when the client successfully connects to a server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcClient.Disconnected">
+            <summary>
+            Occurs when the client disconnects from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcClient.RequestSent">
+            <summary>
+            Occurs when a request is sent to the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcClient.ResponseReceived">
+            <summary>
+            Occurs when a response is received from the server.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.JsonRpcClient"/> class.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.ConnectAsync(System.String,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously connects to a JSON-RPC server at the specified host and port.
+            </summary>
+            <param name="host">The hostname or IP address of the server.</param>
+            <param name="port">The port number to connect to.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result is true if the connection was successful; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.CallAsync``1(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously invokes a remote method and returns the result as the specified type.
+            </summary>
+            <typeparam name="T">The type to deserialize the result into.</typeparam>
+            <param name="method">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000 (30 seconds).</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the method result.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected.</exception>
+            <exception cref="T:System.Exception">Thrown when the remote method returns an error.</exception>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.CallAsync(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously invokes a remote method and returns the result as an object.
+            </summary>
+            <param name="method">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000 (30 seconds).</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the method result.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected.</exception>
+            <exception cref="T:System.Exception">Thrown when the remote method returns an error.</exception>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.NotifyAsync(System.String,System.Object,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously sends a notification to the server.
+            Notifications are fire-and-forget and do not expect a response.
+            </summary>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected.</exception>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.Disconnect">
+            <summary>
+            Disconnects from the server and cancels all pending requests.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.JsonRpcClient"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.JsonRpcError">
+            <summary>
+            Represents a JSON-RPC 2.0 error object.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcError.Code">
+            <summary>
+            Gets or sets the error code.
+            Standard error codes are defined by the JSON-RPC 2.0 specification.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcError.Message">
+            <summary>
+            Gets or sets a short description of the error.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcError.Data">
+            <summary>
+            Gets or sets additional information about the error.
+            This property is optional and will be omitted from serialization if null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcError.ParseError">
+            <summary>
+            Creates a parse error (-32700) indicating that invalid JSON was received by the server.
+            </summary>
+            <returns>A new JsonRpcError instance representing a parse error.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcError.InvalidRequest">
+            <summary>
+            Creates an invalid request error (-32600) indicating that the JSON sent is not a valid request object.
+            </summary>
+            <returns>A new JsonRpcError instance representing an invalid request error.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcError.MethodNotFound">
+            <summary>
+            Creates a method not found error (-32601) indicating that the method does not exist or is not available.
+            </summary>
+            <returns>A new JsonRpcError instance representing a method not found error.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcError.InvalidParams">
+            <summary>
+            Creates an invalid params error (-32602) indicating that the method parameters are invalid.
+            </summary>
+            <returns>A new JsonRpcError instance representing an invalid params error.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcError.InternalError">
+            <summary>
+            Creates an internal error (-32603) indicating an internal JSON-RPC error.
+            </summary>
+            <returns>A new JsonRpcError instance representing an internal error.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcError.#ctor">
+            <summary>
+            Represents a JSON-RPC 2.0 error object.
+            </summary>
+        </member>
+        <member name="T:Voltaic.JsonRpcRequest">
+            <summary>
+            Represents a JSON-RPC 2.0 request message.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequest.JsonRpc">
+            <summary>
+            Gets or sets the JSON-RPC protocol version. Always "2.0".
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequest.Method">
+            <summary>
+            Gets or sets the name of the method to be invoked.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequest.Params">
+            <summary>
+            Gets or sets the parameters to be passed to the method.
+            This property is optional and will be omitted from serialization if null.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequest.Id">
+            <summary>
+            Gets or sets the request identifier.
+            If null, this is a notification and no response is expected.
+            This property will be omitted from serialization if null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcRequest.#ctor">
+            <summary>
+            Represents a JSON-RPC 2.0 request message.
+            </summary>
+        </member>
+        <member name="T:Voltaic.JsonRpcRequestEventArgs">
+            <summary>
+            Provides data for JSON-RPC request events.
+            Contains information about the client connection, the request, and timing information.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequestEventArgs.Client">
+            <summary>
+            Gets the client connection that sent the request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequestEventArgs.Request">
+            <summary>
+            Gets the JSON-RPC request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequestEventArgs.ReceivedUtc">
+            <summary>
+            Gets the timestamp when the request was received (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequestEventArgs.RequestId">
+            <summary>
+            Gets the unique request identifier, if present.
+            Will be null for notifications (requests without an ID).
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequestEventArgs.Method">
+            <summary>
+            Gets the method name being invoked.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcRequestEventArgs.IsNotification">
+            <summary>
+            Gets whether this request is a notification (has no ID and expects no response).
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcRequestEventArgs.#ctor(Voltaic.ClientConnection,Voltaic.JsonRpcRequest)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.JsonRpcRequestEventArgs"/> class.
+            </summary>
+            <param name="client">The client connection that sent the request.</param>
+            <param name="request">The JSON-RPC request.</param>
+        </member>
+        <member name="M:Voltaic.JsonRpcRequestEventArgs.#ctor(Voltaic.ServerPendingRequest)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.JsonRpcRequestEventArgs"/> class from a pending request.
+            </summary>
+            <param name="pendingRequest">The pending request state.</param>
+        </member>
+        <member name="T:Voltaic.JsonRpcResponse">
+            <summary>
+            Represents a JSON-RPC 2.0 response message.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponse.JsonRpc">
+            <summary>
+            Gets or sets the JSON-RPC protocol version. Always "2.0".
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponse.Result">
+            <summary>
+            Gets or sets the result of the method invocation.
+            This property is required on success and will be omitted from serialization if null.
+            Must not be present if there was an error.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponse.Error">
+            <summary>
+            Gets or sets the error object if there was an error invoking the method.
+            This property is required on error and will be omitted from serialization if null.
+            Must not be present if the method succeeded.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponse.Id">
+            <summary>
+            Gets or sets the request identifier that this response corresponds to.
+            This must match the Id of the request being replied to.
+            </summary>
+        </member>
+        <member name="T:Voltaic.JsonRpcResponseEventArgs">
+            <summary>
+            Provides data for JSON-RPC response events.
+            Contains information about the client connection, the original request, the response, and timing information.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.Client">
+            <summary>
+            Gets the client connection that received the response.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.Request">
+            <summary>
+            Gets the original JSON-RPC request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.Response">
+            <summary>
+            Gets the JSON-RPC response.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.ReceivedUtc">
+            <summary>
+            Gets the timestamp when the request was received (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.SentUtc">
+            <summary>
+            Gets the timestamp when the response was sent (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.Duration">
+            <summary>
+            Gets the processing duration from request receipt to response send.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.RequestId">
+            <summary>
+            Gets the unique request identifier, if present.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.Method">
+            <summary>
+            Gets the method name that was invoked.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.IsError">
+            <summary>
+            Gets whether the response contains an error.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcResponseEventArgs.IsSuccess">
+            <summary>
+            Gets whether the response was successful (contains a result, not an error).
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcResponseEventArgs.#ctor(Voltaic.ClientConnection,Voltaic.JsonRpcRequest,Voltaic.JsonRpcResponse,System.DateTime)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.JsonRpcResponseEventArgs"/> class.
+            </summary>
+            <param name="client">The client connection that received the response.</param>
+            <param name="request">The original JSON-RPC request.</param>
+            <param name="response">The JSON-RPC response.</param>
+            <param name="receivedUtc">The timestamp when the request was received (UTC).</param>
+        </member>
+        <member name="M:Voltaic.JsonRpcResponseEventArgs.#ctor(Voltaic.ServerPendingRequest,Voltaic.JsonRpcResponse)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.JsonRpcResponseEventArgs"/> class from a pending request.
+            </summary>
+            <param name="pendingRequest">The pending request state.</param>
+            <param name="response">The JSON-RPC response.</param>
+        </member>
+        <member name="T:Voltaic.JsonRpcServer">
+            <summary>
+            Provides a TCP-based JSON-RPC 2.0 server implementation for handling remote procedure calls.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcServer.TokenSource">
+            <summary>
+            Cancellation token source.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcServer.MaxQueueSize">
+            <summary>
+            Gets or sets the maximum number of notifications that can be queued per client connection.
+            When the limit is reached, oldest notifications are discarded.
+            Default is 100 notifications. Minimum is 1.
+            This value is applied to new client connections when they are established.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcServer.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcServer.ClientConnected">
+            <summary>
+            Occurs when a client connects to the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcServer.ClientDisconnected">
+            <summary>
+            Occurs when a client disconnects from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcServer.RequestReceived">
+            <summary>
+            Occurs when a JSON-RPC request is received from a client.
+            </summary>
+        </member>
+        <member name="E:Voltaic.JsonRpcServer.ResponseSent">
+            <summary>
+            Occurs when a JSON-RPC response is sent to a client.
+            </summary>
+        </member>
+        <member name="P:Voltaic.JsonRpcServer.DefaultContentType">
+            <summary>
+            Gets or sets the default Content-Type header value used when sending messages.
+            This will default to application/json; charset=utf-8 if the supplied value is null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.#ctor(System.Net.IPAddress,System.Int32,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.JsonRpcServer"/> class.
+            </summary>
+            <param name="ip">IP address to listen on.</param>
+            <param name="port">The port number to listen on.</param>
+            <param name="includeDefaultMethods">True to include default methods such as echo, ping, getTime, add, and getClients.</param>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a custom RPC method with the specified handler.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The function that handles the method invocation.</param>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.TryInvokeMethod(System.String,System.Nullable{System.Text.Json.JsonElement},System.Object@)">
+            <summary>
+            Attempts to invoke a registered method by name with the given parameters.
+            </summary>
+            <param name="methodName">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method.</param>
+            <param name="result">The result of the method invocation if successful.</param>
+            <returns>True if the method was found and invoked successfully; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.StartAsync(System.Threading.CancellationToken)">
+            <summary>
+            Starts the server and begins listening for client connections asynchronously.
+            This method will continue running until Stop() is called.
+            </summary>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.BroadcastNotificationAsync(System.String,System.Object,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously broadcasts a notification to all connected _Clients.
+            </summary>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.KickClient(System.String)">
+            <summary>
+            Kicks a client by disconnecting them from the server.
+            </summary>
+            <param name="clientId">The ID of the client to kick.</param>
+            <returns>True if the client was found and kicked; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.GetConnectedClients">
+            <summary>
+            Gets a list of all currently connected client IDs.
+            </summary>
+            <returns>A list of client IDs.</returns>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.Stop">
+            <summary>
+            Stops the server and disconnects all _Clients.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.JsonRpcServer"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.RegisterBuiltInMethods">
+            <summary>
+            Registers the built-in RPC methods: ping, echo, getTime, add, and getClients.
+            This method is virtual to allow derived classes to customize the set of built-in methods.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpClient">
+            <summary>
+            MCP client using stdio transport for subprocess-based MCP servers.
+            Implements Model Context Protocol stdio transport specification.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpClient.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpClient.NotificationReceived">
+            <summary>
+            Occurs when a notification (request without an ID) is received from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpClient.Connected">
+            <summary>
+            Occurs when the client successfully connects to a server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpClient.Disconnected">
+            <summary>
+            Occurs when the client disconnects from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpClient.RequestSent">
+            <summary>
+            Occurs when a request is sent to the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpClient.ResponseReceived">
+            <summary>
+            Occurs when a response is received from the server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpClient.IsConnected">
+            <summary>
+            Gets a value indicating whether the client is currently connected to a server.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpClient.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpClient"/> class.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpClient.LaunchServerAsync(System.String,System.String[],System.Threading.CancellationToken)">
+            <summary>
+            Launches an MCP server as a subprocess and connects to it via stdio.
+            </summary>
+            <param name="executable">The path to the MCP server executable.</param>
+            <param name="args">The command-line arguments to pass to the server.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result is true if the launch was successful; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.McpClient.CallAsync``1(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously invokes a remote method and returns the result as the specified type.
+            </summary>
+            <typeparam name="T">The type to deserialize the result into.</typeparam>
+            <param name="method">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000 (30 seconds).</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the method result.</returns>
+        </member>
+        <member name="M:Voltaic.McpClient.NotifyAsync(System.String,System.Object,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously sends a notification to the server.
+            Notifications are fire-and-forget and do not expect a response.
+            </summary>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpClient.Shutdown">
+            <summary>
+            Shuts down the MCP server gracefully by closing stdin.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpClient.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.McpClient"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpHttpClient">
+            <summary>
+            Provides an HTTP-based MCP (Model Context Protocol) client implementation.
+            Supports JSON-RPC 2.0 over HTTP with Server-Sent Events (SSE) for server-to-client notifications.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpClient.SessionId">
+            <summary>
+            Gets the session ID assigned by the server.
+            This ID is used to correlate requests and receive notifications via SSE.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpClient.IsConnected">
+            <summary>
+            Gets a value indicating whether the client is currently connected to a server.
+            A client is considered connected if it has a valid session ID.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpClient.IsSseConnected">
+            <summary>
+            Gets a value indicating whether the SSE (Server-Sent Events) connection is active.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpClient.RequestTimeoutMs">
+            <summary>
+            Gets or sets the request timeout in milliseconds.
+            Default is 30000 (30 seconds). Minimum is 1000 (1 second).
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpClient.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpClient.NotificationReceived">
+            <summary>
+            Occurs when a notification (request without an ID) is received from the server via SSE.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpClient.Connected">
+            <summary>
+            Occurs when the client successfully connects to a server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpClient.Disconnected">
+            <summary>
+            Occurs when the client disconnects from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpClient.RequestSent">
+            <summary>
+            Occurs when a request is sent to the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpClient.ResponseReceived">
+            <summary>
+            Occurs when a response is received from the server.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpHttpClient"/> class.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.ConnectAsync(System.String,System.String,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously connects to an HTTP MCP server at the specified base URL.
+            This method will make an initial request to establish a session.
+            </summary>
+            <param name="baseUrl">The base URL of the server (e.g., "http://localhost:8080").</param>
+            <param name="rpcPath">The RPC endpoint path. Default is "/rpc".</param>
+            <param name="eventsPath">The SSE events endpoint path. Default is "/events".</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result is true if the connection was successful; otherwise, false.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when baseUrl is null or empty.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.StartSseAsync(System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously starts the Server-Sent Events (SSE) connection to receive notifications from the server.
+            A session must be established before calling this method.
+            </summary>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result is true if the SSE connection was established; otherwise, false.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when no session has been established.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.StopSse">
+            <summary>
+            Stops the Server-Sent Events (SSE) connection.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.CallAsync``1(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously invokes a remote method and returns the result as the specified type.
+            </summary>
+            <typeparam name="T">The type to deserialize the result into.</typeparam>
+            <param name="method">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is the value of RequestTimeoutMs property.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the method result.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
+            <exception cref="T:System.Exception">Thrown when the remote method returns an error.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.Disconnect">
+            <summary>
+            Disconnects from the server and stops the SSE connection if active.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.McpHttpClient"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpHttpServer">
+            <summary>
+            Provides an HTTP-based MCP (Model Context Protocol) server implementation.
+            Supports JSON-RPC 2.0 over HTTP POST with Server-Sent Events (SSE) for server-to-client notifications.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.SessionTimeoutSeconds">
+            <summary>
+            Gets or sets the session timeout in seconds.
+            Sessions that have been inactive for longer than this will be expired.
+            Default is 300 seconds (5 minutes). Minimum is 10 seconds.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.MaxQueueSize">
+            <summary>
+            Gets or sets the maximum number of notifications that can be queued per client connection.
+            When the limit is reached, oldest notifications are discarded.
+            Default is 100 notifications. Minimum is 1.
+            This value is applied to new client connections when they are established.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.EnableCors">
+            <summary>
+            Gets or sets whether CORS (Cross-Origin Resource Sharing) is enabled.
+            When enabled, the server will accept requests from any origin.
+            Default is true to support browser-based clients.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.CorsHeaders">
+            <summary>
+            Headers to use when CORS support is enabled.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.TokenSource">
+            <summary>
+            Gets the cancellation token source for the server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version.
+            Default is "2025-03-26".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.ServerName">
+            <summary>
+            Gets or sets the server name for MCP serverInfo.
+            Default is "Voltaic.Mcp.HttpServer".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.ServerVersion">
+            <summary>
+            Gets or sets the server version for MCP serverInfo.
+            Default is "1.0.0".
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpServer.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpServer.ClientConnected">
+            <summary>
+            Occurs when a client connects to the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpServer.ClientDisconnected">
+            <summary>
+            Occurs when a client disconnects from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpServer.RequestReceived">
+            <summary>
+            Occurs when a JSON-RPC request is received from a client.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpHttpServer.ResponseSent">
+            <summary>
+            Occurs when a JSON-RPC response is sent to a client.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.#ctor(System.String,System.Int32,System.String,System.String,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpHttpServer"/> class.
+            </summary>
+            <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
+            <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
+            <param name="rpcPath">The URL path for JSON-RPC requests. Default is "/rpc".</param>
+            <param name="eventsPath">The URL path for Server-Sent Events connections. Default is "/events".</param>
+            <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getSessions.</param>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a custom RPC method with the specified handler.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with metadata for MCP protocol tool discovery.
+            This registers both the method handler and the tool definition for tools/list.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.StartAsync(System.Threading.CancellationToken)">
+            <summary>
+            Starts the HTTP server and begins listening for requests asynchronously.
+            This method will continue running until Stop() is called or the cancellation token is triggered.
+            </summary>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the server is already running.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.SendNotificationToSession(System.String,System.String,System.Object)">
+            <summary>
+            Broadcasts a notification to a specific session.
+            The notification will be queued and delivered via the SSE connection if active.
+            </summary>
+            <param name="sessionId">The session ID to send the notification to.</param>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <returns>True if the notification was queued; false if the session does not exist.</returns>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.BroadcastNotification(System.String,System.Object)">
+            <summary>
+            Broadcasts a notification to all active sessions.
+            Notifications are queued and delivered via SSE connections.
+            </summary>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.GetActiveSessions">
+            <summary>
+            Gets a list of all active session IDs.
+            </summary>
+            <returns>A list of session IDs.</returns>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.GetConnectedClients">
+            <summary>
+            Gets a list of all currently connected client IDs.
+            </summary>
+            <returns>A list of client IDs.</returns>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.KickClient(System.String)">
+            <summary>
+            Kicks a client by disconnecting them from the server.
+            </summary>
+            <param name="clientId">The ID of the client to kick.</param>
+            <returns>True if the client was found and kicked; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RemoveSession(System.String)">
+            <summary>
+            Removes a session and its notification queue.
+            </summary>
+            <param name="sessionId">The session ID to remove.</param>
+            <returns>True if the session was found and removed; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.Stop">
+            <summary>
+            Stops the server and closes all active sessions.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.McpHttpServer"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterBuiltInMethods">
+            <summary>
+            Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
+            This method is virtual to allow derived classes to customize the set of built-in methods.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpServer">
+            <summary>
+            MCP server using stdio transport for subprocess-based operation.
+            Implements Model Context Protocol stdio transport specification.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpServer.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpServer.#ctor(System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpServer"/> class.
+            </summary>
+            <param name="includeDefaultMethods">True to include default methods such as echo, ping, and getTime.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a custom RPC method with the specified handler.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The function that handles the method invocation.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RunAsync(System.Threading.CancellationToken)">
+            <summary>
+            Runs the MCP server, reading from stdin and writing to stdout.
+            Blocks until stdin is closed or cancellation is requested.
+            </summary>
+            <param name="token">Cancellation token to stop the server.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpServer.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.McpServer"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpTcpClient">
+            <summary>
+            Provides a TCP-based MCP (Model Context Protocol) client implementation for making remote procedure calls over a network.
+            This class extends JsonRpcClient with MCP-specific semantics and branding.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpTcpClient.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpTcpClient"/> class.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpTcpServer">
+            <summary>
+            Provides a TCP-based MCP (Model Context Protocol) server implementation for handling remote procedure calls over a network.
+            This class extends JsonRpcServer with MCP-specific defaults and semantics.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTcpServer.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version.
+            Default is "2025-03-26".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTcpServer.ServerName">
+            <summary>
+            Gets or sets the server name for MCP serverInfo.
+            Default is "Voltaic.Mcp.TcpServer".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTcpServer.ServerVersion">
+            <summary>
+            Gets or sets the server version for MCP serverInfo.
+            Default is "1.0.0".
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.#ctor(System.Net.IPAddress,System.Int32,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpTcpServer"/> class.
+            </summary>
+            <param name="ip">The IP address to listen on.</param>
+            <param name="port">The port number to listen on.</param>
+            <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterBuiltInMethods">
+            <summary>
+            Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
+            Note: Unlike JsonRpcServer, this does not include the 'add' method.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpWebsocketsClient">
+            <summary>
+            Provides a WebSocket-based MCP (Model Context Protocol) client implementation.
+            Supports bidirectional communication with MCP servers over WebSocket connections.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsClient.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum message size in bytes that can be received.
+            Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsClient.IsConnected">
+            <summary>
+            Gets a value indicating whether the client is currently connected to a server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsClient.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsClient.NotificationReceived">
+            <summary>
+            Occurs when a notification (request without an ID) is received from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsClient.Connected">
+            <summary>
+            Occurs when the client successfully connects to a server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsClient.Disconnected">
+            <summary>
+            Occurs when the client disconnects from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsClient.RequestSent">
+            <summary>
+            Occurs when a request is sent to the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsClient.ResponseReceived">
+            <summary>
+            Occurs when a response is received from the server.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsClient.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpWebsocketsClient"/> class.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsClient.ConnectAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously connects to a WebSocket MCP server at the specified URL.
+            </summary>
+            <param name="url">The WebSocket URL to connect to (e.g., "ws://localhost:8080/mcp" or "wss://example.com/mcp").</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result is true if the connection was successful; otherwise, false.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when url is null or empty.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsClient.CallAsync``1(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously invokes a remote method and returns the result as the specified type.
+            </summary>
+            <typeparam name="T">The type to deserialize the result into.</typeparam>
+            <param name="method">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000 (30 seconds).</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the method result.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected.</exception>
+            <exception cref="T:System.Exception">Thrown when the remote method returns an error.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsClient.NotifyAsync(System.String,System.Object,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously sends a notification to the server.
+            Notifications are fire-and-forget and do not expect a response.
+            </summary>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsClient.Disconnect">
+            <summary>
+            Disconnects from the server and cancels all pending requests.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsClient.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.McpWebsocketsClient"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpWebsocketsServer">
+            <summary>
+            Provides a WebSocket-based MCP (Model Context Protocol) server implementation.
+            Supports bidirectional communication over WebSocket connections with full JSON-RPC 2.0 support.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsServer.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum message size in bytes that can be received.
+            Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsServer.KeepAliveIntervalSeconds">
+            <summary>
+            Gets or sets the WebSocket keep-alive interval in seconds.
+            Default is 30 seconds. Set to 0 to disable keep-alive.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsServer.MaxQueueSize">
+            <summary>
+            Gets or sets the maximum number of notifications that can be queued per client connection.
+            When the limit is reached, oldest notifications are discarded.
+            Default is 100 notifications. Minimum is 1.
+            This value is applied to new client connections when they are established.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsServer.TokenSource">
+            <summary>
+            Gets the cancellation token source for the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsServer.Log">
+            <summary>
+            Occurs when a log message is generated.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsServer.ClientConnected">
+            <summary>
+            Occurs when a client connects to the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsServer.ClientDisconnected">
+            <summary>
+            Occurs when a client disconnects from the server.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsServer.RequestReceived">
+            <summary>
+            Occurs when a JSON-RPC request is received from a client.
+            </summary>
+        </member>
+        <member name="E:Voltaic.McpWebsocketsServer.ResponseSent">
+            <summary>
+            Occurs when a JSON-RPC response is sent to a client.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsServer.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version.
+            Default is "2025-03-26".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsServer.ServerName">
+            <summary>
+            Gets or sets the server name for MCP serverInfo.
+            Default is "Voltaic.Mcp.WebSocketsServer".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpWebsocketsServer.ServerVersion">
+            <summary>
+            Gets or sets the server version for MCP serverInfo.
+            Default is "1.0.0".
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.#ctor(System.String,System.Int32,System.String,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpWebsocketsServer"/> class.
+            </summary>
+            <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
+            <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
+            <param name="path">The URL path for WebSocket connections. Default is "/mcp".</param>
+            <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a custom RPC method with the specified handler.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.StartAsync(System.Threading.CancellationToken)">
+            <summary>
+            Starts the WebSocket server and begins listening for client connections asynchronously.
+            This method will continue running until Stop() is called or the cancellation token is triggered.
+            </summary>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the server is already running.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.BroadcastNotificationAsync(System.String,System.Object,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously broadcasts a notification to all connected clients.
+            Notifications are fire-and-forget JSON-RPC requests without an ID.
+            </summary>
+            <param name="method">The name of the notification method.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.KickClient(System.String)">
+            <summary>
+            Kicks a client by disconnecting them from the server.
+            </summary>
+            <param name="clientId">The ID of the client to kick.</param>
+            <returns>True if the client was found and kicked; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.GetConnectedClients">
+            <summary>
+            Gets a list of all currently connected client IDs.
+            </summary>
+            <returns>A list of client IDs.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.Stop">
+            <summary>
+            Stops the server and disconnects all clients gracefully.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.Dispose">
+            <summary>
+            Releases all resources used by the <see cref="T:Voltaic.McpWebsocketsServer"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterBuiltInMethods">
+            <summary>
+            Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
+            This method is virtual to allow derived classes to customize the set of built-in methods.
+            </summary>
+        </member>
+        <member name="T:Voltaic.MessageFraming">
+            <summary>
+            Provides LSP-style message framing for JSON-RPC 2.0 messages.
+            Messages are formatted as: Content-Length: {size}\r\n\r\n{json_body}
+            </summary>
+        </member>
+        <member name="M:Voltaic.MessageFraming.ReadMessageAsync(System.IO.Stream,System.Byte[],System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Reads a complete LSP-framed message from a stream.
+            Handles partial reads, buffering, and multiple messages in the buffer.
+            </summary>
+            <param name="stream">The network stream to read from.</param>
+            <param name="buffer">A reusable buffer for reading. Will be resized if needed.</param>
+            <param name="bufferOffset">Current offset in the buffer containing unprocessed data.</param>
+            <param name="bufferCount">Number of unprocessed bytes in the buffer.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A tuple containing the message string, updated buffer (may be resized), and buffer state (offset, count).</returns>
+        </member>
+        <member name="M:Voltaic.MessageFraming.TryExtractMessage(System.Byte[],System.Int32,System.Int32)">
+            <summary>
+            Attempts to extract a complete LSP-framed message from a buffer.
+            </summary>
+        </member>
+        <member name="M:Voltaic.MessageFraming.FindHeaderEnd(System.Byte[],System.Int32,System.Int32)">
+            <summary>
+            Finds the position of "\r\n\r\n" in the buffer.
+            </summary>
+        </member>
+        <member name="M:Voltaic.MessageFraming.ParseContentLength(System.String)">
+            <summary>
+            Parses the Content-Length value from the header string.
+            </summary>
+        </member>
+        <member name="M:Voltaic.MessageFraming.WriteMessageAsync(System.IO.Stream,System.String,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Writes a message with LSP-style framing to a stream.
+            Supports multiple headers (Content-Length is required, Content-Type is optional).
+            </summary>
+            <param name="stream">The network stream to write to.</param>
+            <param name="message">The message string (typically JSON) to send.</param>
+            <param name="contentType">Optional Content-Type header value. If null, Content-Type header is omitted.</param>
+            <param name="token">Cancellation token.</param>
+        </member>
+        <member name="M:Voltaic.MessageFraming.CreateBuffer">
+            <summary>
+            Creates a buffer for message reading operations.
+            </summary>
+        </member>
+        <member name="T:Voltaic.RequestSentEventArgs">
+            <summary>
+            Provides data for request sent events from the client.
+            Contains information about the outbound request including the request details and timestamp.
+            </summary>
+        </member>
+        <member name="P:Voltaic.RequestSentEventArgs.Request">
+            <summary>
+            Gets the JSON-RPC request that was sent.
+            </summary>
+        </member>
+        <member name="P:Voltaic.RequestSentEventArgs.SentUtc">
+            <summary>
+            Gets the timestamp when the request was sent (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.RequestSentEventArgs.RequestId">
+            <summary>
+            Gets the unique request identifier, if present.
+            Will be null for notifications (requests without an ID).
+            </summary>
+        </member>
+        <member name="P:Voltaic.RequestSentEventArgs.Method">
+            <summary>
+            Gets the method name being invoked.
+            </summary>
+        </member>
+        <member name="P:Voltaic.RequestSentEventArgs.IsNotification">
+            <summary>
+            Gets whether this request is a notification (has no ID and expects no response).
+            </summary>
+        </member>
+        <member name="M:Voltaic.RequestSentEventArgs.#ctor(Voltaic.JsonRpcRequest)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.RequestSentEventArgs"/> class.
+            </summary>
+            <param name="request">The JSON-RPC request that was sent.</param>
+        </member>
+        <member name="M:Voltaic.RequestSentEventArgs.#ctor(Voltaic.ClientPendingRequest)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.RequestSentEventArgs"/> class from a pending request.
+            </summary>
+            <param name="pendingRequest">The pending request state.</param>
+        </member>
+        <member name="T:Voltaic.ResponseReceivedEventArgs">
+            <summary>
+            Provides data for response received events on the client.
+            Contains information about the inbound response including the original request, response, and timing information.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.Request">
+            <summary>
+            Gets the original JSON-RPC request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.Response">
+            <summary>
+            Gets the JSON-RPC response.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.SentUtc">
+            <summary>
+            Gets the timestamp when the request was sent (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.ReceivedUtc">
+            <summary>
+            Gets the timestamp when the response was received (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.Duration">
+            <summary>
+            Gets the round-trip duration from request send to response receipt.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.RequestId">
+            <summary>
+            Gets the unique request identifier, if present.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.Method">
+            <summary>
+            Gets the method name that was invoked.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.IsError">
+            <summary>
+            Gets whether the response contains an error.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ResponseReceivedEventArgs.IsSuccess">
+            <summary>
+            Gets whether the response was successful (contains a result, not an error).
+            </summary>
+        </member>
+        <member name="M:Voltaic.ResponseReceivedEventArgs.#ctor(Voltaic.JsonRpcRequest,Voltaic.JsonRpcResponse,System.DateTime)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ResponseReceivedEventArgs"/> class.
+            </summary>
+            <param name="request">The original JSON-RPC request.</param>
+            <param name="response">The JSON-RPC response.</param>
+            <param name="sentUtc">The timestamp when the request was sent (UTC).</param>
+        </member>
+        <member name="M:Voltaic.ResponseReceivedEventArgs.#ctor(Voltaic.ClientPendingRequest,Voltaic.JsonRpcResponse)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ResponseReceivedEventArgs"/> class from a pending request.
+            </summary>
+            <param name="pendingRequest">The pending request state.</param>
+            <param name="response">The JSON-RPC response.</param>
+        </member>
+        <member name="T:Voltaic.ServerPendingRequest">
+            <summary>
+            Tracks the state of an in-flight JSON-RPC request on the server side.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ServerPendingRequest.RequestId">
+            <summary>
+            Gets the unique request identifier.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ServerPendingRequest.Client">
+            <summary>
+            Gets the client connection for this request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ServerPendingRequest.Request">
+            <summary>
+            Gets the JSON-RPC request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ServerPendingRequest.ReceivedUtc">
+            <summary>
+            Gets the timestamp when the request was received (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ServerPendingRequest.ProcessingStartedUtc">
+            <summary>
+            Gets or sets the timestamp when processing started (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ServerPendingRequest.CompletedUtc">
+            <summary>
+            Gets or sets the timestamp when the response was sent (UTC).
+            </summary>
+        </member>
+        <member name="P:Voltaic.ServerPendingRequest.Duration">
+            <summary>
+            Gets the processing duration, if completed.
+            </summary>
+        </member>
+        <member name="M:Voltaic.ServerPendingRequest.#ctor(System.Object,Voltaic.ClientConnection,Voltaic.JsonRpcRequest)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.ServerPendingRequest"/> class.
+            </summary>
+            <param name="requestId">The unique request identifier.</param>
+            <param name="client">The client connection.</param>
+            <param name="request">The JSON-RPC request.</param>
+        </member>
+        <member name="T:Voltaic.ToolDefinition">
+            <summary>
+            Represents a tool definition for MCP protocol tool discovery.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ToolDefinition.Name">
+            <summary>
+            Gets or sets the name of the tool.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ToolDefinition.Description">
+            <summary>
+            Gets or sets the description of what the tool does.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ToolDefinition.InputSchema">
+            <summary>
+            Gets or sets the JSON schema for the tool's input parameters.
+            </summary>
+        </member>
+        <member name="M:Voltaic.ToolDefinition.#ctor">
+            <summary>
+            Represents a tool definition for MCP protocol tool discovery.
+            </summary>
+        </member>
     </members>
 </doc>

@@ -1,4 +1,4 @@
-namespace Voltaic.Mcp
+namespace Voltaic
 {
     using System;
     using System.Collections.Generic;
@@ -6,7 +6,7 @@ namespace Voltaic.Mcp
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic.JsonRpc;
+    using Voltaic;
 
     /// <summary>
     /// MCP server using stdio transport for subprocess-based operation.

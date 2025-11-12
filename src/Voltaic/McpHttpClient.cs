@@ -1,4 +1,4 @@
-namespace Voltaic.Mcp
+namespace Voltaic
 {
     using System;
     using System.IO;
@@ -7,7 +7,6 @@ namespace Voltaic.Mcp
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic.JsonRpc;
 
     /// <summary>
     /// Provides an HTTP-based MCP (Model Context Protocol) client implementation.
@@ -56,6 +55,26 @@ namespace Voltaic.Mcp
         /// </summary>
         public event EventHandler<JsonRpcRequest>? NotificationReceived;
 
+        /// <summary>
+        /// Occurs when the client successfully connects to a server.
+        /// </summary>
+        public event EventHandler<ClientConnectedEventArgs>? Connected;
+
+        /// <summary>
+        /// Occurs when the client disconnects from the server.
+        /// </summary>
+        public event EventHandler<ClientDisconnectedEventArgs>? Disconnected;
+
+        /// <summary>
+        /// Occurs when a request is sent to the server.
+        /// </summary>
+        public event EventHandler<RequestSentEventArgs>? RequestSent;
+
+        /// <summary>
+        /// Occurs when a response is received from the server.
+        /// </summary>
+        public event EventHandler<ResponseReceivedEventArgs>? ResponseReceived;
+
         private HttpClient? _HttpClient;
         private string? _BaseUrl;
         private string? _RpcUrl;
@@ -64,6 +83,7 @@ namespace Voltaic.Mcp
         private Task? _SseTask;
         private bool _IsSseConnected = false;
         private int _RequestTimeoutMs = 30000;
+        private DateTime _ConnectedUtc;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpHttpClient"/> class.
@@ -98,7 +118,9 @@ namespace Voltaic.Mcp
                 // Make initial ping request to establish session
                 await CallAsync<string>("ping", null, _RequestTimeoutMs, token).ConfigureAwait(false);
 
+                _ConnectedUtc = DateTime.UtcNow;
                 LogMessage($"Connected to {baseUrl}");
+                RaiseConnected();
                 return true;
             }
             catch (Exception ex)
@@ -179,8 +201,10 @@ namespace Voltaic.Mcp
                 Id = Guid.NewGuid().ToString()
             };
 
+            DateTime sentUtc = DateTime.UtcNow;
             string requestJson = JsonSerializer.Serialize(request);
             LogMessage($"Sending request: {requestJson}");
+            RaiseRequestSent(new RequestSentEventArgs(request));
 
             using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
@@ -211,6 +235,13 @@ namespace Voltaic.Mcp
                 LogMessage($"Received response: {responseJson}");
 
                 JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
+
+                if (response != null)
+                {
+                    RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
+                }
+
+                response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
                 if (response == null)
                 {
                     throw new Exception("Invalid response from server");
@@ -240,9 +271,13 @@ namespace Voltaic.Mcp
         /// </summary>
         public void Disconnect()
         {
-            StopSse();
-            SessionId = null;
-            LogMessage("Disconnected");
+            if (!String.IsNullOrEmpty(SessionId))
+            {
+                StopSse();
+                RaiseDisconnected("Client disconnected");
+                SessionId = null;
+                LogMessage("Disconnected");
+            }
         }
 
         /// <summary>
@@ -358,6 +393,80 @@ namespace Voltaic.Mcp
                     catch
                     {
                         // Swallow exceptions in log handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseConnected()
+        {
+            if (Connected != null && _BaseUrl != null)
+            {
+                ClientConnectedEventArgs eventArgs = new ClientConnectedEventArgs(_BaseUrl, ClientConnectionTypeEnum.Http);
+                foreach (Delegate handler in Connected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnectedEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseDisconnected(string reason)
+        {
+            if (Disconnected != null && _BaseUrl != null)
+            {
+                ClientDisconnectedEventArgs eventArgs = new ClientDisconnectedEventArgs(_ConnectedUtc, _BaseUrl, ClientConnectionTypeEnum.Http, reason);
+                foreach (Delegate handler in Disconnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientDisconnectedEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseRequestSent(RequestSentEventArgs eventArgs)
+        {
+            if (RequestSent != null)
+            {
+                foreach (Delegate handler in RequestSent.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<RequestSentEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseResponseReceived(ResponseReceivedEventArgs eventArgs)
+        {
+            if (ResponseReceived != null)
+            {
+                foreach (Delegate handler in ResponseReceived.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ResponseReceivedEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
                     }
                 }
             }

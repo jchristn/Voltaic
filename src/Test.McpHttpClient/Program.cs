@@ -1,9 +1,9 @@
-namespace McpHttpClientProgram
+namespace Test.McpHttpClient
 {
     using System;
     using System.Text.Json;
     using System.Threading.Tasks;
-    using Voltaic.Mcp;
+    using Voltaic;
 
     class Program
     {
@@ -28,6 +28,10 @@ namespace McpHttpClientProgram
 
             // Subscribe to logs
             client.Log += (sender, message) => Console.WriteLine(message);
+
+            // Subscribe to events
+            client.Connected += (sender, message) => Console.WriteLine("Connected to server at " + message.ConnectedUtc);
+            client.Disconnected += (sender, message) => Console.WriteLine("Disconnected from server at " + message.DisconnectedUtc);
 
             // Subscribe to notifications from server
             client.NotificationReceived += (sender, notification) =>

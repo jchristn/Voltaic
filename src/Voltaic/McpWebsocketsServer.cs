@@ -1,4 +1,4 @@
-namespace Voltaic.Mcp
+namespace Voltaic
 {
     using System;
     using System.Collections.Concurrent;
@@ -10,7 +10,7 @@ namespace Voltaic.Mcp
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic.JsonRpc;
+    using Voltaic;
 
     /// <summary>
     /// Provides a WebSocket-based MCP (Model Context Protocol) server implementation.
@@ -47,6 +47,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets the maximum number of notifications that can be queued per client connection.
+        /// When the limit is reached, oldest notifications are discarded.
+        /// Default is 100 notifications. Minimum is 1.
+        /// This value is applied to new client connections when they are established.
+        /// </summary>
+        public int MaxQueueSize
+        {
+            get => _MaxQueueSize;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "Max queue size must be at least 1");
+                _MaxQueueSize = value;
+            }
+        }
+
+        /// <summary>
         /// Gets the cancellation token source for the server.
         /// </summary>
         public CancellationTokenSource? TokenSource
@@ -59,16 +75,37 @@ namespace Voltaic.Mcp
         /// </summary>
         public event EventHandler<string>? Log;
 
+        /// <summary>
+        /// Occurs when a client connects to the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientConnected;
+
+        /// <summary>
+        /// Occurs when a client disconnects from the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientDisconnected;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC request is received from a client.
+        /// </summary>
+        public event EventHandler<JsonRpcRequestEventArgs>? RequestReceived;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC response is sent to a client.
+        /// </summary>
+        public event EventHandler<JsonRpcResponseEventArgs>? ResponseSent;
+
         private readonly string _Hostname;
         private readonly int _Port;
         private readonly string _Path;
         private HttpListener? _Listener;
         private CancellationTokenSource? _TokenSource;
-        private readonly ConcurrentDictionary<string, WebSocketConnection> _Clients;
+        private readonly ConcurrentDictionary<string, ClientConnection> _Clients;
         private readonly Dictionary<string, Func<JsonElement?, object>> _Methods;
         private int _ClientIdCounter = 0;
         private int _MaxMessageSize = 1048576; // 1 MB
         private int _KeepAliveIntervalSeconds = 30;
+        private int _MaxQueueSize = 100;
         private volatile bool _IsStopping = false;
         private string _ProtocolVersion = "2025-03-26";
         private string _ServerName = "Voltaic.Mcp.WebSocketsServer";
@@ -120,7 +157,7 @@ namespace Voltaic.Mcp
             _Hostname = hostname;
             _Port = port;
             _Path = String.IsNullOrEmpty(path) ? "/mcp" : path;
-            _Clients = new ConcurrentDictionary<string, WebSocketConnection>();
+            _Clients = new ConcurrentDictionary<string, ClientConnection>();
             _Methods = new Dictionary<string, Func<JsonElement?, object>>();
 
             if (includeDefaultMethods) RegisterBuiltInMethods();
@@ -192,7 +229,7 @@ namespace Voltaic.Mcp
             string json = JsonSerializer.Serialize(notification);
 
             List<Task> tasks = new List<Task>();
-            foreach (WebSocketConnection client in _Clients.Values)
+            foreach (ClientConnection client in _Clients.Values)
             {
                 tasks.Add(SendToClientAsync(client, json, token));
             }
@@ -207,7 +244,7 @@ namespace Voltaic.Mcp
         /// <returns>True if the client was found and kicked; otherwise, false.</returns>
         public bool KickClient(string clientId)
         {
-            if (_Clients.TryRemove(clientId, out WebSocketConnection? client))
+            if (_Clients.TryRemove(clientId, out ClientConnection? client))
             {
                 client.Dispose();
                 LogMessage($"Kicked client: {clientId}");
@@ -235,7 +272,7 @@ namespace Voltaic.Mcp
 
             _TokenSource?.Cancel();
 
-            foreach (WebSocketConnection client in _Clients.Values)
+            foreach (ClientConnection client in _Clients.Values)
             {
                 client.Dispose();
             }
@@ -389,7 +426,7 @@ namespace Voltaic.Mcp
         private async Task HandleClientAsync(HttpListenerContext context, CancellationToken token)
         {
             string clientId = $"client_{Interlocked.Increment(ref _ClientIdCounter)}";
-            WebSocketConnection? client = null;
+            ClientConnection? client = null;
 
             try
             {
@@ -404,10 +441,12 @@ namespace Voltaic.Mcp
                 HttpListenerWebSocketContext webSocketContext = await context.AcceptWebSocketAsync(null).ConfigureAwait(false);
                 WebSocket webSocket = webSocketContext.WebSocket;
 
-                client = new WebSocketConnection(clientId, webSocket);
+                client = new ClientConnection(clientId, webSocket);
+                client.MaxQueueSize = _MaxQueueSize;
                 _Clients.TryAdd(clientId, client);
 
                 LogMessage($"Client connected: {clientId} from {context.Request.RemoteEndPoint}");
+                RaiseClientConnected(client);
 
                 await ReceiveLoopAsync(client, token).ConfigureAwait(false);
             }
@@ -419,45 +458,49 @@ namespace Voltaic.Mcp
             {
                 if (client != null)
                 {
-                    _Clients.TryRemove(clientId, out WebSocketConnection? _);
+                    _Clients.TryRemove(clientId, out ClientConnection? _);
+                    RaiseClientDisconnected(client);
                     client.Dispose();
                     LogMessage($"Client disconnected: {clientId}");
                 }
             }
         }
-
-        private async Task ReceiveLoopAsync(WebSocketConnection client, CancellationToken token)
+        
+        private async Task ReceiveLoopAsync(ClientConnection client, CancellationToken token)
         {
             byte[] buffer = new byte[_MaxMessageSize];
             StringBuilder messageBuilder = new StringBuilder();
 
             try
             {
-                while (client.WebSocket.State == WebSocketState.Open && !token.IsCancellationRequested)
+                if (client.WebSocket != null)
                 {
-                    WebSocketReceiveResult result = await client.WebSocket.ReceiveAsync(
-                        new ArraySegment<byte>(buffer), token).ConfigureAwait(false);
-
-                    if (result.MessageType == WebSocketMessageType.Close)
+                    while (client.WebSocket.State == WebSocketState.Open && !token.IsCancellationRequested)
                     {
-                        await client.WebSocket.CloseAsync(
-                            WebSocketCloseStatus.NormalClosure,
-                            "Closing",
-                            token).ConfigureAwait(false);
-                        break;
-                    }
+                        WebSocketReceiveResult result = await client.WebSocket.ReceiveAsync(
+                            new ArraySegment<byte>(buffer), token).ConfigureAwait(false);
 
-                    if (result.MessageType == WebSocketMessageType.Text)
-                    {
-                        string chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        messageBuilder.Append(chunk);
-
-                        if (result.EndOfMessage)
+                        if (result.MessageType == WebSocketMessageType.Close)
                         {
-                            string message = messageBuilder.ToString();
-                            messageBuilder.Clear();
+                            await client.WebSocket.CloseAsync(
+                                WebSocketCloseStatus.NormalClosure,
+                                "Closing",
+                                token).ConfigureAwait(false);
+                            break;
+                        }
 
-                            await ProcessRequestAsync(client, message, token).ConfigureAwait(false);
+                        if (result.MessageType == WebSocketMessageType.Text)
+                        {
+                            string chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                            messageBuilder.Append(chunk);
+
+                            if (result.EndOfMessage)
+                            {
+                                string message = messageBuilder.ToString();
+                                messageBuilder.Clear();
+
+                                await ProcessRequestAsync(client, message, token).ConfigureAwait(false);
+                            }
                         }
                     }
                 }
@@ -466,27 +509,33 @@ namespace Voltaic.Mcp
             {
                 if (!token.IsCancellationRequested)
                 {
-                    LogMessage($"Receive error for {client.Id}: {ex.Message}");
+                    LogMessage($"Receive error for {client.SessionId}: {ex.Message}");
                 }
             }
         }
 
-        private async Task ProcessRequestAsync(WebSocketConnection client, string requestString, CancellationToken token = default)
+        private async Task ProcessRequestAsync(ClientConnection client, string requestString, CancellationToken token = default)
         {
+            ServerPendingRequest? pendingRequest = null;
+
             try
             {
-                LogMessage($"Received from {client.Id}: {requestString}");
+                LogMessage($"Received from {client.SessionId}: {requestString}");
 
                 JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString);
                 if (request == null)
                 {
-                    await SendResponseAsync(client, new JsonRpcResponse
+                    JsonRpcResponse invalidResponse = new JsonRpcResponse
                     {
                         Error = JsonRpcError.InvalidRequest(),
                         Id = null
-                    }, token).ConfigureAwait(false);
+                    };
+                    await SendResponseAsync(client, null, invalidResponse, token).ConfigureAwait(false);
                     return;
                 }
+
+                pendingRequest = new ServerPendingRequest(request.Id, client, request);
+                RaiseRequestReceived(pendingRequest);
 
                 JsonRpcResponse response;
 
@@ -533,39 +582,45 @@ namespace Voltaic.Mcp
                 // Only send response if request has an id (not a notification)
                 if (request.Id != null)
                 {
-                    await SendResponseAsync(client, response, token).ConfigureAwait(false);
+                    await SendResponseAsync(client, pendingRequest, response, token).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
                 LogMessage($"Error processing request: {ex.Message}");
-                await SendResponseAsync(client, new JsonRpcResponse
+                JsonRpcResponse errorResponse = new JsonRpcResponse
                 {
                     Error = JsonRpcError.ParseError(),
                     Id = null
-                }, token).ConfigureAwait(false);
+                };
+                await SendResponseAsync(client, null, errorResponse, token).ConfigureAwait(false);
             }
         }
 
-        private async Task SendResponseAsync(WebSocketConnection client, JsonRpcResponse response, CancellationToken token = default)
+        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default)
         {
             try
             {
                 string json = JsonSerializer.Serialize(response);
                 await SendToClientAsync(client, json, token).ConfigureAwait(false);
-                LogMessage($"Sent to {client.Id}: {json}");
+                LogMessage($"Sent to {client.SessionId}: {json}");
+
+                if (pendingRequest != null)
+                {
+                    RaiseResponseSent(pendingRequest, response);
+                }
             }
             catch (Exception ex)
             {
-                LogMessage($"Error sending response to {client.Id}: {ex.Message}");
+                LogMessage($"Error sending response to {client.SessionId}: {ex.Message}");
             }
         }
 
-        private async Task SendToClientAsync(WebSocketConnection client, string message, CancellationToken token = default)
+        private async Task SendToClientAsync(ClientConnection client, string message, CancellationToken token = default)
         {
             try
             {
-                if (client.WebSocket.State == WebSocketState.Open)
+                if (client.WebSocket != null && client.WebSocket.State == WebSocketState.Open)
                 {
                     byte[] buffer = Encoding.UTF8.GetBytes(message);
                     await client.WebSocket.SendAsync(
@@ -578,6 +633,84 @@ namespace Voltaic.Mcp
             catch
             {
                 // Client might be disconnected
+            }
+        }
+
+        private void RaiseClientConnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientConnected != null)
+            {
+                foreach (Delegate handler in ClientConnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseClientDisconnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientDisconnected != null)
+            {
+                foreach (Delegate handler in ClientDisconnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseRequestReceived(ServerPendingRequest pendingRequest)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (RequestReceived != null)
+            {
+                JsonRpcRequestEventArgs eventArgs = new JsonRpcRequestEventArgs(pendingRequest);
+                foreach (Delegate handler in RequestReceived.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcRequestEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseResponseSent(ServerPendingRequest pendingRequest, JsonRpcResponse response)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ResponseSent != null)
+            {
+                JsonRpcResponseEventArgs eventArgs = new JsonRpcResponseEventArgs(pendingRequest, response);
+                foreach (Delegate handler in ResponseSent.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcResponseEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
             }
         }
 

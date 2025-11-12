@@ -1,18 +1,17 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using Voltaic.JsonRpc;
-using Voltaic.Mcp;
-
 namespace Test.Automated
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
+    using System.IO;
+    using System.Linq;
+    using System.Net;
+    using System.Net.Sockets;
+    using System.Text;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using Voltaic;
+
     class Program
     {
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
@@ -151,6 +150,7 @@ namespace Test.Automated
                 await RunParameterEdgeCaseTests();
                 await RunConcurrencyTests();
                 await RunStressTests();
+                await RunEventHandlerTests();
 
                 Console.WriteLine();
             }
@@ -1908,6 +1908,242 @@ namespace Test.Automated
 
                 Assert(exceptionCaught, "Should handle server stop during call");
             });
+        }
+
+        static async Task RunEventHandlerTests()
+        {
+            Console.WriteLine("--- JSON-RPC: Event Handler Tests ---");
+
+            await Test("JsonRpcServer - ClientConnected event", async () =>
+            {
+                bool eventFired = false;
+                ClientConnection? connectedClient = null;
+
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9001);
+                server.ClientConnected += (sender, client) =>
+                {
+                    eventFired = true;
+                    connectedClient = client;
+                };
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("localhost", 9001);
+                await Task.Delay(200); // Give event time to fire
+
+                Assert(eventFired, "ClientConnected event should fire");
+                Assert(connectedClient != null, "ClientConnection should be provided");
+                Assert(connectedClient.SessionId.StartsWith("client_"), "Client should have valid session ID");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("JsonRpcServer - ClientDisconnected event", async () =>
+            {
+                bool eventFired = false;
+                ClientConnection? disconnectedClient = null;
+
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9002);
+                server.ClientDisconnected += (sender, client) =>
+                {
+                    eventFired = true;
+                    disconnectedClient = client;
+                };
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("localhost", 9002);
+                await Task.Delay(100);
+                client.Disconnect();
+                await Task.Delay(200); // Give event time to fire
+
+                Assert(eventFired, "ClientDisconnected event should fire");
+                Assert(disconnectedClient != null, "ClientConnection should be provided");
+
+                server.Stop();
+            });
+
+            await Test("JsonRpcServer - RequestReceived event", async () =>
+            {
+                bool eventFired = false;
+                JsonRpcRequestEventArgs? receivedArgs = null;
+
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9003);
+                server.RequestReceived += (sender, e) =>
+                {
+                    eventFired = true;
+                    receivedArgs = e;
+                };
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("localhost", 9003);
+                string result = await client.CallAsync<string>("echo", new { message = "test" });
+                await Task.Delay(100); // Give event time to fire
+
+                Assert(eventFired, "RequestReceived event should fire");
+                Assert(receivedArgs != null, "Event args should be provided");
+                Assert(receivedArgs.Method == "echo", $"Method should be 'echo', got '{receivedArgs?.Method}'");
+                Assert(receivedArgs.RequestId != null, "Request should have an ID");
+                Assert(!receivedArgs.IsNotification, "Request should not be a notification");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("JsonRpcServer - ResponseSent event", async () =>
+            {
+                bool eventFired = false;
+                JsonRpcResponseEventArgs? sentArgs = null;
+
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9004);
+                server.ResponseSent += (sender, e) =>
+                {
+                    eventFired = true;
+                    sentArgs = e;
+                };
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("localhost", 9004);
+                string result = await client.CallAsync<string>("echo", new { message = "test" });
+                await Task.Delay(100); // Give event time to fire
+
+                Assert(eventFired, "ResponseSent event should fire");
+                Assert(sentArgs != null, "Event args should be provided");
+                Assert(sentArgs.Method == "echo", $"Method should be 'echo', got '{sentArgs?.Method}'");
+                Assert(sentArgs.IsSuccess, "Response should be successful");
+                Assert(!sentArgs.IsError, "Response should not be an error");
+                Assert(sentArgs.Duration.TotalMilliseconds >= 0, "Duration should be non-negative");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("JsonRpcServer - ResponseSent event on error", async () =>
+            {
+                bool eventFired = false;
+                JsonRpcResponseEventArgs? sentArgs = null;
+
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9005);
+                server.ResponseSent += (sender, e) =>
+                {
+                    eventFired = true;
+                    sentArgs = e;
+                };
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("localhost", 9005);
+
+                try
+                {
+                    await client.CallAsync("nonExistentMethod");
+                }
+                catch { }
+
+                await Task.Delay(100);
+
+                Assert(eventFired, "ResponseSent event should fire for errors");
+                Assert(sentArgs != null, "Event args should be provided");
+                Assert(sentArgs.IsError, "Response should be an error");
+                Assert(!sentArgs.IsSuccess, "Response should not be successful");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("McpWebsocketsServer - All events", async () =>
+            {
+                bool connectFired = false;
+                bool disconnectFired = false;
+                bool requestFired = false;
+                bool responseFired = false;
+
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9006);
+                server.ClientConnected += (sender, client) => connectFired = true;
+                server.ClientDisconnected += (sender, client) => disconnectFired = true;
+                server.RequestReceived += (sender, e) => requestFired = true;
+                server.ResponseSent += (sender, e) => responseFired = true;
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9006/mcp");
+                await client.CallAsync<string>("ping");
+                await Task.Delay(200);
+                client.Disconnect();
+                await Task.Delay(200);
+
+                Assert(connectFired, "ClientConnected should fire");
+                Assert(requestFired, "RequestReceived should fire");
+                Assert(responseFired, "ResponseSent should fire");
+                Assert(disconnectFired, "ClientDisconnected should fire");
+
+                server.Stop();
+            });
+
+            await Test("McpHttpServer - All events", async () =>
+            {
+                bool connectFired = false;
+                bool requestFired = false;
+                bool responseFired = false;
+
+                using McpHttpServer server = new McpHttpServer("localhost", 9007);
+                server.ClientConnected += (sender, client) => connectFired = true;
+                server.RequestReceived += (sender, e) => requestFired = true;
+                server.ResponseSent += (sender, e) => responseFired = true;
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9007");
+                await client.CallAsync<string>("ping");
+                await Task.Delay(200);
+
+                Assert(connectFired, "ClientConnected should fire");
+                Assert(requestFired, "RequestReceived should fire");
+                Assert(responseFired, "ResponseSent should fire");
+
+                server.Stop();
+            });
+
+            await Test("Event handlers handle exceptions", async () =>
+            {
+                bool secondHandlerFired = false;
+
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9008);
+                server.RequestReceived += (sender, e) => throw new Exception("Deliberate exception");
+                server.RequestReceived += (sender, e) => secondHandlerFired = true;
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("localhost", 9008);
+                string result = await client.CallAsync<string>("echo", new { message = "test" });
+
+                Assert(secondHandlerFired, "Second handler should fire despite first handler exception");
+                Assert(result == "test", "Request should still be processed");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            Console.WriteLine();
         }
 
         static async Task Test(string testName, Func<Task> testAction)

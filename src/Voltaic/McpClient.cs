@@ -1,4 +1,4 @@
-namespace Voltaic.Mcp
+namespace Voltaic
 {
     using System;
     using System.Collections.Concurrent;
@@ -7,7 +7,6 @@ namespace Voltaic.Mcp
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic.JsonRpc;
 
     /// <summary>
     /// MCP client using stdio transport for subprocess-based MCP servers.
@@ -28,6 +27,26 @@ namespace Voltaic.Mcp
         public event EventHandler<JsonRpcRequest>? NotificationReceived;
 
         /// <summary>
+        /// Occurs when the client successfully connects to a server.
+        /// </summary>
+        public event EventHandler<ClientConnectedEventArgs>? Connected;
+
+        /// <summary>
+        /// Occurs when the client disconnects from the server.
+        /// </summary>
+        public event EventHandler<ClientDisconnectedEventArgs>? Disconnected;
+
+        /// <summary>
+        /// Occurs when a request is sent to the server.
+        /// </summary>
+        public event EventHandler<RequestSentEventArgs>? RequestSent;
+
+        /// <summary>
+        /// Occurs when a response is received from the server.
+        /// </summary>
+        public event EventHandler<ResponseReceivedEventArgs>? ResponseReceived;
+
+        /// <summary>
         /// Gets a value indicating whether the client is currently connected to a server.
         /// </summary>
         public bool IsConnected => _IsConnected && _ServerProcess != null && !_ServerProcess.HasExited;
@@ -41,14 +60,16 @@ namespace Voltaic.Mcp
         private Task? _StderrTask;
         private bool _IsConnected = false;
         private int _RequestIdCounter = 0;
-        private readonly ConcurrentDictionary<object, TaskCompletionSource<JsonRpcResponse>> _PendingRequests;
+        private readonly ConcurrentDictionary<object, ClientPendingRequest> _PendingRequests;
+        private string? _Endpoint;
+        private DateTime _ConnectedUtc;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpClient"/> class.
         /// </summary>
         public McpClient()
         {
-            _PendingRequests = new ConcurrentDictionary<object, TaskCompletionSource<JsonRpcResponse>>();
+            _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
         }
 
         /// <summary>
@@ -89,7 +110,10 @@ namespace Voltaic.Mcp
                 _StderrTask = Task.Run(() => StderrLoop(_CancellationTokenSource.Token));
 
                 _IsConnected = true;
+                _Endpoint = $"{executable} {string.Join(" ", args)}";
+                _ConnectedUtc = DateTime.UtcNow;
                 LogMessage($"Launched MCP server: {executable} {string.Join(" ", args)}");
+                RaiseConnected();
 
                 return true;
             }
@@ -124,11 +148,13 @@ namespace Voltaic.Mcp
             };
 
             TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>();
-            _PendingRequests[id] = tcs;
+            ClientPendingRequest pendingRequest = new ClientPendingRequest(id, request, tcs);
+            _PendingRequests[id] = pendingRequest;
 
             try
             {
                 await SendRequestAsync(request, token).ConfigureAwait(false);
+                RaiseRequestSent(pendingRequest);
 
                 using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
@@ -156,7 +182,7 @@ namespace Voltaic.Mcp
             }
             finally
             {
-                _PendingRequests.TryRemove(id, out TaskCompletionSource<JsonRpcResponse>? _);
+                _PendingRequests.TryRemove(id, out ClientPendingRequest? _);
             }
         }
 
@@ -181,6 +207,7 @@ namespace Voltaic.Mcp
             };
 
             await SendRequestAsync(notification, token).ConfigureAwait(false);
+            RaiseRequestSent(new RequestSentEventArgs(notification));
         }
 
         /// <summary>
@@ -194,9 +221,9 @@ namespace Voltaic.Mcp
                 _CancellationTokenSource?.Cancel();
 
                 // Clear pending requests
-                foreach (TaskCompletionSource<JsonRpcResponse> pending in _PendingRequests.Values)
+                foreach (ClientPendingRequest pending in _PendingRequests.Values)
                 {
-                    pending.TrySetCanceled();
+                    pending.TaskCompletionSource.TrySetCanceled();
                 }
                 _PendingRequests.Clear();
 
@@ -214,6 +241,7 @@ namespace Voltaic.Mcp
                     }
                 }
 
+                RaiseDisconnected("MCP server shut down");
                 LogMessage("MCP server shut down");
             }
         }
@@ -305,9 +333,10 @@ namespace Voltaic.Mcp
                         lookupKey = jsonElement.GetInt32();
                     }
 
-                    if (_PendingRequests.TryRemove(lookupKey, out TaskCompletionSource<JsonRpcResponse>? tcs))
+                    if (_PendingRequests.TryRemove(lookupKey, out ClientPendingRequest? pendingRequest))
                     {
-                        tcs.SetResult(response);
+                        RaiseResponseReceived(pendingRequest, response);
+                        pendingRequest.TaskCompletionSource.SetResult(response);
                     }
                 }
                 else
@@ -355,6 +384,100 @@ namespace Voltaic.Mcp
                     catch
                     {
                         // Swallow exceptions in log handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseConnected()
+        {
+            if (Connected != null && _Endpoint != null)
+            {
+                ClientConnectedEventArgs eventArgs = new ClientConnectedEventArgs(_Endpoint, ClientConnectionTypeEnum.Stdio);
+                foreach (Delegate handler in Connected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnectedEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseDisconnected(string reason)
+        {
+            if (Disconnected != null && _Endpoint != null)
+            {
+                ClientDisconnectedEventArgs eventArgs = new ClientDisconnectedEventArgs(_ConnectedUtc, _Endpoint, ClientConnectionTypeEnum.Stdio, reason);
+                foreach (Delegate handler in Disconnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientDisconnectedEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseRequestSent(ClientPendingRequest pendingRequest)
+        {
+            if (RequestSent != null)
+            {
+                RequestSentEventArgs eventArgs = new RequestSentEventArgs(pendingRequest);
+                foreach (Delegate handler in RequestSent.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<RequestSentEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseRequestSent(RequestSentEventArgs eventArgs)
+        {
+            if (RequestSent != null)
+            {
+                foreach (Delegate handler in RequestSent.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<RequestSentEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseResponseReceived(ClientPendingRequest pendingRequest, JsonRpcResponse response)
+        {
+            if (ResponseReceived != null)
+            {
+                ResponseReceivedEventArgs eventArgs = new ResponseReceivedEventArgs(pendingRequest, response);
+                foreach (Delegate handler in ResponseReceived.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ResponseReceivedEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
                     }
                 }
             }

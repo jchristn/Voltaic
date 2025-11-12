@@ -1,10 +1,10 @@
-namespace McpHttpServerProgram
+namespace Test.McpHttpServer
 {
     using System;
     using System.Collections.Generic;
     using System.Text.Json;
     using System.Threading.Tasks;
-    using Voltaic.Mcp;
+    using Voltaic;
 
     class Program
     {
@@ -32,6 +32,29 @@ namespace McpHttpServerProgram
 
             // Subscribe to log events
             server.Log += (sender, message) => Console.WriteLine(message);
+
+            // Subscribe to connection events
+            server.ClientConnected += (sender, client) =>
+            {
+                Console.WriteLine($"[EVENT] Client connected: {client.SessionId}");
+            };
+
+            server.ClientDisconnected += (sender, client) =>
+            {
+                Console.WriteLine($"[EVENT] Client disconnected: {client.SessionId}");
+            };
+
+            // Subscribe to request/response events
+            server.RequestReceived += (sender, e) =>
+            {
+                Console.WriteLine($"[EVENT] Request received from {e.Client.SessionId}: {e.Method} (ID: {e.RequestId})");
+            };
+
+            server.ResponseSent += (sender, e) =>
+            {
+                string status = e.IsSuccess ? "SUCCESS" : "ERROR";
+                Console.WriteLine($"[EVENT] Response sent to {e.Client.SessionId}: {status} for {e.Method} (Duration: {e.Duration.TotalMilliseconds:F2}ms)");
+            };
 
             // Set server info for MCP protocol
             server.ServerName = "MCP Test HTTP Server";
