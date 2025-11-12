@@ -25,48 +25,170 @@ namespace Test.Automated
         private static int mcpTestsFailed = 0;
         private static bool isJsonRpcTest = true;
         private static readonly object consoleLock = new object();
+        private static string? mcpServerProjectPath = null;
+
+        static string FindMcpServerProjectPath()
+        {
+            // Try to find the Test.McpServer project relative to the current directory
+            // First, try relative to current working directory
+            string currentDir = Directory.GetCurrentDirectory();
+            string candidate = Path.Combine(currentDir, "Test.McpServer", "Test.McpServer.csproj");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            // Try from the executing assembly's directory
+            string assemblyDir = AppContext.BaseDirectory;
+            string srcDir = assemblyDir;
+
+            // Walk up the directory tree to find 'src' directory
+            while (srcDir != null && !srcDir.EndsWith("src", StringComparison.OrdinalIgnoreCase))
+            {
+                DirectoryInfo parent = Directory.GetParent(srcDir)!;
+                if (parent == null) break;
+                srcDir = parent.FullName;
+
+                // Check if we're at the right level
+                if (Path.GetFileName(srcDir).Equals("src", StringComparison.OrdinalIgnoreCase))
+                {
+                    candidate = Path.Combine(srcDir, "Test.McpServer", "Test.McpServer.csproj");
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                    break;
+                }
+            }
+
+            // Fallback: assume we're in src directory already
+            return Path.Combine("Test.McpServer", "Test.McpServer.csproj");
+        }
 
         static async Task Main(string[] args)
         {
+            // Initialize MCP server project path
+            mcpServerProjectPath = FindMcpServerProjectPath();
+
+            // Parse command line arguments
+            bool testStdio = false;
+            bool testTcp = false;
+            bool testWebsockets = false;
+            bool testHttp = false;
+            bool testAll = args.Length == 0;
+
+            foreach (string arg in args)
+            {
+                string argLower = arg.ToLower();
+                if (argLower == "-stdio")
+                {
+                    testStdio = true;
+                }
+                else if (argLower == "-tcp")
+                {
+                    testTcp = true;
+                }
+                else if (argLower == "-ws" || argLower == "-websockets")
+                {
+                    testWebsockets = true;
+                }
+                else if (argLower == "-http")
+                {
+                    testHttp = true;
+                }
+                else
+                {
+                    Console.WriteLine($"Unknown argument: {arg}");
+                    Console.WriteLine("Usage: Test.Automated [-tcp] [-http] [-ws] [-stdio]");
+                    Console.WriteLine("  -tcp         Test only TCP transport");
+                    Console.WriteLine("  -http        Test only HTTP transport");
+                    Console.WriteLine("  -ws          Test only WebSocket transport");
+                    Console.WriteLine("  -stdio       Test only stdio transport");
+                    Console.WriteLine("  (no args)    Test all transports");
+                    Environment.Exit(1);
+                }
+            }
+
             Console.WriteLine("=== Voltaic Comprehensive Test Suite ===");
             Console.WriteLine();
 
-            // JSON-RPC TESTS
-            Console.WriteLine("╔═══════════════════════════════════════════════════════════════╗");
-            Console.WriteLine("║                    JSON-RPC 2.0 TESTS                         ║");
-            Console.WriteLine("╚═══════════════════════════════════════════════════════════════╝");
+            if (testAll)
+            {
+                Console.WriteLine("Testing: All transports");
+            }
+            else
+            {
+                List<string> transports = new List<string>();
+                if (testStdio) transports.Add("stdio");
+                if (testTcp) transports.Add("TCP");
+                if (testWebsockets) transports.Add("WebSockets");
+                if (testHttp) transports.Add("HTTP");
+                Console.WriteLine($"Testing: {String.Join(", ", transports)}");
+            }
             Console.WriteLine();
 
-            await RunBasicMessageTests();
-            await RunPartialReadTests();
-            await RunMultipleMessagesTest();
-            await RunLargeMessageTest();
-            await RunMalformedHeaderTests();
-            await RunConnectionDropTests();
-            await RunHighLoadTest();
-            await RunClientServerIntegrationTests();
-            await RunJsonRpcClientFailureTests();
-            await RunJsonRpcServerFailureTests();
-            await RunJsonRpcClientEdgeCaseTests();
-            await RunJsonRpcServerProtocolTests();
-            await RunMessageFramingEdgeCaseTests();
-            await RunParameterEdgeCaseTests();
-            await RunConcurrencyTests();
-            await RunEventHandlerTests();
-            await RunStressTests();
+            // JSON-RPC TESTS - only run when testing all
+            if (testAll)
+            {
+                Console.WriteLine("╔═══════════════════════════════════════════════════════════════╗");
+                Console.WriteLine("║                    JSON-RPC 2.0 TESTS                         ║");
+                Console.WriteLine("╚═══════════════════════════════════════════════════════════════╝");
+                Console.WriteLine();
+
+                await RunBasicMessageTests();
+                await RunPartialReadTests();
+                await RunMultipleMessagesTest();
+                await RunLargeMessageTest();
+                await RunMalformedHeaderTests();
+                await RunConnectionDropTests();
+                await RunHighLoadTest();
+                await RunClientServerIntegrationTests();
+                await RunJsonRpcClientFailureTests();
+                await RunJsonRpcServerFailureTests();
+                await RunJsonRpcClientEdgeCaseTests();
+                await RunJsonRpcServerProtocolTests();
+                await RunMessageFramingEdgeCaseTests();
+                await RunParameterEdgeCaseTests();
+                await RunConcurrencyTests();
+                await RunEventHandlerTests();
+                await RunStressTests();
+
+                Console.WriteLine();
+            }
 
             // MCP TESTS
-            Console.WriteLine();
             Console.WriteLine("╔═══════════════════════════════════════════════════════════════╗");
             Console.WriteLine("║              MCP (Model Context Protocol) TESTS               ║");
             Console.WriteLine("╚═══════════════════════════════════════════════════════════════╝");
             Console.WriteLine();
 
             isJsonRpcTest = false;
-            await RunMcpClientTests();
-            await RunMcpServerTests();
-            await RunMcpEdgeCaseTests();
-            await RunMcpTcpTests();
+
+            // Stdio transport tests
+            if (testAll || testStdio)
+            {
+                await RunMcpClientTests();
+                await RunMcpServerTests();
+                await RunMcpEdgeCaseTests();
+            }
+
+            // TCP transport tests
+            if (testAll || testTcp)
+            {
+                await RunMcpTcpTests();
+            }
+
+            // WebSocket transport tests
+            if (testAll || testWebsockets)
+            {
+                await RunMcpWebsocketTests();
+            }
+
+            // HTTP transport tests
+            if (testAll || testHttp)
+            {
+                await RunMcpHttpTests();
+            }
 
             // Print summary
             Console.WriteLine();
@@ -664,7 +786,7 @@ namespace Test.Automated
                 // Launch Test.McpServer
                 bool launched = await client.LaunchServerAsync(
                     "dotnet",
-                    new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" }
+                    new[] { "run", "--project", mcpServerProjectPath! }
                 );
 
                 Assert(launched, "Should successfully launch MCP server");
@@ -696,7 +818,7 @@ namespace Test.Automated
             await Test("MCP call with parameters", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                 string result = await client.CallAsync<string>(
                     "echo",
@@ -712,7 +834,7 @@ namespace Test.Automated
             await Test("MCP notification (no response)", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                 // Send notification - should not throw
                 await client.NotifyAsync("ping");
@@ -735,7 +857,7 @@ namespace Test.Automated
             await Test("MCP server handles basic request", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                 string result = await client.CallAsync<string>("ping");
                 Assert(result == "pong", "Server should respond to ping");
@@ -747,7 +869,7 @@ namespace Test.Automated
             await Test("MCP server handles unknown method", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                 bool errorReceived = false;
                 try
@@ -768,7 +890,7 @@ namespace Test.Automated
             await Test("MCP server handles add method", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                 double result = await client.CallAsync<double>("add", new { a = 5.0, b = 3.0 });
                 Assert(result == 8.0, $"Expected 8.0, got {result}");
@@ -1258,7 +1380,7 @@ namespace Test.Automated
             await Test("MCP sequential calls", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                 for (int i = 0; i < 5; i++)
                 {
@@ -1273,7 +1395,7 @@ namespace Test.Automated
             await Test("MCP server multiply method", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                 double result = await client.CallAsync<double>("multiply", new { x = 7.0, y = 6.0 });
                 Assert(result == 42.0, $"Expected 42.0, got {result}");
@@ -1287,7 +1409,7 @@ namespace Test.Automated
                 for (int i = 0; i < 3; i++)
                 {
                     McpClient client = new McpClient();
-                    await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "src/Test.McpServer/Test.McpServer.csproj" });
+                    await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
 
                     string result = await client.CallAsync<string>("ping");
                     Assert(result == "pong", $"Server {i} should respond");
@@ -1858,6 +1980,552 @@ namespace Test.Automated
                 index += pattern.Length;
             }
             return count;
+        }
+
+        static async Task RunMcpWebsocketTests()
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- MCP: WebSocket Transport Tests ---");
+
+            await Test("MCP WebSocket: Basic echo request", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9700);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                bool connected = await client.ConnectAsync("ws://localhost:9700/mcp");
+                Assert(connected, "Client should connect to MCP WebSocket server");
+
+                string result = await client.CallAsync<string>("echo", new { message = "test" });
+                Assert(result == "test", $"Expected 'test', got '{result}'");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Multiple sequential requests", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9701);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9701/mcp");
+
+                for (int i = 0; i < 10; i++)
+                {
+                    string result = await client.CallAsync<string>("echo", new { message = $"msg{i}" });
+                    Assert(result == $"msg{i}", $"Expected 'msg{i}', got '{result}'");
+                }
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Ping method", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9702);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9702/mcp");
+
+                string result = await client.CallAsync<string>("ping");
+                Assert(result == "pong", $"Expected 'pong', got '{result}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Notification (no response)", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9703);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9703/mcp");
+
+                await client.NotifyAsync("echo", new { message = "notification" });
+                await Task.Delay(200);
+
+                Assert(true, "Notification sent without error");
+
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Server broadcast to multiple clients", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9704);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                List<McpWebsocketsClient> clients = new List<McpWebsocketsClient>();
+                List<bool> notificationReceived = new List<bool> { false, false, false };
+
+                for (int i = 0; i < 3; i++)
+                {
+                    McpWebsocketsClient client = new McpWebsocketsClient();
+                    int index = i;
+                    client.NotificationReceived += (sender, notification) =>
+                    {
+                        lock (notificationReceived)
+                        {
+                            notificationReceived[index] = true;
+                        }
+                    };
+                    await client.ConnectAsync("ws://localhost:9704/mcp");
+                    clients.Add(client);
+                }
+
+                await Task.Delay(300);
+
+                await server.BroadcastNotificationAsync("broadcast", new { message = "hello all" });
+                await Task.Delay(500);
+
+                Assert(notificationReceived.All(x => x), "All clients should receive broadcast");
+
+                foreach (McpWebsocketsClient client in clients)
+                {
+                    client.Disconnect();
+                }
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Method not found error", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9705);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9705/mcp");
+
+                bool errorThrown = false;
+                try
+                {
+                    await client.CallAsync<string>("nonExistentMethod");
+                }
+                catch (Exception ex)
+                {
+                    errorThrown = ex.Message.Contains("Method not found");
+                }
+
+                Assert(errorThrown, "Should receive method not found error");
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Call before connect throws", async () =>
+            {
+                McpWebsocketsClient client = new McpWebsocketsClient();
+                bool exceptionThrown = false;
+                try
+                {
+                    await client.CallAsync<string>("ping");
+                }
+                catch (InvalidOperationException)
+                {
+                    exceptionThrown = true;
+                }
+                Assert(exceptionThrown, "Should throw when not connected");
+                client.Dispose();
+            });
+
+            await Test("MCP WebSocket: Disconnect and reconnect", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9706);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9706/mcp");
+                string result1 = await client.CallAsync<string>("ping");
+                Assert(result1 == "pong", "First call should work");
+
+                client.Disconnect();
+                await Task.Delay(200);
+
+                bool reconnected = await client.ConnectAsync("ws://localhost:9706/mcp");
+                Assert(reconnected, "Should be able to reconnect");
+
+                string result2 = await client.CallAsync<string>("ping");
+                Assert(result2 == "pong", "Second call after reconnect should work");
+
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: GetConnectedClients", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9707);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                List<McpWebsocketsClient> clients = new List<McpWebsocketsClient>();
+                for (int i = 0; i < 3; i++)
+                {
+                    McpWebsocketsClient client = new McpWebsocketsClient();
+                    await client.ConnectAsync("ws://localhost:9707/mcp");
+                    clients.Add(client);
+                }
+
+                await Task.Delay(300);
+
+                List<string> connectedClients = server.GetConnectedClients();
+                Assert(connectedClients.Count == 3, $"Expected 3 connected clients, got {connectedClients.Count}");
+
+                foreach (McpWebsocketsClient client in clients)
+                {
+                    client.Disconnect();
+                }
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: KickClient", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9708);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9708/mcp");
+                await Task.Delay(300);
+
+                List<string> clientIds = server.GetConnectedClients();
+                Assert(clientIds.Count == 1, "Should have one connected client");
+
+                bool kicked = server.KickClient(clientIds[0]);
+                Assert(kicked, "Should successfully kick client");
+
+                await Task.Delay(300);
+                Assert(!client.IsConnected, "Client should be disconnected after kick");
+
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Large message handling", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9709);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9709/mcp");
+
+                string largeString = new string('X', 100000);
+                string result = await client.CallAsync<string>("echo", new { message = largeString }, timeoutMs: 10000);
+
+                Assert(result.Length == largeString.Length, $"Expected {largeString.Length} chars, got {result.Length}");
+
+                server.Stop();
+            });
+
+            await Test("MCP WebSocket: Concurrent requests", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer(9710);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9710/mcp");
+
+                List<Task<string>> tasks = new List<Task<string>>();
+                for (int i = 0; i < 50; i++)
+                {
+                    int num = i;
+                    tasks.Add(client.CallAsync<string>("echo", new { message = $"test{num}" }));
+                }
+
+                string[] results = await Task.WhenAll(tasks);
+                for (int i = 0; i < 50; i++)
+                {
+                    Assert(results[i] == $"test{i}", $"Concurrent call {i} failed");
+                }
+
+                server.Stop();
+            });
+        }
+
+        static async Task RunMcpHttpTests()
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- MCP: HTTP Transport Tests ---");
+
+            await Test("MCP HTTP: Basic echo request", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9800);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectAsync("http://localhost:9800");
+                Assert(connected, "Client should connect to MCP HTTP server");
+                Assert(!String.IsNullOrEmpty(client.SessionId), "Session ID should be assigned");
+
+                string result = await client.CallAsync<string>("echo", new { message = "test" });
+                Assert(result == "test", $"Expected 'test', got '{result}'");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Multiple sequential requests", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9801);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9801");
+
+                for (int i = 0; i < 10; i++)
+                {
+                    string result = await client.CallAsync<string>("echo", new { message = $"msg{i}" });
+                    Assert(result == $"msg{i}", $"Expected 'msg{i}', got '{result}'");
+                }
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Ping method", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9802);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9802");
+
+                string result = await client.CallAsync<string>("ping");
+                Assert(result == "pong", $"Expected 'pong', got '{result}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Session persistence across requests", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9803);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9803");
+
+                string sessionId1 = client.SessionId!;
+                await client.CallAsync<string>("ping");
+                string sessionId2 = client.SessionId!;
+
+                Assert(sessionId1 == sessionId2, "Session ID should persist across requests");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: SSE connection and notifications", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9804);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9804");
+
+                bool notificationReceived = false;
+                string notificationMethod = "";
+
+                client.NotificationReceived += (sender, notification) =>
+                {
+                    notificationReceived = true;
+                    notificationMethod = notification.Method;
+                };
+
+                bool sseStarted = await client.StartSseAsync();
+                Assert(sseStarted, "SSE connection should start successfully");
+                await Task.Delay(300);
+
+                // Send notification from server
+                server.SendNotificationToSession(client.SessionId!, "testNotification", new { data = "test" });
+                await Task.Delay(500);
+
+                Assert(notificationReceived, "Should receive notification via SSE");
+                Assert(notificationMethod == "testNotification", $"Expected 'testNotification', got '{notificationMethod}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Broadcast to multiple sessions", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9805);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                List<McpHttpClient> clients = new List<McpHttpClient>();
+                List<bool> notificationsReceived = new List<bool> { false, false, false };
+
+                for (int i = 0; i < 3; i++)
+                {
+                    McpHttpClient client = new McpHttpClient();
+                    await client.ConnectAsync("http://localhost:9805");
+                    int index = i;
+                    client.NotificationReceived += (sender, notification) =>
+                    {
+                        lock (notificationsReceived)
+                        {
+                            notificationsReceived[index] = true;
+                        }
+                    };
+                    await client.StartSseAsync();
+                    clients.Add(client);
+                }
+
+                await Task.Delay(500);
+
+                server.BroadcastNotification("broadcast", new { message = "hello all" });
+                await Task.Delay(700);
+
+                Assert(notificationsReceived.All(x => x), "All clients should receive broadcast via SSE");
+
+                foreach (McpHttpClient client in clients)
+                {
+                    client.Disconnect();
+                }
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Method not found error", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9806);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9806");
+
+                bool errorThrown = false;
+                try
+                {
+                    await client.CallAsync<string>("nonExistentMethod");
+                }
+                catch (Exception ex)
+                {
+                    errorThrown = ex.Message.Contains("Method not found");
+                }
+
+                Assert(errorThrown, "Should receive method not found error");
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Call before connect throws", async () =>
+            {
+                McpHttpClient client = new McpHttpClient();
+                bool exceptionThrown = false;
+                try
+                {
+                    await client.CallAsync<string>("ping");
+                }
+                catch (InvalidOperationException)
+                {
+                    exceptionThrown = true;
+                }
+                catch (ArgumentNullException)
+                {
+                    exceptionThrown = true;
+                }
+                Assert(exceptionThrown, "Should throw when not connected");
+                client.Dispose();
+            });
+
+            await Test("MCP HTTP: GetActiveSessions", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9807);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                List<McpHttpClient> clients = new List<McpHttpClient>();
+                for (int i = 0; i < 3; i++)
+                {
+                    McpHttpClient client = new McpHttpClient();
+                    await client.ConnectAsync("http://localhost:9807");
+                    clients.Add(client);
+                }
+
+                await Task.Delay(300);
+
+                List<string> activeSessions = server.GetActiveSessions();
+                Assert(activeSessions.Count == 3, $"Expected 3 active sessions, got {activeSessions.Count}");
+
+                foreach (McpHttpClient client in clients)
+                {
+                    client.Disconnect();
+                }
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: RemoveSession", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9808);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9808");
+                string sessionId = client.SessionId!;
+
+                await Task.Delay(300);
+
+                List<string> sessions = server.GetActiveSessions();
+                Assert(sessions.Count == 1, "Should have one active session");
+
+                bool removed = server.RemoveSession(sessionId);
+                Assert(removed, "Should successfully remove session");
+
+                sessions = server.GetActiveSessions();
+                Assert(sessions.Count == 0, "Should have no active sessions after removal");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Large message handling", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9809);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9809");
+
+                string largeString = new string('Y', 100000);
+                string result = await client.CallAsync<string>("echo", new { message = largeString }, timeoutMs: 10000);
+
+                Assert(result.Length == largeString.Length, $"Expected {largeString.Length} chars, got {result.Length}");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Concurrent requests from single client", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer(9810);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9810");
+
+                List<Task<string>> tasks = new List<Task<string>>();
+                for (int i = 0; i < 20; i++)
+                {
+                    int num = i;
+                    tasks.Add(client.CallAsync<string>("echo", new { message = $"test{num}" }));
+                }
+
+                string[] results = await Task.WhenAll(tasks);
+                for (int i = 0; i < 20; i++)
+                {
+                    Assert(results[i] == $"test{i}", $"Concurrent call {i} failed");
+                }
+
+                server.Stop();
+            });
         }
 
 #pragma warning restore CS8602 // Dereference of a possibly null reference.
