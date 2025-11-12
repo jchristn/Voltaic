@@ -1,6 +1,7 @@
 ﻿namespace ServerProgram
 {
     using System;
+    using System.Net;
     using System.Text.Json;
     using System.Threading.Tasks;
     using Voltaic.JsonRpc;
@@ -23,7 +24,7 @@
             Console.WriteLine("=== JSON-RPC 2.0 Server ===");
             Console.WriteLine($"Starting server on port {port}...");
 
-            JsonRpcServer server = new JsonRpcServer(port);
+            JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, port);
 
             // Subscribe to log events
             server.Log += (sender, message) => Console.WriteLine(message);

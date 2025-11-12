@@ -57,6 +57,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public event EventHandler<string>? Log;
 
+        private readonly string _Hostname;
         private readonly int _Port;
         private readonly string _RpcPath;
         private readonly string _EventsPath;
@@ -72,21 +73,24 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Initializes a new instance of the <see cref="McpHttpServer"/> class.
         /// </summary>
+        /// <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
         /// <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
         /// <param name="rpcPath">The URL path for JSON-RPC requests. Default is "/rpc".</param>
         /// <param name="eventsPath">The URL path for Server-Sent Events connections. Default is "/events".</param>
         /// <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getSessions.</param>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
-        public McpHttpServer(int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true)
+        public McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true)
         {
+            if (String.IsNullOrEmpty(hostname)) throw new ArgumentNullException(nameof(hostname));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
 
+            _Hostname = hostname;
             _Port = port;
             _RpcPath = String.IsNullOrEmpty(rpcPath) ? "/rpc" : rpcPath;
             _EventsPath = String.IsNullOrEmpty(eventsPath) ? "/events" : eventsPath;
             _Sessions = new ConcurrentDictionary<string, NotificationQueue>();
             _Methods = new Dictionary<string, Func<JsonElement?, object>>();
-
+            
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
 
@@ -116,8 +120,8 @@ namespace Voltaic.Mcp
             try
             {
                 _Listener = new HttpListener();
-                _Listener.Prefixes.Add($"http://localhost:{_Port}{_RpcPath}/");
-                _Listener.Prefixes.Add($"http://localhost:{_Port}{_EventsPath}/");
+                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_RpcPath}/");
+                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_EventsPath}/");
                 _Listener.Start();
                 _TokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
 

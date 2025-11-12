@@ -25,7 +25,7 @@ namespace McpWebsocketsServerProgram
             Console.WriteLine("=== MCP WebSocket Server ===");
             Console.WriteLine($"Starting server on port {port}...");
 
-            McpWebsocketsServer server = new McpWebsocketsServer(port);
+            McpWebsocketsServer server = new McpWebsocketsServer("localhost", port);
 
             // Subscribe to log events
             server.Log += (sender, message) => Console.WriteLine(message);

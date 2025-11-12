@@ -273,10 +273,11 @@
             This will default to application/json; charset=utf-8 if the supplied value is null.
             </summary>
         </member>
-        <member name="M:Voltaic.JsonRpc.JsonRpcServer.#ctor(System.Int32,System.Boolean)">
+        <member name="M:Voltaic.JsonRpc.JsonRpcServer.#ctor(System.Net.IPAddress,System.Int32,System.Boolean)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.JsonRpc.JsonRpcServer"/> class.
             </summary>
+            <param name="ip">IP address to listen on.</param>
             <param name="port">The port number to listen on.</param>
             <param name="includeDefaultMethods">True to include default methods such as echo, ping, getTime, add, and getClients.</param>
         </member>

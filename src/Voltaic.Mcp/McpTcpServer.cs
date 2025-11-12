@@ -1,6 +1,7 @@
 namespace Voltaic.Mcp
 {
     using System;
+    using System.Net;
     using System.Text.Json;
     using Voltaic.JsonRpc;
 
@@ -13,10 +14,11 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Initializes a new instance of the <see cref="McpTcpServer"/> class.
         /// </summary>
+        /// <param name="ip">The IP address to listen on.</param>
         /// <param name="port">The port number to listen on.</param>
         /// <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
-        public McpTcpServer(int port, bool includeDefaultMethods = true)
-            : base(port, includeDefaultMethods)
+        public McpTcpServer(IPAddress ip, int port, bool includeDefaultMethods = true)
+            : base(ip, port, includeDefaultMethods)
         {
         }
 

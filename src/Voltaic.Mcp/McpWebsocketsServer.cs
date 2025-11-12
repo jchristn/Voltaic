@@ -59,6 +59,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public event EventHandler<string>? Log;
 
+        private readonly string _Hostname;
         private readonly int _Port;
         private readonly string _Path;
         private HttpListener? _Listener;
@@ -73,14 +74,17 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Initializes a new instance of the <see cref="McpWebsocketsServer"/> class.
         /// </summary>
+        /// <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
         /// <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
         /// <param name="path">The URL path for WebSocket connections. Default is "/mcp".</param>
         /// <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
-        public McpWebsocketsServer(int port, string path = "/mcp", bool includeDefaultMethods = true)
+        public McpWebsocketsServer(string hostname, int port, string path = "/mcp", bool includeDefaultMethods = true)
         {
+            if (String.IsNullOrEmpty(hostname)) throw new ArgumentNullException(nameof(hostname));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
 
+            _Hostname = hostname;
             _Port = port;
             _Path = String.IsNullOrEmpty(path) ? "/mcp" : path;
             _Clients = new ConcurrentDictionary<string, WebSocketConnection>();
@@ -115,7 +119,7 @@ namespace Voltaic.Mcp
             try
             {
                 _Listener = new HttpListener();
-                _Listener.Prefixes.Add($"http://localhost:{_Port}{_Path}/");
+                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_Path}/");
                 _Listener.Start();
                 _TokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
 

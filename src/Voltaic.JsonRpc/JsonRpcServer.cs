@@ -43,6 +43,7 @@
         }
 
         private TcpListener? _Listener;
+        private readonly IPAddress _Ip;
         private readonly int _Port;
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Clients;
@@ -53,13 +54,16 @@
         /// <summary>
         /// Initializes a new instance of the <see cref="JsonRpcServer"/> class.
         /// </summary>
+        /// <param name="ip">IP address to listen on.</param>
         /// <param name="port">The port number to listen on.</param>
         /// <param name="includeDefaultMethods">True to include default methods such as echo, ping, getTime, add, and getClients.</param>
-        public JsonRpcServer(int port, bool includeDefaultMethods = true)
+        public JsonRpcServer(IPAddress ip, int port, bool includeDefaultMethods = true)
         {
+            if (ip == null) throw new ArgumentNullException(nameof(ip));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
 
-            this._Port = port;
+            _Ip = ip;
+            _Port = port;
             _Clients = new ConcurrentDictionary<string, ClientConnection>();
             _Methods = new Dictionary<string, Func<JsonElement?, object>>();
 
@@ -86,7 +90,7 @@
         {
             try
             {
-                _Listener = new TcpListener(IPAddress.Any, _Port);
+                _Listener = new TcpListener(_Ip, _Port);
                 _Listener.Start();
                 _TokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
 

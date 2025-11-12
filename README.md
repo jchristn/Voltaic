@@ -76,10 +76,11 @@ dotnet add package Voltaic
 ### Quick Start: JSON-RPC Server (TCP)
 
 ```csharp
+using System.Net;
 using System.Text.Json;
 using Voltaic.JsonRpc;
 
-JsonRpcServer server = new JsonRpcServer(8080);
+JsonRpcServer server = new JsonRpcServer(IPAddress.Any, 8080);
 
 // Register custom methods
 server.RegisterMethod("greet", (JsonElement? args) =>
@@ -156,10 +157,11 @@ Console.WriteLine(response.Result);
 ### Quick Start: MCP Server (TCP)
 
 ```csharp
+using System.Net;
 using System.Text.Json;
 using Voltaic.Mcp;
 
-McpTcpServer server = new McpTcpServer(8080);
+McpTcpServer server = new McpTcpServer(IPAddress.Any, 8080);
 
 // Register MCP methods
 server.RegisterMethod("tools/list", (JsonElement? args) =>
@@ -200,7 +202,7 @@ Console.WriteLine(response.Result);
 using System.Text.Json;
 using Voltaic.Mcp;
 
-McpHttpServer server = new McpHttpServer(8080);
+McpHttpServer server = new McpHttpServer("localhost", 8080);
 
 // Register MCP methods
 server.RegisterMethod("tools/list", (JsonElement? args) =>
@@ -244,7 +246,7 @@ Console.WriteLine(result);
 using System.Text.Json;
 using Voltaic.Mcp;
 
-McpWebsocketsServer server = new McpWebsocketsServer(8080);
+McpWebsocketsServer server = new McpWebsocketsServer("localhost", 8080);
 
 // Register MCP methods
 server.RegisterMethod("tools/list", (JsonElement? args) =>
@@ -300,10 +302,10 @@ Voltaic might not be the right fit if you need:
 ### Voltaic.JsonRpc
 
 **Server API:**
-- `JsonRpcServer(int port)` - Create a server listening on the specified port
+- `JsonRpcServer(IPAddress ip, int port, bool includeDefaultMethods = true)` - Create a server listening on the specified IP address and port
 - `RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an RPC method
-- `Task StartAsync()` - Start accepting connections
-- `Task BroadcastNotificationAsync(string method, object? parameters)` - Send notifications to all clients
+- `Task StartAsync(CancellationToken token = default)` - Start accepting connections
+- `Task BroadcastNotificationAsync(string method, object? parameters, CancellationToken token = default)` - Send notifications to all clients
 - `void Stop()` - Gracefully shut down the server
 
 **Client API:**
@@ -325,12 +327,12 @@ Voltaic might not be the right fit if you need:
 - `NotificationReceived` event - Handle server notifications
 
 **TCP Variants:**
-- `McpTcpServer(int port)` - TCP-based MCP server
+- `McpTcpServer(IPAddress ip, int port, bool includeDefaultMethods = true)` - TCP-based MCP server
 - `McpTcpClient()` - TCP-based MCP client
 - Same API as JsonRpcServer/JsonRpcClient
 
 **HTTP Variants:**
-- `McpHttpServer(int port)` - HTTP-based MCP server with SSE support
+- `McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true)` - HTTP-based MCP server with SSE support
 - `McpHttpClient()` - HTTP-based MCP client
 - Additional methods:
   - `Task<bool> ConnectAsync(string baseUrl)` - Connect to HTTP server
@@ -339,7 +341,7 @@ Voltaic might not be the right fit if you need:
   - `string? SessionId` property - Get session ID assigned by server
 
 **WebSocket Variants:**
-- `McpWebsocketsServer(int port)` - WebSocket-based MCP server
+- `McpWebsocketsServer(string hostname, int port, string path = "/mcp", bool includeDefaultMethods = true)` - WebSocket-based MCP server
 - `McpWebsocketsClient()` - WebSocket-based MCP client
 - Same API as JsonRpcClient with bidirectional messaging
 

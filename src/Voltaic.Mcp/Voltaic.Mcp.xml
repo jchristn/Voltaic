@@ -193,10 +193,11 @@
             Occurs when a log message is generated.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.#ctor(System.Int32,System.String,System.String,System.Boolean)">
+        <member name="M:Voltaic.Mcp.McpHttpServer.#ctor(System.String,System.Int32,System.String,System.String,System.Boolean)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpHttpServer"/> class.
             </summary>
+            <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
             <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
             <param name="rpcPath">The URL path for JSON-RPC requests. Default is "/rpc".</param>
             <param name="eventsPath">The URL path for Server-Sent Events connections. Default is "/events".</param>
@@ -321,10 +322,11 @@
             This class extends JsonRpcServer with MCP-specific defaults and semantics.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.#ctor(System.Int32,System.Boolean)">
+        <member name="M:Voltaic.Mcp.McpTcpServer.#ctor(System.Net.IPAddress,System.Int32,System.Boolean)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpTcpServer"/> class.
             </summary>
+            <param name="ip">The IP address to listen on.</param>
             <param name="port">The port number to listen on.</param>
             <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
         </member>
@@ -437,10 +439,11 @@
             Occurs when a log message is generated.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.#ctor(System.Int32,System.String,System.Boolean)">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.#ctor(System.String,System.Int32,System.String,System.Boolean)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpWebsocketsServer"/> class.
             </summary>
+            <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
             <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
             <param name="path">The URL path for WebSocket connections. Default is "/mcp".</param>
             <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>

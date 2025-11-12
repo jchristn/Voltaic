@@ -150,7 +150,6 @@ namespace Test.Automated
                 await RunMessageFramingEdgeCaseTests();
                 await RunParameterEdgeCaseTests();
                 await RunConcurrencyTests();
-                await RunEventHandlerTests();
                 await RunStressTests();
 
                 Console.WriteLine();
@@ -226,7 +225,7 @@ namespace Test.Automated
 
             await Test("Basic echo request", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9001);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9001);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -243,7 +242,7 @@ namespace Test.Automated
 
             await Test("Multiple sequential requests", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9002);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9002);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -269,7 +268,7 @@ namespace Test.Automated
             await Test("Single byte read simulation", async () =>
             {
                 // Start a server
-                using JsonRpcServer server = new JsonRpcServer(9003);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9003);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -331,7 +330,7 @@ namespace Test.Automated
 
             await Test("Multiple messages sent together", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9004);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9004);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -387,7 +386,7 @@ namespace Test.Automated
 
             await Test("Very large message (1MB)", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9005);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9005);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -412,7 +411,7 @@ namespace Test.Automated
 
             await Test("Missing Content-Length header", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9006);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9006);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -444,7 +443,7 @@ namespace Test.Automated
 
             await Test("Invalid Content-Length value", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9007);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9007);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -481,7 +480,7 @@ namespace Test.Automated
 
             await Test("Connection drop mid-message", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9008);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9008);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -514,7 +513,7 @@ namespace Test.Automated
 
             await Test("100 rapid requests", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9009);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9009);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -547,7 +546,7 @@ namespace Test.Automated
 
             await Test("Notification (no response expected)", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9010);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9010);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -568,7 +567,7 @@ namespace Test.Automated
 
             await Test("Server broadcast to multiple clients", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9011);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9011);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -632,7 +631,7 @@ namespace Test.Automated
 
             await Test("Call after disconnect throws exception", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9101);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9101);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -657,7 +656,7 @@ namespace Test.Automated
 
             await Test("Request timeout", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9102);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9102);
 
                 // Register a method that takes longer than timeout
                 server.RegisterMethod("slow", (args) =>
@@ -692,7 +691,7 @@ namespace Test.Automated
 
             await Test("Invalid method name returns error", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9103);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9103);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -721,7 +720,7 @@ namespace Test.Automated
 
             await Test("Invalid JSON request", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9201);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9201);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -746,7 +745,7 @@ namespace Test.Automated
 
             await Test("Method handler throws exception", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9202);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9202);
 
                 server.RegisterMethod("throwError", (args) =>
                 {
@@ -907,7 +906,7 @@ namespace Test.Automated
 
             await Test("1000 sequential requests", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9401);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9401);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -925,7 +924,7 @@ namespace Test.Automated
 
             await Test("100 concurrent clients", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9402);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9402);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -949,7 +948,7 @@ namespace Test.Automated
 
             await Test("Very large message (10MB)", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9403);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9403);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -979,7 +978,7 @@ namespace Test.Automated
 
             await Test("Reconnect after disconnect", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9501);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9501);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1002,7 +1001,7 @@ namespace Test.Automated
 
             await Test("Multiple rapid connect/disconnect cycles", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9502);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9502);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1021,7 +1020,7 @@ namespace Test.Automated
 
             await Test("Concurrent calls thread safety", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9503);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9503);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1052,7 +1051,7 @@ namespace Test.Automated
 
             await Test("Request missing jsonrpc field", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9504);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9504);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1076,7 +1075,7 @@ namespace Test.Automated
 
             await Test("Request with invalid jsonrpc version", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9505);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9505);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1100,7 +1099,7 @@ namespace Test.Automated
 
             await Test("Request missing method field", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9506);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9506);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1124,13 +1123,13 @@ namespace Test.Automated
 
             await Test("Port already in use handled gracefully", async () =>
             {
-                using JsonRpcServer server1 = new JsonRpcServer(9507);
+                using JsonRpcServer server1 = new JsonRpcServer(IPAddress.Loopback, 9507);
                 Task serverTask1 = Task.Run(() => server1.StartAsync());
                 await Task.Delay(200);
 
                 try
                 {
-                    using JsonRpcServer server2 = new JsonRpcServer(9507);
+                    using JsonRpcServer server2 = new JsonRpcServer(IPAddress.Loopback, 9507);
                     Task serverTask2 = server2.StartAsync();
                     await Task.Delay(300);
                     server2.Stop();
@@ -1147,7 +1146,7 @@ namespace Test.Automated
 
             await Test("Request with string ID", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9508);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9508);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1191,7 +1190,7 @@ namespace Test.Automated
 
             await Test("Multiple simultaneous clients with errors", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9509);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9509);
                 server.RegisterMethod("maybeError", (args) =>
                 {
                     if (args.HasValue && args.Value.TryGetProperty("shouldError", out System.Text.Json.JsonElement prop) && prop.GetBoolean())
@@ -1244,7 +1243,7 @@ namespace Test.Automated
 
             await Test("Content-Length with extra spaces", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9510);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9510);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1288,7 +1287,7 @@ namespace Test.Automated
 
             await Test("Multiple headers before content", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9511);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9511);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1332,7 +1331,7 @@ namespace Test.Automated
 
             await Test("Negative Content-Length", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9512);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9512);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1428,7 +1427,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Basic echo request", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9600);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9600);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1445,7 +1444,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Multiple sequential requests", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9601);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9601);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1464,7 +1463,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Ping method", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9602);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9602);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1479,7 +1478,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Custom method registration", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9603, includeDefaultMethods: false);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9603, includeDefaultMethods: false);
                 server.RegisterMethod("multiply", (args) =>
                 {
                     double x = 0, y = 0;
@@ -1507,7 +1506,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Notification (no response)", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9604);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9604);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1524,7 +1523,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Server broadcast to multiple clients", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9605);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9605);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1562,7 +1561,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Method not found error", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9606);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9606);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1601,7 +1600,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Disconnect and reconnect", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9607);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9607);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1624,7 +1623,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: GetConnectedClients", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9608);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9608);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1650,7 +1649,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: KickClient", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9609);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9609);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1672,7 +1671,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Large message handling", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9610);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9610);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1689,7 +1688,7 @@ namespace Test.Automated
 
             await Test("MCP TCP: Concurrent requests", async () =>
             {
-                using McpTcpServer server = new McpTcpServer(9611);
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9611);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1720,7 +1719,7 @@ namespace Test.Automated
 
             await Test("Empty method name rejected", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9513);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9513);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1744,7 +1743,7 @@ namespace Test.Automated
 
             await Test("Null parameters", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9514);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9514);
                 server.RegisterMethod("acceptNull", (args) =>
                 {
                     return args.HasValue ? "has value" : "null";
@@ -1764,7 +1763,7 @@ namespace Test.Automated
 
             await Test("Empty object parameters", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9515);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9515);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1779,7 +1778,7 @@ namespace Test.Automated
 
             await Test("Nested object parameters", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9516);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9516);
                 server.RegisterMethod("nested", (args) =>
                 {
                     if (args.HasValue &&
@@ -1816,7 +1815,7 @@ namespace Test.Automated
 
             await Test("Unicode characters in parameters", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9517);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9517);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1838,7 +1837,7 @@ namespace Test.Automated
 
             await Test("Concurrent broadcast and disconnect", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9518);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9518);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(100);
 
@@ -1879,7 +1878,7 @@ namespace Test.Automated
 
             await Test("Server stop during active calls", async () =>
             {
-                using JsonRpcServer server = new JsonRpcServer(9519);
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9519);
                 server.RegisterMethod("slowMethod", (args) =>
                 {
                     Thread.Sleep(2000);
@@ -1909,18 +1908,6 @@ namespace Test.Automated
 
                 Assert(exceptionCaught, "Should handle server stop during call");
             });
-        }
-
-        static async Task RunEventHandlerTests()
-        {
-            Console.WriteLine();
-            Console.WriteLine("--- JSON-RPC: Event Handler Tests ---");
-            Console.WriteLine("  [Event handler tests covered by broadcast and notification tests] ... SKIP");
-
-            // Note: Event handler functionality is thoroughly tested by:
-            // - "Server broadcast to multiple clients" test (multiple handlers across clients)
-            // - "Notification (no response expected)" test (single notification handling)
-            // Removing redundant single-client multi-handler test that was causing issues
         }
 
         static async Task Test(string testName, Func<Task> testAction)
@@ -1989,7 +1976,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Basic echo request", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9700);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9700);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2006,7 +1993,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Multiple sequential requests", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9701);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9701);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2025,7 +2012,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Ping method", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9702);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9702);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2040,7 +2027,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Notification (no response)", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9703);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9703);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2057,7 +2044,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Server broadcast to multiple clients", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9704);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9704);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2095,7 +2082,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Method not found error", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9705);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9705);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2134,7 +2121,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Disconnect and reconnect", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9706);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9706);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2157,7 +2144,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: GetConnectedClients", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9707);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9707);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2183,7 +2170,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: KickClient", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9708);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9708);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2205,7 +2192,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Large message handling", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9709);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9709);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2222,7 +2209,7 @@ namespace Test.Automated
 
             await Test("MCP WebSocket: Concurrent requests", async () =>
             {
-                using McpWebsocketsServer server = new McpWebsocketsServer(9710);
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9710);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2253,7 +2240,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Basic echo request", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9800);
+                using McpHttpServer server = new McpHttpServer("localhost", 9800);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2271,7 +2258,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Multiple sequential requests", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9801);
+                using McpHttpServer server = new McpHttpServer("localhost", 9801);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2290,7 +2277,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Ping method", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9802);
+                using McpHttpServer server = new McpHttpServer("localhost", 9802);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2305,7 +2292,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Session persistence across requests", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9803);
+                using McpHttpServer server = new McpHttpServer("localhost", 9803);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2323,7 +2310,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: SSE connection and notifications", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9804);
+                using McpHttpServer server = new McpHttpServer("localhost", 9804);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2355,7 +2342,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Broadcast to multiple sessions", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9805);
+                using McpHttpServer server = new McpHttpServer("localhost", 9805);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2394,7 +2381,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Method not found error", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9806);
+                using McpHttpServer server = new McpHttpServer("localhost", 9806);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2437,7 +2424,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: GetActiveSessions", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9807);
+                using McpHttpServer server = new McpHttpServer("localhost", 9807);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2463,7 +2450,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: RemoveSession", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9808);
+                using McpHttpServer server = new McpHttpServer("localhost", 9808);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2487,7 +2474,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Large message handling", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9809);
+                using McpHttpServer server = new McpHttpServer("localhost", 9809);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 
@@ -2504,7 +2491,7 @@ namespace Test.Automated
 
             await Test("MCP HTTP: Concurrent requests from single client", async () =>
             {
-                using McpHttpServer server = new McpHttpServer(9810);
+                using McpHttpServer server = new McpHttpServer("localhost", 9810);
                 Task serverTask = Task.Run(() => server.StartAsync());
                 await Task.Delay(200);
 

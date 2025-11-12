@@ -8,6 +8,8 @@ namespace McpHttpServerProgram
 
     class Program
     {
+#pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
+
         static async Task Main(string[] args)
         {
             if (args.Length != 1)
@@ -25,7 +27,7 @@ namespace McpHttpServerProgram
             Console.WriteLine("=== MCP HTTP Server ===");
             Console.WriteLine($"Starting server on port {port}...");
 
-            McpHttpServer server = new McpHttpServer(port);
+            McpHttpServer server = new McpHttpServer("localhost", port);
 
             // Subscribe to log events
             server.Log += (sender, message) => Console.WriteLine(message);
@@ -221,5 +223,7 @@ namespace McpHttpServerProgram
 
             Console.WriteLine("Goodbye!");
         }
+
+#pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
     }
 }
