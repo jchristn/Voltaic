@@ -89,6 +89,51 @@ namespace Voltaic.Mcp
 
         private void RegisterBuiltInMethods()
         {
+            _Methods["tools/call"] = (args) =>
+            {
+                // MCP tools/call handler - invokes a tool by name with arguments
+                if (!args.HasValue)
+                {
+                    throw new ArgumentException("tools/call requires params with 'name' and 'arguments'");
+                }
+
+                // Extract tool name from params.name
+                if (!args.Value.TryGetProperty("name", out JsonElement nameElement))
+                {
+                    throw new ArgumentException("tools/call requires 'name' parameter");
+                }
+
+                string toolName = nameElement.GetString() ?? throw new ArgumentException("Tool name cannot be null");
+
+                // Extract arguments from params.arguments
+                JsonElement? toolArguments = null;
+                if (args.Value.TryGetProperty("arguments", out JsonElement argsElement))
+                {
+                    toolArguments = argsElement;
+                }
+
+                // Look up and invoke the tool
+                if (!_Methods.ContainsKey(toolName))
+                {
+                    throw new ArgumentException($"Tool '{toolName}' not found");
+                }
+
+                object result = _Methods[toolName](toolArguments);
+
+                // Return result in MCP format with content array
+                return new
+                {
+                    content = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = result.ToString()
+                        }
+                    }
+                };
+            };
+
             _Methods["ping"] = (_) => "pong";
             _Methods["echo"] = (args) =>
             {
