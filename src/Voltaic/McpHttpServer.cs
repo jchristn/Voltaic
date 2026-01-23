@@ -236,6 +236,7 @@ namespace Voltaic
             try
             {
                 _Listener = new HttpListener();
+                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}/");
                 _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_RpcPath}/");
                 _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_EventsPath}/");
                 _Listener.Start();
@@ -612,6 +613,10 @@ namespace Voltaic
                 {
                     await HandleSseRequestAsync(context, token).ConfigureAwait(false);
                 }
+                else if (path == "/")
+                {
+                    await HandleHealthCheckAsync(context, token).ConfigureAwait(false);
+                }
                 else
                 {
                     context.Response.StatusCode = 404;
@@ -642,6 +647,27 @@ namespace Voltaic
             }
 
             context.Response.StatusCode = 204;
+            context.Response.Close();
+        }
+
+        private async Task HandleHealthCheckAsync(HttpListenerContext context, CancellationToken token)
+        {
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            context.Response.StatusCode = 200;
+
+            if (context.Request.HttpMethod == "GET")
+            {
+                context.Response.ContentType = "application/json";
+                byte[] buffer = Encoding.UTF8.GetBytes("{\"status\":\"Ok\"}");
+                context.Response.ContentLength64 = buffer.Length;
+                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            }
+
             context.Response.Close();
         }
 

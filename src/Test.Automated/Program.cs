@@ -6,6 +6,7 @@ namespace Test.Automated
     using System.IO;
     using System.Linq;
     using System.Net;
+    using System.Net.Http;
     using System.Net.Sockets;
     using System.Text;
     using System.Threading;
@@ -2746,6 +2747,61 @@ namespace Test.Automated
                 {
                     Assert(results[i] == $"test{i}", $"Concurrent call {i} failed");
                 }
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Health check GET / returns status Ok", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9811);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpResponseMessage response = await httpClient.GetAsync("http://localhost:9811/");
+
+                Assert(response.StatusCode == HttpStatusCode.OK, $"Expected 200 OK, got {response.StatusCode}");
+
+                string content = await response.Content.ReadAsStringAsync();
+                Assert(content == "{\"status\":\"Ok\"}", $"Expected '{{\"status\":\"Ok\"}}', got '{content}'");
+
+                string? contentType = response.Content.Headers.ContentType?.MediaType;
+                Assert(contentType == "application/json", $"Expected 'application/json', got '{contentType}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Health check HEAD / returns 200 with no body", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9812);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Head, "http://localhost:9812/");
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+
+                Assert(response.StatusCode == HttpStatusCode.OK, $"Expected 200 OK, got {response.StatusCode}");
+
+                string content = await response.Content.ReadAsStringAsync();
+                Assert(content.Length == 0, $"Expected empty body, got {content.Length} bytes");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Health check includes CORS headers", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9813);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpResponseMessage response = await httpClient.GetAsync("http://localhost:9813/");
+
+                Assert(response.StatusCode == HttpStatusCode.OK, $"Expected 200 OK, got {response.StatusCode}");
+
+                bool hasCorsHeader = response.Headers.Contains("Access-Control-Allow-Origin");
+                Assert(hasCorsHeader, "Expected Access-Control-Allow-Origin header");
 
                 server.Stop();
             });
