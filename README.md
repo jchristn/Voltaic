@@ -159,24 +159,24 @@ McpServer server = new McpServer();
 server.ServerName = "MyMcpServer";
 server.ServerVersion = "2.0.0";
 
-// Register tools with metadata for MCP tool discovery
-server.RegisterTool("calculator",
-    "Performs basic arithmetic",
+// Register a tool with metadata for MCP tool discovery
+server.RegisterTool("add",
+    "Adds two numbers",
     new
     {
         type = "object",
         properties = new
         {
-            operation = new { type = "string", description = "The operation: add, subtract, multiply, divide" },
-            a = new { type = "number", description = "First operand" },
-            b = new { type = "number", description = "Second operand" }
+            a = new { type = "number", description = "First number" },
+            b = new { type = "number", description = "Second number" }
         },
-        required = new[] { "operation", "a", "b" }
+        required = new[] { "a", "b" }
     },
     (JsonElement? args) =>
     {
-        // Tool implementation here
-        return (object)"result";
+        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        return (object)(a + b);
     });
 
 // Built-in methods are registered automatically:
@@ -221,14 +221,36 @@ server.ClientConnected += (sender, client) =>
 server.ClientDisconnected += (sender, client) =>
     Console.WriteLine($"Client disconnected: {client.SessionId}");
 
-// Register MCP methods
+// Register a method (tools/call dispatches to registered methods by name)
+server.RegisterMethod("add", (JsonElement? args) =>
+{
+    double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+    double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+    return (object)(a + b);
+});
+
+// Register tools/list so clients can discover available tools
 server.RegisterMethod("tools/list", (JsonElement? args) =>
 {
     return new
     {
         tools = new[]
         {
-            new { name = "calculator", description = "Performs calculations" }
+            new
+            {
+                name = "add",
+                description = "Adds two numbers",
+                inputSchema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        a = new { type = "number", description = "First number" },
+                        b = new { type = "number", description = "Second number" }
+                    },
+                    required = new[] { "a", "b" }
+                }
+            }
         }
     };
 });
@@ -273,17 +295,25 @@ server.ClientConnected += (sender, client) =>
 server.RequestReceived += (sender, e) =>
     Console.WriteLine($"Request: {e.Method} from session {e.Client.SessionId}");
 
-// Register MCP methods
-server.RegisterMethod("tools/list", (JsonElement? args) =>
-{
-    return new
+// Register a tool (automatically added to tools/list and tools/call)
+server.RegisterTool("add",
+    "Adds two numbers",
+    new
     {
-        tools = new[]
+        type = "object",
+        properties = new
         {
-            new { name = "calculator", description = "Performs calculations" }
-        }
-    };
-});
+            a = new { type = "number", description = "First number" },
+            b = new { type = "number", description = "Second number" }
+        },
+        required = new[] { "a", "b" }
+    },
+    (JsonElement? args) =>
+    {
+        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        return (object)(a + b);
+    });
 
 // Start the server
 await server.StartAsync();
@@ -324,14 +354,36 @@ server.ClientConnected += (sender, client) =>
 server.ResponseSent += (sender, e) =>
     Console.WriteLine($"Sent response for {e.Method} in {e.Duration.TotalMilliseconds}ms");
 
-// Register MCP methods
+// Register a method (tools/call dispatches to registered methods by name)
+server.RegisterMethod("add", (JsonElement? args) =>
+{
+    double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+    double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+    return (object)(a + b);
+});
+
+// Register tools/list so clients can discover available tools
 server.RegisterMethod("tools/list", (JsonElement? args) =>
 {
     return new
     {
         tools = new[]
         {
-            new { name = "calculator", description = "Performs calculations" }
+            new
+            {
+                name = "add",
+                description = "Adds two numbers",
+                inputSchema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        a = new { type = "number", description = "First number" },
+                        b = new { type = "number", description = "Second number" }
+                    },
+                    required = new[] { "a", "b" }
+                }
+            }
         }
     };
 });
