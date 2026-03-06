@@ -23,36 +23,60 @@ namespace Test.McpServer
                 // Already logged to stderr by McpServer
             };
 
-            // Register additional custom methods
-            server.RegisterMethod("add", (args) =>
-            {
-                double a = 0;
-                double b = 0;
-
-                if (args.HasValue)
+            // Register additional custom tools
+            server.RegisterTool("add",
+                "Adds two numbers together",
+                new
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
-                }
-                return a + b;
-            });
-
-            server.RegisterMethod("multiply", (args) =>
-            {
-                double x = 0;
-                double y = 0;
-
-                if (args.HasValue)
+                    type = "object",
+                    properties = new
+                    {
+                        a = new { type = "number", description = "First number" },
+                        b = new { type = "number", description = "Second number" }
+                    },
+                    required = new[] { "a", "b" }
+                },
+                (args) =>
                 {
-                    if (args.Value.TryGetProperty("x", out JsonElement xProp))
-                        x = xProp.GetDouble();
-                    if (args.Value.TryGetProperty("y", out JsonElement yProp))
-                        y = yProp.GetDouble();
-                }
-                return x * y;
-            });
+                    double a = 0;
+                    double b = 0;
+
+                    if (args.HasValue)
+                    {
+                        if (args.Value.TryGetProperty("a", out JsonElement aProp))
+                            a = aProp.GetDouble();
+                        if (args.Value.TryGetProperty("b", out JsonElement bProp))
+                            b = bProp.GetDouble();
+                    }
+                    return a + b;
+                });
+
+            server.RegisterTool("multiply",
+                "Multiplies two numbers together",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        x = new { type = "number", description = "First number" },
+                        y = new { type = "number", description = "Second number" }
+                    },
+                    required = new[] { "x", "y" }
+                },
+                (args) =>
+                {
+                    double x = 0;
+                    double y = 0;
+
+                    if (args.HasValue)
+                    {
+                        if (args.Value.TryGetProperty("x", out JsonElement xProp))
+                            x = xProp.GetDouble();
+                        if (args.Value.TryGetProperty("y", out JsonElement yProp))
+                            y = yProp.GetDouble();
+                    }
+                    return x * y;
+                });
 
             // Register an async method with cancellation support
             server.RegisterMethod("asyncLookup", async (JsonElement? args, CancellationToken token) =>

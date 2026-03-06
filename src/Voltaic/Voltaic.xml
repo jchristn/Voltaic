@@ -1192,6 +1192,24 @@
             Implements Model Context Protocol stdio transport specification.
             </summary>
         </member>
+        <member name="P:Voltaic.McpServer.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version.
+            Default is "2025-03-26".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServer.ServerName">
+            <summary>
+            Gets or sets the server name for MCP serverInfo.
+            Default is "Voltaic.Mcp.StdioServer".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServer.ServerVersion">
+            <summary>
+            Gets or sets the server version for MCP serverInfo.
+            Default is "1.0.0".
+            </summary>
+        </member>
         <member name="E:Voltaic.McpServer.Log">
             <summary>
             Occurs when a log message is generated.
@@ -1231,6 +1249,42 @@
             <param name="name">The name of the method to register.</param>
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
+            This registers both the method handler and the tool definition for tools/list.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
+            This registers both the method handler and the tool definition for tools/list.
+            Use this overload when the handler needs to perform asynchronous operations such as
+            database queries, HTTP calls, or file I/O.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
+            This registers both the method handler and the tool definition for tools/list.
+            Use this overload when the handler needs to perform cancellable asynchronous operations.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
         <member name="M:Voltaic.McpServer.RunAsync(System.Threading.CancellationToken)">
             <summary>

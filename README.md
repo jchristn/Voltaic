@@ -155,17 +155,36 @@ using Voltaic;
 
 McpServer server = new McpServer();
 
-// Register MCP methods
-server.RegisterMethod("tools/list", (JsonElement? args) =>
-{
-    return new
+// Customize server identity (optional)
+server.ServerName = "MyMcpServer";
+server.ServerVersion = "2.0.0";
+
+// Register tools with metadata for MCP tool discovery
+server.RegisterTool("calculator",
+    "Performs basic arithmetic",
+    new
     {
-        tools = new[]
+        type = "object",
+        properties = new
         {
-            new { name = "calculator", description = "Performs calculations" }
-        }
-    };
-});
+            operation = new { type = "string", description = "The operation: add, subtract, multiply, divide" },
+            a = new { type = "number", description = "First operand" },
+            b = new { type = "number", description = "Second operand" }
+        },
+        required = new[] { "operation", "a", "b" }
+    },
+    (JsonElement? args) =>
+    {
+        // Tool implementation here
+        return (object)"result";
+    });
+
+// Built-in methods are registered automatically:
+// - initialize (returns capabilities and serverInfo)
+// - tools/list (returns all registered tools)
+// - tools/call (invokes a tool by name)
+// - notifications/initialized (handles client init notification)
+// - ping, echo, getTime (utility tools)
 
 // Run the server (reads from stdin, writes to stdout)
 await server.RunAsync();
@@ -417,7 +436,22 @@ All classes and methods are available in the `Voltaic` namespace.
 - `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous MCP method
 - `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous MCP method
 - `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async MCP method with cancellation support
+- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with synchronous handler
+- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)` - Register tool with asynchronous handler
+- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register tool with async cancellable handler
 - `Task RunAsync(CancellationToken token = default)` - Run the server (blocks until stdin closes)
+
+*Properties:*
+- `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-03-26")
+- `string ServerName { get; set; }` - Server name for MCP serverInfo (default: "Voltaic.Mcp.StdioServer")
+- `string ServerVersion { get; set; }` - Server version for MCP serverInfo (default: "1.0.0")
+
+*Built-in Methods:*
+- `initialize` - MCP protocol initialization (returns capabilities and serverInfo)
+- `tools/list` - List registered tools
+- `tools/call` - Invoke a tool by name
+- `notifications/initialized` - Handle client init notification
+- `ping`, `echo`, `getTime` - Utility tools
 
 *Events:*
 - `event EventHandler<string> Log` - Fires when a log message is generated

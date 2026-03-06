@@ -9,6 +9,7 @@ namespace Test.Automated
     using System.Net.Http;
     using System.Net.Sockets;
     using System.Text;
+    using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
     using Voltaic;
@@ -916,6 +917,71 @@ namespace Test.Automated
 
                 double result = await client.CallAsync<double>("add", new { a = 5.0, b = 3.0 });
                 Assert(result == 8.0, $"Expected 8.0, got {result}");
+
+                client.Shutdown();
+                client.Dispose();
+            });
+
+            await Test("MCP server initialize returns serverInfo", async () =>
+            {
+                McpClient client = new McpClient();
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
+
+                JsonElement result = await client.CallAsync<JsonElement>("initialize", new { protocolVersion = "2025-03-26" });
+                string resultJson = result.GetRawText();
+                Assert(resultJson.Contains("protocolVersion"), "Result should contain protocolVersion");
+                Assert(resultJson.Contains("serverInfo"), "Result should contain serverInfo");
+                Assert(resultJson.Contains("capabilities"), "Result should contain capabilities");
+                Assert(resultJson.Contains("Voltaic.Mcp.StdioServer"), "ServerInfo should contain StdioServer name");
+
+                client.Shutdown();
+                client.Dispose();
+            });
+
+            await Test("MCP server notifications/initialized handled", async () =>
+            {
+                McpClient client = new McpClient();
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
+
+                // Send initialized notification - should not throw
+                await client.NotifyAsync("notifications/initialized");
+                await Task.Delay(200);
+
+                // Verify server is still responsive after notification
+                string result = await client.CallAsync<string>("ping");
+                Assert(result == "pong", "Server should still respond after initialized notification");
+
+                client.Shutdown();
+                client.Dispose();
+            });
+
+            await Test("MCP server tools/list returns registered tools", async () =>
+            {
+                McpClient client = new McpClient();
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
+
+                JsonElement result = await client.CallAsync<JsonElement>("tools/list");
+                string resultJson = result.GetRawText();
+                Assert(resultJson.Contains("\"tools\""), "Result should contain tools array");
+                Assert(resultJson.Contains("ping"), "Tools should include ping");
+                Assert(resultJson.Contains("echo"), "Tools should include echo");
+                Assert(resultJson.Contains("getTime"), "Tools should include getTime");
+                Assert(resultJson.Contains("add"), "Tools should include add");
+                Assert(resultJson.Contains("multiply"), "Tools should include multiply");
+
+                client.Shutdown();
+                client.Dispose();
+            });
+
+            await Test("MCP server tools/call invokes tool", async () =>
+            {
+                McpClient client = new McpClient();
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
+
+                JsonElement result = await client.CallAsync<JsonElement>("tools/call", new { name = "ping", arguments = new { } });
+                string resultJson = result.GetRawText();
+                Assert(resultJson.Contains("pong"), "tools/call ping should return pong");
+                Assert(resultJson.Contains("content"), "Result should be in MCP content format");
 
                 client.Shutdown();
                 client.Dispose();

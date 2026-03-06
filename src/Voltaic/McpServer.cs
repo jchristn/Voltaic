@@ -15,6 +15,41 @@ namespace Voltaic
     public class McpServer : IDisposable
     {
         private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
+        private readonly List<ToolDefinition> _Tools;
+
+        /// <summary>
+        /// Gets or sets the MCP protocol version.
+        /// Default is "2025-03-26".
+        /// </summary>
+        public string ProtocolVersion
+        {
+            get => _ProtocolVersion;
+            set => _ProtocolVersion = value ?? "2025-03-26";
+        }
+
+        /// <summary>
+        /// Gets or sets the server name for MCP serverInfo.
+        /// Default is "Voltaic.Mcp.StdioServer".
+        /// </summary>
+        public string ServerName
+        {
+            get => _ServerName;
+            set => _ServerName = value ?? "Voltaic.Mcp.StdioServer";
+        }
+
+        /// <summary>
+        /// Gets or sets the server version for MCP serverInfo.
+        /// Default is "1.0.0".
+        /// </summary>
+        public string ServerVersion
+        {
+            get => _ServerVersion;
+            set => _ServerVersion = value ?? "1.0.0";
+        }
+
+        private string _ProtocolVersion = "2025-03-26";
+        private string _ServerName = "Voltaic.Mcp.StdioServer";
+        private string _ServerVersion = "1.0.0";
 
         /// <summary>
         /// Occurs when a log message is generated.
@@ -28,6 +63,7 @@ namespace Voltaic
         public McpServer(bool includeDefaultMethods = true)
         {
             _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
+            _Tools = new List<ToolDefinition>();
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
 
@@ -70,6 +106,87 @@ namespace Voltaic
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = handler;
+        }
+
+        /// <summary>
+        /// Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
+        /// This registers both the method handler and the tool definition for tools/list.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
+            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            RegisterMethod(name, handler);
+
+            _Tools.Add(new ToolDefinition
+            {
+                Name = name,
+                Description = description,
+                InputSchema = inputSchema
+            });
+        }
+
+        /// <summary>
+        /// Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
+        /// This registers both the method handler and the tool definition for tools/list.
+        /// Use this overload when the handler needs to perform asynchronous operations such as
+        /// database queries, HTTP calls, or file I/O.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
+            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            RegisterMethod(name, handler);
+
+            _Tools.Add(new ToolDefinition
+            {
+                Name = name,
+                Description = description,
+                InputSchema = inputSchema
+            });
+        }
+
+        /// <summary>
+        /// Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
+        /// This registers both the method handler and the tool definition for tools/list.
+        /// Use this overload when the handler needs to perform cancellable asynchronous operations.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
+            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            RegisterMethod(name, handler);
+
+            _Tools.Add(new ToolDefinition
+            {
+                Name = name,
+                Description = description,
+                InputSchema = inputSchema
+            });
         }
 
         /// <summary>
@@ -116,10 +233,57 @@ namespace Voltaic
         public void Dispose()
         {
             _Methods.Clear();
+            _Tools.Clear();
         }
 
         private void RegisterBuiltInMethods()
         {
+            // MCP Protocol Methods
+            RegisterMethod("initialize", (args) =>
+            {
+                string clientProtocolVersion = _ProtocolVersion;
+                if (args.HasValue && args.Value.TryGetProperty("protocolVersion", out JsonElement protocolVersionProp))
+                {
+                    clientProtocolVersion = protocolVersionProp.GetString() ?? _ProtocolVersion;
+                }
+
+                return new
+                {
+                    protocolVersion = clientProtocolVersion,
+                    capabilities = new
+                    {
+                        tools = new
+                        {
+                            listChanged = true
+                        }
+                    },
+                    serverInfo = new
+                    {
+                        name = _ServerName,
+                        version = _ServerVersion
+                    }
+                };
+            });
+
+            RegisterMethod("tools/list", (args) =>
+            {
+                List<object> toolsList = new List<object>();
+                foreach (ToolDefinition tool in _Tools)
+                {
+                    toolsList.Add(new
+                    {
+                        name = tool.Name,
+                        description = tool.Description,
+                        inputSchema = tool.InputSchema
+                    });
+                }
+
+                return new
+                {
+                    tools = toolsList
+                };
+            });
+
             _Methods["tools/call"] = async (args, token) =>
             {
                 // MCP tools/call handler - invokes a tool by name with arguments
@@ -165,14 +329,55 @@ namespace Voltaic
                 };
             };
 
-            RegisterMethod("ping", (_) => "pong");
-            RegisterMethod("echo", (args) =>
+            // Handle the initialized notification (no response needed, but we should handle it)
+            RegisterMethod("notifications/initialized", (args) =>
             {
-                if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
-                    return messageProp.GetString() ?? "empty";
-                return "empty";
+                LogToStderr("Received initialized notification from client");
+                return new { };
             });
-            RegisterMethod("getTime", (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+
+            // Register built-in tools with proper MCP tool metadata
+            RegisterTool("ping",
+                "Returns 'pong' to verify server connectivity",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => "pong");
+
+            RegisterTool("echo",
+                "Echoes back the provided message",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        message = new
+                        {
+                            type = "string",
+                            description = "The message to echo back"
+                        }
+                    },
+                    required = new[] { "message" }
+                },
+                (args) =>
+                {
+                    if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
+                        return messageProp.GetString() ?? "empty";
+                    return "empty";
+                });
+
+            RegisterTool("getTime",
+                "Returns the current UTC time in ISO format",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
         }
 
         private async Task ProcessRequestAsync(StreamWriter stdout, string requestString, CancellationToken token = default)
