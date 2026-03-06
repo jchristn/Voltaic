@@ -83,7 +83,7 @@
         private readonly int _Port;
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Clients;
-        private readonly Dictionary<string, Func<JsonElement?, object>> _Methods;
+        private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
         private int _ClientIdCounter = 0;
         private string _DefaultContentType = "application/json; charset=utf-8";
         private int _MaxQueueSize = 100;
@@ -102,37 +102,67 @@
             _Ip = ip;
             _Port = port;
             _Clients = new ConcurrentDictionary<string, ClientConnection>();
-            _Methods = new Dictionary<string, Func<JsonElement?, object>>();
+            _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
 
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
 
         /// <summary>
-        /// Registers a custom RPC method with the specified handler.
+        /// Registers a custom RPC method with the specified synchronous handler.
+        /// The handler is wrapped internally to support async invocation.
         /// </summary>
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The function that handles the method invocation.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<JsonElement?, object> handler)
         {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _Methods[name] = (args, _) => Task.FromResult(handler(args));
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler.
+        /// Use this overload when the handler needs to perform asynchronous operations such as
+        /// database queries, HTTP calls, or file I/O.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _Methods[name] = (args, _) => handler(args);
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+        /// Use this overload when the handler needs to perform cancellable asynchronous operations.
+        /// The cancellation token provided to the handler is the same token used by the server's connection processing.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = handler;
         }
 
         /// <summary>
-        /// Attempts to invoke a registered method by name with the given parameters.
+        /// Attempts to invoke a registered method by name with the given parameters asynchronously.
         /// </summary>
         /// <param name="methodName">The name of the method to invoke.</param>
         /// <param name="parameters">The parameters to pass to the method.</param>
-        /// <param name="result">The result of the method invocation if successful.</param>
-        /// <returns>True if the method was found and invoked successfully; otherwise, false.</returns>
-        protected bool TryInvokeMethod(string methodName, JsonElement? parameters, out object? result)
+        /// <param name="token">Cancellation token to pass to the method handler.</param>
+        /// <returns>A tuple indicating whether the method was found and the result of invocation.</returns>
+        protected async Task<(bool Success, object? Result)> TryInvokeMethodAsync(string methodName, JsonElement? parameters, CancellationToken token = default)
         {
-            result = null;
             if (_Methods.ContainsKey(methodName))
             {
-                result = _Methods[methodName](parameters);
-                return true;
+                object result = await _Methods[methodName](parameters, token).ConfigureAwait(false);
+                return (true, result);
             }
-            return false;
+            return (false, null);
         }
 
         /// <summary>
@@ -397,7 +427,7 @@
                             paramsElement = jsonElement;
                         }
 
-                        object result = _Methods[request.Method](paramsElement);
+                        object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
                         response = new JsonRpcResponse
                         {
                             Result = result,

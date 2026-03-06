@@ -123,6 +123,16 @@ namespace Sample.McpServer
 
         private static readonly Func<JsonElement?, object> _PingHandler = (_) => "pong";
 
+        // Async handler with cancellation support
+        private static readonly Func<JsonElement?, CancellationToken, Task<object>> _SlowComputeHandler = async (args, token) =>
+        {
+            double value = 0;
+            if (args.HasValue && args.Value.TryGetProperty("value", out JsonElement valueProp))
+                value = valueProp.GetDouble();
+            await Task.Delay(500, token);
+            return (object)(value * value);
+        };
+
         static async Task Main(string[] args)
         {
             Console.WriteLine("=== Voltaic MCP Sample Server ===");
@@ -320,6 +330,20 @@ namespace Sample.McpServer
                     required = new string[] { }
                 },
                 _PingHandler);
+
+            server.RegisterTool(
+                "slowCompute",
+                "Performs a slow computation (demonstrates async handler with cancellation support)",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        value = new { type = "number", description = "The input value to square" }
+                    },
+                    required = new[] { "value" }
+                },
+                _SlowComputeHandler);
         }
 
         private static void RegisterTcpMethods(McpTcpServer server)
@@ -440,6 +464,9 @@ namespace Sample.McpServer
 
             // ping method
             server.RegisterMethod("ping", (_) => "pong");
+
+            // async method with cancellation support
+            server.RegisterMethod("slowCompute", _SlowComputeHandler);
         }
 
         private static void RegisterWebSocketMethods(McpWebsocketsServer server)
@@ -560,6 +587,9 @@ namespace Sample.McpServer
 
             // ping method
             server.RegisterMethod("ping", (_) => "pong");
+
+            // async method with cancellation support
+            server.RegisterMethod("slowCompute", _SlowComputeHandler);
         }
     }
 }

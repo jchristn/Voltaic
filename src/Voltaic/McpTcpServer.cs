@@ -90,7 +90,7 @@ namespace Voltaic
                 };
             });
 
-            RegisterMethod("tools/call", (args) =>
+            RegisterMethod("tools/call", async (args, token) =>
             {
                 // MCP tools/call handler - invokes a tool by name with arguments
                 if (!args.HasValue)
@@ -114,7 +114,8 @@ namespace Voltaic
                 }
 
                 // Invoke the method directly (tools are registered as methods in this server)
-                if (!TryInvokeMethod(toolName, toolArguments, out object? result))
+                (bool success, object? result) = await TryInvokeMethodAsync(toolName, toolArguments, token).ConfigureAwait(false);
+                if (!success)
                 {
                     throw new ArgumentException($"Tool '{toolName}' not found");
                 }
@@ -127,7 +128,7 @@ namespace Voltaic
                         new
                         {
                             type = "text",
-                            text = result?.ToString() ?? string.Empty
+                            text = JsonSerializer.Serialize(result)
                         }
                     }
                 };

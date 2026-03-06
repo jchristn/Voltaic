@@ -54,6 +54,16 @@ namespace Test.McpServer
                 return x * y;
             });
 
+            // Register an async method with cancellation support
+            server.RegisterMethod("asyncLookup", async (JsonElement? args, CancellationToken token) =>
+            {
+                string key = "default";
+                if (args.HasValue && args.Value.TryGetProperty("key", out JsonElement keyProp))
+                    key = keyProp.GetString() ?? "default";
+                await Task.Delay(100, token);
+                return (object)$"value-for-{key}";
+            });
+
             // Run server (blocks until stdin closes or Ctrl+C)
             CancellationTokenSource cts = new CancellationTokenSource();
             Console.CancelKeyPress += (sender, e) =>

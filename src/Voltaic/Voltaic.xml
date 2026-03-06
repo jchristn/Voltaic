@@ -679,19 +679,41 @@
         </member>
         <member name="M:Voltaic.JsonRpcServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
             <summary>
-            Registers a custom RPC method with the specified handler.
+            Registers a custom RPC method with the specified synchronous handler.
+            The handler is wrapped internally to support async invocation.
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The function that handles the method invocation.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.JsonRpcServer.TryInvokeMethod(System.String,System.Nullable{System.Text.Json.JsonElement},System.Object@)">
+        <member name="M:Voltaic.JsonRpcServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
             <summary>
-            Attempts to invoke a registered method by name with the given parameters.
+            Registers a custom RPC method with the specified asynchronous handler.
+            Use this overload when the handler needs to perform asynchronous operations such as
+            database queries, HTTP calls, or file I/O.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+            Use this overload when the handler needs to perform cancellable asynchronous operations.
+            The cancellation token provided to the handler is the same token used by the server's connection processing.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.JsonRpcServer.TryInvokeMethodAsync(System.String,System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken)">
+            <summary>
+            Attempts to invoke a registered method by name with the given parameters asynchronously.
             </summary>
             <param name="methodName">The name of the method to invoke.</param>
             <param name="parameters">The parameters to pass to the method.</param>
-            <param name="result">The result of the method invocation if successful.</param>
-            <returns>True if the method was found and invoked successfully; otherwise, false.</returns>
+            <param name="token">Cancellation token to pass to the method handler.</param>
+            <returns>A tuple indicating whether the method was found and the result of invocation.</returns>
         </member>
         <member name="M:Voltaic.JsonRpcServer.StartAsync(System.Threading.CancellationToken)">
             <summary>
@@ -1032,21 +1054,67 @@
         </member>
         <member name="M:Voltaic.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
             <summary>
-            Registers a custom RPC method with the specified handler.
+            Registers a custom RPC method with the specified synchronous handler.
+            The handler is wrapped internally to support async invocation.
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method with the specified asynchronous handler.
+            Use this overload when the handler needs to perform asynchronous operations such as
+            database queries, HTTP calls, or file I/O.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+            Use this overload when the handler needs to perform cancellable asynchronous operations.
+            The cancellation token provided to the handler is the same token used by the server's request processing.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
         <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
             <summary>
-            Registers a tool with metadata for MCP protocol tool discovery.
+            Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
             This registers both the method handler and the tool definition for tools/list.
             </summary>
             <param name="name">The name of the tool.</param>
             <param name="description">A description of what the tool does.</param>
             <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
             <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
+            This registers both the method handler and the tool definition for tools/list.
+            Use this overload when the handler needs to perform asynchronous operations such as
+            database queries, HTTP calls, or file I/O.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
+            This registers both the method handler and the tool definition for tools/list.
+            Use this overload when the handler needs to perform cancellable asynchronous operations.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
         <member name="M:Voltaic.McpHttpServer.StartAsync(System.Threading.CancellationToken)">
@@ -1137,10 +1205,32 @@
         </member>
         <member name="M:Voltaic.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
             <summary>
-            Registers a custom RPC method with the specified handler.
+            Registers a custom RPC method with the specified synchronous handler.
+            The handler is wrapped internally to support async invocation.
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The function that handles the method invocation.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method with the specified asynchronous handler.
+            Use this overload when the handler needs to perform asynchronous operations such as
+            database queries, HTTP calls, or file I/O.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+            Use this overload when the handler needs to perform cancellable asynchronous operations.
+            The cancellation token provided to the handler is the same token used by the server's request processing.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
         <member name="M:Voltaic.McpServer.RunAsync(System.Threading.CancellationToken)">
             <summary>
@@ -1385,10 +1475,31 @@
         </member>
         <member name="M:Voltaic.McpWebsocketsServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
             <summary>
-            Registers a custom RPC method with the specified handler.
+            Registers a custom RPC method with the specified synchronous handler.
+            The handler is wrapped internally to support async invocation.
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method with the specified asynchronous handler.
+            Use this overload when the handler needs to perform asynchronous operations such as
+            database queries, HTTP calls, or file I/O.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+            Use this overload when the handler needs to perform cancellable asynchronous operations.
+            The cancellation token provided to the handler is the same token used by the server's connection processing.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
         <member name="M:Voltaic.McpWebsocketsServer.StartAsync(System.Threading.CancellationToken)">

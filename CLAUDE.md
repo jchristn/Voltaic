@@ -78,7 +78,7 @@ The implementation follows JSON-RPC 2.0 specification:
 - Uses `TcpListener` to accept connections on a specified port
 - Maintains concurrent connections in a `ConcurrentDictionary<string, ClientConnection>`
 - Each client is assigned a unique ID (`client_1`, `client_2`, etc.)
-- Methods are registered via `RegisterMethod(name, handler)` where handler is `Func<JsonElement?, object>`
+- Methods are registered via `RegisterMethod(name, handler)` with both sync (`Func<JsonElement?, object>`) and async (`Func<JsonElement?, Task<object>>`) overloads. Sync handlers are wrapped internally via `Task.FromResult()`.
 - Built-in methods: `echo`, `getTime`, `add`, `getClients`, `ping`
 - Supports broadcasting notifications to all connected clients via `BroadcastNotificationAsync()`
 - Responses are only sent for requests with an `id` (not for notifications)

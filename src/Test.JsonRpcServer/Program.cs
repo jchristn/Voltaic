@@ -3,6 +3,7 @@
     using System;
     using System.Net;
     using System.Text.Json;
+    using System.Threading;
     using System.Threading.Tasks;
     using Voltaic;
 
@@ -73,6 +74,16 @@
                         y = yProp.GetDouble();
                 }
                 return x * y;
+            });
+
+            // Register an async method with cancellation support
+            server.RegisterMethod("slowGreet", async (JsonElement? args, CancellationToken token) =>
+            {
+                string name = "World";
+                if (args.HasValue && args.Value.TryGetProperty("name", out JsonElement nameProp))
+                    name = nameProp.GetString() ?? "World";
+                await Task.Delay(1000, token);
+                return (object)$"Hello (slowly), {name}!";
             });
 
             // Start server in background

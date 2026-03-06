@@ -14,7 +14,7 @@ namespace Voltaic
     /// </summary>
     public class McpServer : IDisposable
     {
-        private readonly Dictionary<string, Func<JsonElement?, object>> _Methods;
+        private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
 
         /// <summary>
         /// Occurs when a log message is generated.
@@ -27,17 +27,48 @@ namespace Voltaic
         /// <param name="includeDefaultMethods">True to include default methods such as echo, ping, and getTime.</param>
         public McpServer(bool includeDefaultMethods = true)
         {
-            _Methods = new Dictionary<string, Func<JsonElement?, object>>();
+            _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
 
         /// <summary>
-        /// Registers a custom RPC method with the specified handler.
+        /// Registers a custom RPC method with the specified synchronous handler.
+        /// The handler is wrapped internally to support async invocation.
         /// </summary>
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The function that handles the method invocation.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<JsonElement?, object> handler)
         {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _Methods[name] = (args, _) => Task.FromResult(handler(args));
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler.
+        /// Use this overload when the handler needs to perform asynchronous operations such as
+        /// database queries, HTTP calls, or file I/O.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _Methods[name] = (args, _) => handler(args);
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+        /// Use this overload when the handler needs to perform cancellable asynchronous operations.
+        /// The cancellation token provided to the handler is the same token used by the server's request processing.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = handler;
         }
 
@@ -89,7 +120,7 @@ namespace Voltaic
 
         private void RegisterBuiltInMethods()
         {
-            _Methods["tools/call"] = (args) =>
+            _Methods["tools/call"] = async (args, token) =>
             {
                 // MCP tools/call handler - invokes a tool by name with arguments
                 if (!args.HasValue)
@@ -118,7 +149,7 @@ namespace Voltaic
                     throw new ArgumentException($"Tool '{toolName}' not found");
                 }
 
-                object result = _Methods[toolName](toolArguments);
+                object result = await _Methods[toolName](toolArguments, token).ConfigureAwait(false);
 
                 // Return result in MCP format with content array
                 return new
@@ -128,20 +159,20 @@ namespace Voltaic
                         new
                         {
                             type = "text",
-                            text = result.ToString()
+                            text = JsonSerializer.Serialize(result)
                         }
                     }
                 };
             };
 
-            _Methods["ping"] = (_) => "pong";
-            _Methods["echo"] = (args) =>
+            RegisterMethod("ping", (_) => "pong");
+            RegisterMethod("echo", (args) =>
             {
                 if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
                     return messageProp.GetString() ?? "empty";
                 return "empty";
-            };
-            _Methods["getTime"] = (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+            });
+            RegisterMethod("getTime", (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
         }
 
         private async Task ProcessRequestAsync(StreamWriter stdout, string requestString, CancellationToken token = default)
@@ -176,7 +207,7 @@ namespace Voltaic
                             {
                                 paramsElement = jsonElement;
                             }
-                            _Methods[request.Method](paramsElement);
+                            await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
@@ -198,7 +229,7 @@ namespace Voltaic
                             paramsElement = jsonElement;
                         }
 
-                        object result = _Methods[request.Method](paramsElement);
+                        object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
                         response = new JsonRpcResponse
                         {
                             Result = result,

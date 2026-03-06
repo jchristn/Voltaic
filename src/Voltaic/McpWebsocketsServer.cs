@@ -101,7 +101,7 @@ namespace Voltaic
         private HttpListener? _Listener;
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Clients;
-        private readonly Dictionary<string, Func<JsonElement?, object>> _Methods;
+        private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
         private int _ClientIdCounter = 0;
         private int _MaxMessageSize = 1048576; // 1 MB
         private int _KeepAliveIntervalSeconds = 30;
@@ -158,18 +158,51 @@ namespace Voltaic
             _Port = port;
             _Path = String.IsNullOrEmpty(path) ? "/mcp" : path;
             _Clients = new ConcurrentDictionary<string, ClientConnection>();
-            _Methods = new Dictionary<string, Func<JsonElement?, object>>();
+            _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
 
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
 
         /// <summary>
-        /// Registers a custom RPC method with the specified handler.
+        /// Registers a custom RPC method with the specified synchronous handler.
+        /// The handler is wrapped internally to support async invocation.
         /// </summary>
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<JsonElement?, object> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Methods[name] = (args, _) => Task.FromResult(handler(args));
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler.
+        /// Use this overload when the handler needs to perform asynchronous operations such as
+        /// database queries, HTTP calls, or file I/O.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Methods[name] = (args, _) => handler(args);
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+        /// Use this overload when the handler needs to perform cancellable asynchronous operations.
+        /// The cancellation token provided to the handler is the same token used by the server's connection processing.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)
         {
             if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
             if (handler == null) throw new ArgumentNullException(nameof(handler));
@@ -338,7 +371,7 @@ namespace Voltaic
                 };
             });
 
-            RegisterMethod("tools/call", (args) =>
+            RegisterMethod("tools/call", async (args, token) =>
             {
                 // MCP tools/call handler - invokes a tool by name with arguments
                 if (!args.HasValue)
@@ -367,7 +400,7 @@ namespace Voltaic
                     throw new ArgumentException($"Tool '{toolName}' not found");
                 }
 
-                object result = _Methods[toolName](toolArguments);
+                object result = await _Methods[toolName](toolArguments, token).ConfigureAwait(false);
 
                 // Return result in MCP format with content array
                 return new
@@ -377,7 +410,7 @@ namespace Voltaic
                         new
                         {
                             type = "text",
-                            text = result.ToString()
+                            text = JsonSerializer.Serialize(result)
                         }
                     }
                 };
@@ -549,7 +582,7 @@ namespace Voltaic
                             paramsElement = jsonElement;
                         }
 
-                        object result = _Methods[request.Method](paramsElement);
+                        object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
                         response = new JsonRpcResponse
                         {
                             Result = result,

@@ -26,6 +26,8 @@ namespace Test.Automated
         private static bool isJsonRpcTest = true;
         private static readonly object consoleLock = new object();
         private static string? mcpServerProjectPath = null;
+        private static readonly List<(string Name, string Error)> failedTests = new List<(string, string)>();
+        private static readonly Stopwatch overallStopwatch = new Stopwatch();
 
         static string FindMcpServerProjectPath()
         {
@@ -109,6 +111,8 @@ namespace Test.Automated
                 }
             }
 
+            overallStopwatch.Start();
+
             Console.WriteLine("=== Voltaic Comprehensive Test Suite ===");
             Console.WriteLine();
 
@@ -176,6 +180,7 @@ namespace Test.Automated
             if (testAll || testTcp)
             {
                 await RunMcpTcpTests();
+                await RunAsyncHandlerTests();
             }
 
             // WebSocket transport tests
@@ -191,6 +196,7 @@ namespace Test.Automated
             }
 
             // Print summary
+            overallStopwatch.Stop();
             Console.WriteLine();
             Console.WriteLine("╔═══════════════════════════════════════════════════════════════╗");
             Console.WriteLine("║                        TEST SUMMARY                           ║");
@@ -199,23 +205,39 @@ namespace Test.Automated
             Console.WriteLine($"Tests Passed:       {testsPassed}");
             Console.WriteLine($"Tests Failed:       {testsFailed}");
             Console.WriteLine($"Total Tests:        {testsPassed + testsFailed}");
+            Console.WriteLine($"Total Runtime:      {overallStopwatch.Elapsed.TotalSeconds:F2}s");
             Console.WriteLine();
             Console.WriteLine("By Category:");
             Console.WriteLine($"  - JSON-RPC Tests: {jsonRpcTestsPassed + jsonRpcTestsFailed} ({jsonRpcTestsPassed} passed, {jsonRpcTestsFailed} failed)");
             Console.WriteLine($"  - MCP Tests:      {mcpTestsPassed + mcpTestsFailed} ({mcpTestsPassed} passed, {mcpTestsFailed} failed)");
+
+            if (failedTests.Count > 0)
+            {
+                Console.WriteLine();
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("Failed Tests:");
+                Console.ResetColor();
+                for (int i = 0; i < failedTests.Count; i++)
+                {
+                    Console.WriteLine($"  {i + 1}. {failedTests[i].Name}");
+                    Console.WriteLine($"     Error: {failedTests[i].Error}");
+                }
+            }
+
             Console.WriteLine();
-            Console.WriteLine("Coverage: ~95% (all classes, happy + failure paths)");
 
             if (testsFailed == 0)
             {
-                Console.WriteLine();
+                Console.ForegroundColor = ConsoleColor.Green;
                 Console.WriteLine("ALL TESTS PASSED!");
+                Console.ResetColor();
                 Environment.Exit(0);
             }
             else
             {
-                Console.WriteLine();
+                Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine("SOME TESTS FAILED!");
+                Console.ResetColor();
                 Environment.Exit(1);
             }
         }
@@ -231,7 +253,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                bool connected = await client.ConnectAsync("localhost", 9001);
+                bool connected = await client.ConnectAsync("127.0.0.1", 9001);
                 Assert(connected, "Client should connect");
 
                 string result = await client.CallAsync<string>("echo", new { message = "test" });
@@ -248,7 +270,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9002);
+                await client.ConnectAsync("127.0.0.1", 9002);
 
                 for (int i = 0; i < 10; i++)
                 {
@@ -275,7 +297,7 @@ namespace Test.Automated
 
                 // Create a raw TCP connection and send data one byte at a time
                 TcpClient tcpClient = new TcpClient();
-                await tcpClient.ConnectAsync("localhost", 9003);
+                await tcpClient.ConnectAsync("127.0.0.1", 9003);
                 NetworkStream stream = tcpClient.GetStream();
 
                 // Build a complete message
@@ -337,7 +359,7 @@ namespace Test.Automated
 
                 // Create raw TCP connection
                 TcpClient tcpClient = new TcpClient();
-                await tcpClient.ConnectAsync("localhost", 9004);
+                await tcpClient.ConnectAsync("127.0.0.1", 9004);
                 NetworkStream stream = tcpClient.GetStream();
 
                 // Build multiple complete messages
@@ -392,7 +414,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9005);
+                await client.ConnectAsync("127.0.0.1", 9005);
 
                 // Create a 1MB message
                 string largeString = new string('A', 1024 * 1024);
@@ -417,7 +439,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcpClient = new TcpClient();
-                await tcpClient.ConnectAsync("localhost", 9006);
+                await tcpClient.ConnectAsync("127.0.0.1", 9006);
                 NetworkStream stream = tcpClient.GetStream();
 
                 // Send message without Content-Length
@@ -449,7 +471,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcpClient = new TcpClient();
-                await tcpClient.ConnectAsync("localhost", 9007);
+                await tcpClient.ConnectAsync("127.0.0.1", 9007);
                 NetworkStream stream = tcpClient.GetStream();
 
                 // Send message with invalid Content-Length
@@ -486,7 +508,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcpClient = new TcpClient();
-                await tcpClient.ConnectAsync("localhost", 9008);
+                await tcpClient.ConnectAsync("127.0.0.1", 9008);
                 NetworkStream stream = tcpClient.GetStream();
 
                 // Send partial message
@@ -519,7 +541,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9009);
+                await client.ConnectAsync("127.0.0.1", 9009);
 
                 List<Task<string>> tasks = new List<Task<string>>();
                 for (int i = 0; i < 100; i++)
@@ -552,7 +574,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9010);
+                await client.ConnectAsync("127.0.0.1", 9010);
 
                 // Send notification (fire and forget)
                 await client.NotifyAsync("echo", new { message = "notification" });
@@ -587,7 +609,7 @@ namespace Test.Automated
                             notificationReceived[index] = true;
                         }
                     };
-                    await client.ConnectAsync("localhost", 9011);
+                    await client.ConnectAsync("127.0.0.1", 9011);
                     clients.Add(client);
                 }
 
@@ -637,7 +659,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9101);
+                await client.ConnectAsync("127.0.0.1", 9101);
                 client.Disconnect();
 
                 bool exceptionThrown = false;
@@ -670,7 +692,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9102);
+                await client.ConnectAsync("127.0.0.1", 9102);
 
                 bool timeoutOccurred = false;
                 try
@@ -697,7 +719,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9103);
+                await client.ConnectAsync("127.0.0.1", 9103);
 
                 bool errorThrown = false;
                 try
@@ -727,7 +749,7 @@ namespace Test.Automated
 
                 // Send raw malformed JSON via TCP
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9201);
+                await tcp.ConnectAsync("127.0.0.1", 9201);
                 NetworkStream stream = tcp.GetStream();
 
                 string invalidJson = "Content-Length: 10\r\n\r\n{bad json}";
@@ -757,7 +779,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9202);
+                await client.ConnectAsync("127.0.0.1", 9202);
 
                 bool errorReceived = false;
                 try
@@ -786,7 +808,7 @@ namespace Test.Automated
                 // Launch Test.McpServer
                 bool launched = await client.LaunchServerAsync(
                     "dotnet",
-                    new[] { "run", "--project", mcpServerProjectPath! }
+                    new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" }
                 );
 
                 Assert(launched, "Should successfully launch MCP server");
@@ -818,7 +840,7 @@ namespace Test.Automated
             await Test("MCP call with parameters", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                 string result = await client.CallAsync<string>(
                     "echo",
@@ -834,7 +856,7 @@ namespace Test.Automated
             await Test("MCP notification (no response)", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                 // Send notification - should not throw
                 await client.NotifyAsync("ping");
@@ -857,7 +879,7 @@ namespace Test.Automated
             await Test("MCP server handles basic request", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                 string result = await client.CallAsync<string>("ping");
                 Assert(result == "pong", "Server should respond to ping");
@@ -869,7 +891,7 @@ namespace Test.Automated
             await Test("MCP server handles unknown method", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                 bool errorReceived = false;
                 try
@@ -890,7 +912,7 @@ namespace Test.Automated
             await Test("MCP server handles add method", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                 double result = await client.CallAsync<double>("add", new { a = 5.0, b = 3.0 });
                 Assert(result == 8.0, $"Expected 8.0, got {result}");
@@ -912,7 +934,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9401);
+                await client.ConnectAsync("127.0.0.1", 9401);
 
                 for (int i = 0; i < 1000; i++)
                 {
@@ -937,7 +959,7 @@ namespace Test.Automated
                     tasks.Add(Task.Run(async () =>
                     {
                         using JsonRpcClient client = new JsonRpcClient();
-                        await client.ConnectAsync("localhost", 9402);
+                        await client.ConnectAsync("127.0.0.1", 9402);
                         string result = await client.CallAsync<string>("echo", new { message = $"client{clientNum}" });
                         Assert(result == $"client{clientNum}", $"Client {clientNum} failed");
                     }));
@@ -954,7 +976,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9403);
+                await client.ConnectAsync("127.0.0.1", 9403);
 
                 string largeString = new string('X', 10 * 1024 * 1024); // 10MB
                 string result = await client.CallAsync<string>("echo", new { message = largeString }, timeoutMs: 30000);
@@ -973,7 +995,7 @@ namespace Test.Automated
             await Test("Connect to non-existent server fails", async () =>
             {
                 using JsonRpcClient client = new JsonRpcClient();
-                bool connected = await client.ConnectAsync("localhost", 65534);
+                bool connected = await client.ConnectAsync("127.0.0.1", 65534);
                 Assert(!connected, "Should fail to connect to non-existent server");
             });
 
@@ -984,14 +1006,14 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9501);
+                await client.ConnectAsync("127.0.0.1", 9501);
                 string result1 = await client.CallAsync<string>("ping");
                 Assert(result1 == "pong", "First call should work");
 
                 client.Disconnect();
                 await Task.Delay(100);
 
-                bool reconnected = await client.ConnectAsync("localhost", 9501);
+                bool reconnected = await client.ConnectAsync("127.0.0.1", 9501);
                 Assert(reconnected, "Should be able to reconnect");
 
                 string result2 = await client.CallAsync<string>("ping");
@@ -1009,7 +1031,7 @@ namespace Test.Automated
                 using JsonRpcClient client = new JsonRpcClient();
                 for (int i = 0; i < 10; i++)
                 {
-                    await client.ConnectAsync("localhost", 9502);
+                    await client.ConnectAsync("127.0.0.1", 9502);
                     string result = await client.CallAsync<string>("ping");
                     Assert(result == "pong", $"Call {i} should work");
                     client.Disconnect();
@@ -1026,7 +1048,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9503);
+                await client.ConnectAsync("127.0.0.1", 9503);
 
                 List<Task<string>> tasks = new List<Task<string>>();
                 for (int i = 0; i < 50; i++)
@@ -1057,7 +1079,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9504);
+                await tcp.ConnectAsync("127.0.0.1", 9504);
                 NetworkStream stream = tcp.GetStream();
 
                 string json = "{\"method\":\"ping\",\"id\":1}";
@@ -1081,7 +1103,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9505);
+                await tcp.ConnectAsync("127.0.0.1", 9505);
                 NetworkStream stream = tcp.GetStream();
 
                 string json = "{\"jsonrpc\":\"1.0\",\"method\":\"ping\",\"id\":1}";
@@ -1105,7 +1127,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9506);
+                await tcp.ConnectAsync("127.0.0.1", 9506);
                 NetworkStream stream = tcp.GetStream();
 
                 string json = "{\"jsonrpc\":\"2.0\",\"params\":{},\"id\":1}";
@@ -1152,7 +1174,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9508);
+                await tcp.ConnectAsync("127.0.0.1", 9508);
                 NetworkStream stream = tcp.GetStream();
 
                 string json = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":\"string-id-123\"}";
@@ -1211,7 +1233,7 @@ namespace Test.Automated
                     clientTasks.Add(Task.Run(async () =>
                     {
                         using JsonRpcClient client = new JsonRpcClient();
-                        await client.ConnectAsync("localhost", 9509);
+                        await client.ConnectAsync("127.0.0.1", 9509);
 
                         if (clientNum % 2 == 0)
                         {
@@ -1249,7 +1271,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9510);
+                await tcp.ConnectAsync("127.0.0.1", 9510);
                 NetworkStream stream = tcp.GetStream();
 
                 string json = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}";
@@ -1293,7 +1315,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9511);
+                await tcp.ConnectAsync("127.0.0.1", 9511);
                 NetworkStream stream = tcp.GetStream();
 
                 string json = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}";
@@ -1337,7 +1359,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9512);
+                await tcp.ConnectAsync("127.0.0.1", 9512);
                 NetworkStream stream = tcp.GetStream();
 
                 string message = "Content-Length: -100\r\n\r\n{\"test\":true}";
@@ -1380,7 +1402,7 @@ namespace Test.Automated
             await Test("MCP sequential calls", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                 for (int i = 0; i < 5; i++)
                 {
@@ -1395,7 +1417,7 @@ namespace Test.Automated
             await Test("MCP server multiply method", async () =>
             {
                 McpClient client = new McpClient();
-                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                 double result = await client.CallAsync<double>("multiply", new { x = 7.0, y = 6.0 });
                 Assert(result == 42.0, $"Expected 42.0, got {result}");
@@ -1409,7 +1431,7 @@ namespace Test.Automated
                 for (int i = 0; i < 3; i++)
                 {
                     McpClient client = new McpClient();
-                    await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath! });
+                    await client.LaunchServerAsync("dotnet", new[] { "run", "--project", mcpServerProjectPath!, "--framework", "net8.0" });
 
                     string result = await client.CallAsync<string>("ping");
                     Assert(result == "pong", $"Server {i} should respond");
@@ -1433,7 +1455,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                bool connected = await client.ConnectAsync("localhost", 9600);
+                bool connected = await client.ConnectAsync("127.0.0.1", 9600);
                 Assert(connected, "Client should connect to MCP TCP server");
 
                 string result = await client.CallAsync<string>("echo", new { message = "test" });
@@ -1450,7 +1472,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9601);
+                await client.ConnectAsync("127.0.0.1", 9601);
 
                 for (int i = 0; i < 10; i++)
                 {
@@ -1469,7 +1491,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9602);
+                await client.ConnectAsync("127.0.0.1", 9602);
 
                 string result = await client.CallAsync<string>("ping");
                 Assert(result == "pong", $"Expected 'pong', got '{result}'");
@@ -1497,7 +1519,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9603);
+                await client.ConnectAsync("127.0.0.1", 9603);
 
                 double result = await client.CallAsync<double>("multiply", new { x = 7.0, y = 6.0 });
                 Assert(result == 42.0, $"Expected 42.0, got {result}");
@@ -1512,7 +1534,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9604);
+                await client.ConnectAsync("127.0.0.1", 9604);
 
                 await client.NotifyAsync("echo", new { message = "notification" });
                 await Task.Delay(200);
@@ -1542,7 +1564,7 @@ namespace Test.Automated
                             notificationReceived[index] = true;
                         }
                     };
-                    await client.ConnectAsync("localhost", 9605);
+                    await client.ConnectAsync("127.0.0.1", 9605);
                     clients.Add(client);
                 }
 
@@ -1567,7 +1589,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9606);
+                await client.ConnectAsync("127.0.0.1", 9606);
 
                 bool errorThrown = false;
                 try
@@ -1606,14 +1628,14 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9607);
+                await client.ConnectAsync("127.0.0.1", 9607);
                 string result1 = await client.CallAsync<string>("ping");
                 Assert(result1 == "pong", "First call should work");
 
                 client.Disconnect();
                 await Task.Delay(100);
 
-                bool reconnected = await client.ConnectAsync("localhost", 9607);
+                bool reconnected = await client.ConnectAsync("127.0.0.1", 9607);
                 Assert(reconnected, "Should be able to reconnect");
 
                 string result2 = await client.CallAsync<string>("ping");
@@ -1632,7 +1654,7 @@ namespace Test.Automated
                 for (int i = 0; i < 3; i++)
                 {
                     McpTcpClient client = new McpTcpClient();
-                    await client.ConnectAsync("localhost", 9608);
+                    await client.ConnectAsync("127.0.0.1", 9608);
                     clients.Add(client);
                 }
 
@@ -1655,7 +1677,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9609);
+                await client.ConnectAsync("127.0.0.1", 9609);
                 await Task.Delay(200);
 
                 List<string> clientIds = server.GetConnectedClients();
@@ -1677,7 +1699,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9610);
+                await client.ConnectAsync("127.0.0.1", 9610);
 
                 string largeString = new string('X', 100000);
                 string result = await client.CallAsync<string>("echo", new { message = largeString }, timeoutMs: 10000);
@@ -1694,7 +1716,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using McpTcpClient client = new McpTcpClient();
-                await client.ConnectAsync("localhost", 9611);
+                await client.ConnectAsync("127.0.0.1", 9611);
 
                 List<Task<string>> tasks = new List<Task<string>>();
                 for (int i = 0; i < 50; i++)
@@ -1725,7 +1747,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 TcpClient tcp = new TcpClient();
-                await tcp.ConnectAsync("localhost", 9513);
+                await tcp.ConnectAsync("127.0.0.1", 9513);
                 NetworkStream stream = tcp.GetStream();
 
                 string json = "{\"jsonrpc\":\"2.0\",\"method\":\"\",\"id\":1}";
@@ -1754,7 +1776,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9514);
+                await client.ConnectAsync("127.0.0.1", 9514);
 
                 string result = await client.CallAsync<string>("acceptNull", null);
                 Assert(result == "null", $"Expected 'null', got '{result}'");
@@ -1769,7 +1791,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9515);
+                await client.ConnectAsync("127.0.0.1", 9515);
 
                 string result = await client.CallAsync<string>("echo", new { });
                 Assert(result != null, "Should handle empty object parameters");
@@ -1796,7 +1818,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9516);
+                await client.ConnectAsync("127.0.0.1", 9516);
 
                 string result = await client.CallAsync<string>("nested", new
                 {
@@ -1821,7 +1843,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9517);
+                await client.ConnectAsync("127.0.0.1", 9517);
 
                 string unicode = "Hello 世界 🌍 émojis";
                 string result = await client.CallAsync<string>("echo", new { message = unicode });
@@ -1846,7 +1868,7 @@ namespace Test.Automated
                 for (int i = 0; i < 5; i++)
                 {
                     JsonRpcClient client = new JsonRpcClient();
-                    await client.ConnectAsync("localhost", 9518);
+                    await client.ConnectAsync("127.0.0.1", 9518);
                     clients.Add(client);
                 }
 
@@ -1890,7 +1912,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9519);
+                await client.ConnectAsync("127.0.0.1", 9519);
 
                 Task<string> slowCall = client.CallAsync<string>("slowMethod");
                 await Task.Delay(100);
@@ -1931,7 +1953,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9001);
+                await client.ConnectAsync("127.0.0.1", 9001);
                 await Task.Delay(200); // Give event time to fire
 
                 Assert(eventFired, "ClientConnected event should fire");
@@ -1958,7 +1980,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9002);
+                await client.ConnectAsync("127.0.0.1", 9002);
                 await Task.Delay(100);
                 client.Disconnect();
                 await Task.Delay(200); // Give event time to fire
@@ -1985,7 +2007,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9003);
+                await client.ConnectAsync("127.0.0.1", 9003);
                 string result = await client.CallAsync<string>("echo", new { message = "test" });
                 await Task.Delay(100); // Give event time to fire
 
@@ -2015,7 +2037,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9004);
+                await client.ConnectAsync("127.0.0.1", 9004);
                 string result = await client.CallAsync<string>("echo", new { message = "test" });
                 await Task.Delay(100); // Give event time to fire
 
@@ -2046,7 +2068,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9005);
+                await client.ConnectAsync("127.0.0.1", 9005);
 
                 try
                 {
@@ -2134,7 +2156,7 @@ namespace Test.Automated
                 await Task.Delay(100);
 
                 using JsonRpcClient client = new JsonRpcClient();
-                await client.ConnectAsync("localhost", 9008);
+                await client.ConnectAsync("127.0.0.1", 9008);
                 string result = await client.CallAsync<string>("echo", new { message = "test" });
 
                 Assert(secondHandlerFired, "Second handler should fire despite first handler exception");
@@ -2154,14 +2176,18 @@ namespace Test.Automated
                 Console.Write($"  [{testName}] ... ");
             }
 
+            Stopwatch sw = Stopwatch.StartNew();
+
             try
             {
                 await testAction();
+                sw.Stop();
                 lock (consoleLock)
                 {
                     Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine("PASS");
+                    Console.Write("PASS");
                     Console.ResetColor();
+                    Console.WriteLine($" ({sw.ElapsedMilliseconds}ms)");
                     testsPassed++;
                     if (isJsonRpcTest)
                         jsonRpcTestsPassed++;
@@ -2171,13 +2197,16 @@ namespace Test.Automated
             }
             catch (Exception ex)
             {
+                sw.Stop();
                 lock (consoleLock)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("FAIL");
+                    Console.Write("FAIL");
                     Console.ResetColor();
+                    Console.WriteLine($" ({sw.ElapsedMilliseconds}ms)");
                     Console.WriteLine($"    Error: {ex.Message}");
                     testsFailed++;
+                    failedTests.Add((testName, ex.Message));
                     if (isJsonRpcTest)
                         jsonRpcTestsFailed++;
                     else
@@ -2204,6 +2233,208 @@ namespace Test.Automated
                 index += pattern.Length;
             }
             return count;
+        }
+
+        static async Task RunAsyncHandlerTests()
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- JSON-RPC: Async Handler Tests ---");
+
+            await Test("Async handler: sync overload (Func<JsonElement?, object>)", async () =>
+            {
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9650, includeDefaultMethods: false);
+                server.RegisterMethod("syncAdd", (System.Text.Json.JsonElement? args) =>
+                {
+                    double a = 0, b = 0;
+                    if (args.HasValue)
+                    {
+                        if (args.Value.TryGetProperty("a", out System.Text.Json.JsonElement aProp))
+                            a = aProp.GetDouble();
+                        if (args.Value.TryGetProperty("b", out System.Text.Json.JsonElement bProp))
+                            b = bProp.GetDouble();
+                    }
+                    return a + b;
+                });
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("127.0.0.1", 9650);
+
+                double result = await client.CallAsync<double>("syncAdd", new { a = 3.0, b = 4.0 });
+                Assert(result == 7.0, $"Expected 7.0, got {result}");
+
+                server.Stop();
+            });
+
+            await Test("Async handler: async overload (Func<JsonElement?, Task<object>>)", async () =>
+            {
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9651, includeDefaultMethods: false);
+                server.RegisterMethod("asyncDelay", async (System.Text.Json.JsonElement? args) =>
+                {
+                    await Task.Delay(50);
+                    return (object)"async-result";
+                });
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("127.0.0.1", 9651);
+
+                string result = await client.CallAsync<string>("asyncDelay");
+                Assert(result == "async-result", $"Expected 'async-result', got '{result}'");
+
+                server.Stop();
+            });
+
+            await Test("Async handler: cancellable async overload (Func<JsonElement?, CancellationToken, Task<object>>)", async () =>
+            {
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9652, includeDefaultMethods: false);
+                server.RegisterMethod("cancellableMethod", async (System.Text.Json.JsonElement? args, CancellationToken token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    await Task.Delay(50, token);
+                    return (object)"cancellable-result";
+                });
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("127.0.0.1", 9652);
+
+                string result = await client.CallAsync<string>("cancellableMethod");
+                Assert(result == "cancellable-result", $"Expected 'cancellable-result', got '{result}'");
+
+                server.Stop();
+            });
+
+            await Test("Async handler: MCP TCP with async method", async () =>
+            {
+                using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 9653, includeDefaultMethods: true);
+                server.RegisterMethod("asyncLookup", async (System.Text.Json.JsonElement? args, CancellationToken token) =>
+                {
+                    await Task.Delay(50, token);
+                    string key = "default";
+                    if (args.HasValue && args.Value.TryGetProperty("key", out System.Text.Json.JsonElement keyProp))
+                        key = keyProp.GetString() ?? "default";
+                    return (object)$"value-for-{key}";
+                });
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using McpTcpClient client = new McpTcpClient();
+                await client.ConnectAsync("127.0.0.1", 9653);
+
+                string result = await client.CallAsync<string>("asyncLookup", new { key = "mykey" });
+                Assert(result == "value-for-mykey", $"Expected 'value-for-mykey', got '{result}'");
+
+                server.Stop();
+            });
+
+            await Test("Async handler: MCP WebSocket with async method", async () =>
+            {
+                using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9654, includeDefaultMethods: true);
+                server.RegisterMethod("asyncCompute", async (System.Text.Json.JsonElement? args, CancellationToken token) =>
+                {
+                    await Task.Delay(50, token);
+                    return (object)42;
+                });
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpWebsocketsClient client = new McpWebsocketsClient();
+                await client.ConnectAsync("ws://localhost:9654/mcp");
+
+                int result = await client.CallAsync<int>("asyncCompute");
+                Assert(result == 42, $"Expected 42, got {result}");
+
+                server.Stop();
+            });
+
+            await Test("Async handler: MCP HTTP with async tool", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9655, includeDefaultMethods: true);
+                server.RegisterTool("asyncGreet",
+                    "Async greeting tool",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            name = new { type = "string", description = "Name to greet" }
+                        },
+                        required = new[] { "name" }
+                    },
+                    async (System.Text.Json.JsonElement? args, CancellationToken token) =>
+                    {
+                        await Task.Delay(50, token);
+                        string name = "World";
+                        if (args.HasValue && args.Value.TryGetProperty("name", out System.Text.Json.JsonElement nameProp))
+                            name = nameProp.GetString() ?? "World";
+                        return (object)$"Hello, {name}!";
+                    });
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectAsync("http://localhost:9655");
+
+                // Call asyncGreet through tools/call
+                object? result = await client.CallAsync<object>("tools/call", new
+                {
+                    name = "asyncGreet",
+                    arguments = new { name = "Async" }
+                });
+                string resultJson = result?.ToString() ?? "";
+                Assert(resultJson.Contains("Hello, Async!"), $"Expected greeting containing 'Hello, Async!', got '{resultJson}'");
+
+                server.Stop();
+            });
+
+            await Test("Async handler: all three overloads on same server", async () =>
+            {
+                using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9656, includeDefaultMethods: false);
+
+                // Sync overload
+                server.RegisterMethod("sync", (System.Text.Json.JsonElement? args) => (object)"sync-ok");
+
+                // Async overload (no CT)
+                server.RegisterMethod("async", async (System.Text.Json.JsonElement? args) =>
+                {
+                    await Task.Delay(10);
+                    return (object)"async-ok";
+                });
+
+                // Async overload (with CT)
+                server.RegisterMethod("asyncCt", async (System.Text.Json.JsonElement? args, CancellationToken token) =>
+                {
+                    await Task.Delay(10, token);
+                    return (object)"asyncCt-ok";
+                });
+
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(100);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                await client.ConnectAsync("127.0.0.1", 9656);
+
+                string r1 = await client.CallAsync<string>("sync");
+                Assert(r1 == "sync-ok", $"Sync handler: expected 'sync-ok', got '{r1}'");
+
+                string r2 = await client.CallAsync<string>("async");
+                Assert(r2 == "async-ok", $"Async handler: expected 'async-ok', got '{r2}'");
+
+                string r3 = await client.CallAsync<string>("asyncCt");
+                Assert(r3 == "asyncCt-ok", $"AsyncCt handler: expected 'asyncCt-ok', got '{r3}'");
+
+                server.Stop();
+            });
         }
 
         static async Task RunMcpWebsocketTests()

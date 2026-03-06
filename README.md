@@ -4,9 +4,9 @@
 
 # Voltaic
 
-[![NuGet](https://img.shields.io/nuget/v/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![Downloads](https://img.shields.io/nuget/dt/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md) [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4.svg)](https://dotnet.microsoft.com/)
+[![NuGet](https://img.shields.io/nuget/v/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![Downloads](https://img.shields.io/nuget/dt/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md) [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4.svg)](https://dotnet.microsoft.com/)
 
-**Modern, lightweight JSON-RPC 2.0 and MCP implementations for .NET 8.0**
+**Modern, lightweight JSON-RPC 2.0 and MCP implementations for .NET 8.0 and .NET 10.0**
 
 Voltaic provides client and server implementations for JSON-RPC 2.0 and the Model Context Protocol (MCP). Whether you're building microservices, AI integrations, or distributed systems—Voltaic gives you the tools to communicate clearly and reliably.
 
@@ -93,13 +93,29 @@ server.RequestReceived += (sender, e) =>
 server.ResponseSent += (sender, e) =>
     Console.WriteLine($"Response: {e.Method} took {e.Duration.TotalMilliseconds}ms");
 
-// Register custom methods
+// Register a synchronous method
 server.RegisterMethod("greet", (JsonElement? args) =>
 {
     string? name = args?.TryGetProperty("name", out JsonElement nameEl) == true
         ? nameEl.GetString()
         : "World";
     return $"Hello, {name}!";
+});
+
+// Register an asynchronous method (for I/O-bound work like DB queries, HTTP calls, etc.)
+server.RegisterMethod("fetchData", async (JsonElement? args) =>
+{
+    // Async handlers avoid blocking the thread pool
+    await Task.Delay(100); // Simulate async work
+    return (object)"async result";
+});
+
+// Register an async method with cancellation support
+server.RegisterMethod("longRunningTask", async (JsonElement? args, CancellationToken token) =>
+{
+    // The token is the server's connection processing token
+    await Task.Delay(5000, token); // Cancels if client disconnects
+    return (object)"completed";
 });
 
 // Start the server
@@ -353,7 +369,9 @@ All classes and methods are available in the `Voltaic` namespace.
 - `JsonRpcServer(IPAddress ip, int port, bool includeDefaultMethods = true)` - Create a server listening on the specified IP address and port
 
 *Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an RPC method
+- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
+- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
+- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
 - `Task StartAsync(CancellationToken token = default)` - Start accepting connections
 - `Task BroadcastNotificationAsync(string method, object? parameters, CancellationToken token = default)` - Send notifications to all clients
 - `List<string> GetConnectedClients()` - Get list of connected client IDs
@@ -396,8 +414,9 @@ All classes and methods are available in the `Voltaic` namespace.
 **McpServer (stdio):**
 
 *Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an MCP method
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with metadata
+- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous MCP method
+- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous MCP method
+- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async MCP method with cancellation support
 - `Task RunAsync(CancellationToken token = default)` - Run the server (blocks until stdin closes)
 
 *Events:*
@@ -438,8 +457,12 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true)`
 
 *Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an RPC method
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with metadata
+- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
+- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
+- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
+- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with synchronous handler
+- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)` - Register tool with asynchronous handler
+- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register tool with async cancellable handler
 - `Task StartAsync(CancellationToken token = default)` - Start the HTTP server
 - `bool SendNotificationToSession(string sessionId, string method, object? parameters = null)` - Send notification to specific session
 - `void BroadcastNotification(string method, object? parameters = null)` - Broadcast to all sessions
@@ -489,8 +512,9 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `McpWebsocketsServer(string hostname, int port, string path = "/mcp", bool includeDefaultMethods = true)`
 
 *Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register an RPC method
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with metadata
+- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
+- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
+- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
 - `Task StartAsync(CancellationToken token = default)` - Start the WebSocket server
 - `Task BroadcastNotificationAsync(string method, object? parameters = null, CancellationToken token = default)` - Broadcast to all clients
 - `List<string> GetConnectedClients()` - Get list of connected client IDs
@@ -808,16 +832,16 @@ dotnet build src/Voltaic.sln
 dotnet build src/Voltaic/Voltaic.csproj
 
 # Run automated tests (all transports)
-dotnet run --project src/Test.Automated/Test.Automated.csproj
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
 # Run automated tests for specific transport
-dotnet run --project src/Test.Automated/Test.Automated.csproj -- -stdio
-dotnet run --project src/Test.Automated/Test.Automated.csproj -- -tcp
-dotnet run --project src/Test.Automated/Test.Automated.csproj -- -http
-dotnet run --project src/Test.Automated/Test.Automated.csproj -- -ws
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -stdio
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -tcp
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -http
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -ws
 
 # Run automated tests for multiple transports
-dotnet run --project src/Test.Automated/Test.Automated.csproj -- -tcp -http -ws
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -tcp -http -ws
 ```
 
 ---

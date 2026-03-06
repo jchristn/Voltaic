@@ -3,6 +3,7 @@ namespace Test.McpHttpServer
     using System;
     using System.Collections.Generic;
     using System.Text.Json;
+    using System.Threading;
     using System.Threading.Tasks;
     using Voltaic;
 
@@ -152,6 +153,31 @@ namespace Test.McpHttpServer
                             y = yProp.GetDouble();
                     }
                     return x * y;
+                });
+
+            // Register an async tool with cancellation support
+            server.RegisterTool("slowCompute",
+                "Performs a slow computation (demonstrates async handler with cancellation)",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        value = new
+                        {
+                            type = "number",
+                            description = "The input value to compute"
+                        }
+                    },
+                    required = new[] { "value" }
+                },
+                async (JsonElement? args, CancellationToken token) =>
+                {
+                    double value = 0;
+                    if (args.HasValue && args.Value.TryGetProperty("value", out JsonElement valueProp))
+                        value = valueProp.GetDouble();
+                    await Task.Delay(500, token);
+                    return (object)(value * value);
                 });
 
             // Start server in background
