@@ -82,6 +82,7 @@ namespace Voltaic
         private CancellationTokenSource? _SseTokenSource;
         private Task? _SseTask;
         private bool _IsSseConnected = false;
+        private bool _UseMcpSessionHeader = false;
         private int _RequestTimeoutMs = 30000;
         private DateTime _ConnectedUtc;
 
@@ -114,6 +115,7 @@ namespace Voltaic
                 _BaseUrl = baseUrl.TrimEnd('/');
                 _RpcUrl = $"{_BaseUrl}{rpcPath}";
                 _EventsUrl = $"{_BaseUrl}{eventsPath}";
+                _UseMcpSessionHeader = false;
 
                 // Make initial ping request to establish session
                 await CallAsync<string>("ping", null, _RequestTimeoutMs, token).ConfigureAwait(false);
@@ -126,6 +128,44 @@ namespace Voltaic
             catch (Exception ex)
             {
                 LogMessage($"Connection failed: {ex.Message}");
+                SessionId = null;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously connects to an HTTP MCP server using the Streamable HTTP transport.
+        /// Uses a single endpoint path for both RPC (POST) and SSE (GET), with Mcp-Session-Id headers.
+        /// </summary>
+        /// <param name="baseUrl">The base URL of the server (e.g., "http://localhost:7891").</param>
+        /// <param name="mcpPath">The MCP endpoint path. Default is "/mcp".</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is true if the connection was successful; otherwise, false.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when baseUrl is null or empty.</exception>
+        public async Task<bool> ConnectStreamableAsync(string baseUrl, string mcpPath = "/mcp", CancellationToken token = default)
+        {
+            if (String.IsNullOrEmpty(baseUrl)) throw new ArgumentNullException(nameof(baseUrl));
+
+            try
+            {
+                Disconnect();
+
+                _BaseUrl = baseUrl.TrimEnd('/');
+                _RpcUrl = $"{_BaseUrl}{mcpPath}";
+                _EventsUrl = $"{_BaseUrl}{mcpPath}";
+                _UseMcpSessionHeader = true;
+
+                // Make initial ping request to establish session
+                await CallAsync<string>("ping", null, _RequestTimeoutMs, token).ConfigureAwait(false);
+
+                _ConnectedUtc = DateTime.UtcNow;
+                LogMessage($"Connected to {baseUrl} via Streamable HTTP");
+                RaiseConnected();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Streamable HTTP connection failed: {ex.Message}");
                 SessionId = null;
                 return false;
             }
@@ -215,21 +255,34 @@ namespace Voltaic
 
                 if (!String.IsNullOrEmpty(SessionId))
                 {
-                    httpRequest.Headers.Add("X-Session-Id", SessionId);
+                    if (_UseMcpSessionHeader)
+                        httpRequest.Headers.Add("Mcp-Session-Id", SessionId);
+                    else
+                        httpRequest.Headers.Add("X-Session-Id", SessionId);
                 }
 
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
                 httpResponse.EnsureSuccessStatusCode();
 
-                // Extract session ID from response
-                if (httpResponse.Headers.TryGetValues("X-Session-Id", out System.Collections.Generic.IEnumerable<string>? sessionHeaders))
+                // Extract session ID from response (check both headers)
+                string? responseSessionId = null;
+                if (httpResponse.Headers.TryGetValues("Mcp-Session-Id", out System.Collections.Generic.IEnumerable<string>? mcpSessionHeaders))
                 {
-                    foreach (string sessionHeader in sessionHeaders)
+                    foreach (string sessionHeader in mcpSessionHeaders)
                     {
-                        SessionId = sessionHeader;
+                        responseSessionId = sessionHeader;
                         break;
                     }
                 }
+                if (responseSessionId == null && httpResponse.Headers.TryGetValues("X-Session-Id", out System.Collections.Generic.IEnumerable<string>? sessionHeaders))
+                {
+                    foreach (string sessionHeader in sessionHeaders)
+                    {
+                        responseSessionId = sessionHeader;
+                        break;
+                    }
+                }
+                if (responseSessionId != null) SessionId = responseSessionId;
 
                 string responseJson = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
                 LogMessage($"Received response: {responseJson}");
@@ -301,7 +354,10 @@ namespace Voltaic
                 }
 
                 HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, _EventsUrl);
-                request.Headers.Add("X-Session-Id", SessionId);
+                if (_UseMcpSessionHeader)
+                    request.Headers.Add("Mcp-Session-Id", SessionId);
+                else
+                    request.Headers.Add("X-Session-Id", SessionId);
                 request.Headers.Add("Accept", "text/event-stream");
 
                 HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
