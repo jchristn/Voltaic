@@ -135,6 +135,7 @@ namespace Voltaic
         private readonly int _Port;
         private readonly string _RpcPath;
         private readonly string _EventsPath;
+        private readonly string _McpPath;
         private HttpListener? _Listener;
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Sessions;
@@ -165,8 +166,9 @@ namespace Voltaic
         /// <param name="rpcPath">The URL path for JSON-RPC requests. Default is "/rpc".</param>
         /// <param name="eventsPath">The URL path for Server-Sent Events connections. Default is "/events".</param>
         /// <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getSessions.</param>
+        /// <param name="mcpPath">The URL path for the MCP Streamable HTTP endpoint. Default is "/mcp". Set to null to disable.</param>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
-        public McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true)
+        public McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true, string? mcpPath = "/mcp")
         {
             if (String.IsNullOrEmpty(hostname)) throw new ArgumentNullException(nameof(hostname));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
@@ -175,6 +177,7 @@ namespace Voltaic
             _Port = port;
             _RpcPath = String.IsNullOrEmpty(rpcPath) ? "/rpc" : rpcPath;
             _EventsPath = String.IsNullOrEmpty(eventsPath) ? "/events" : eventsPath;
+            _McpPath = mcpPath ?? "";
             _Sessions = new ConcurrentDictionary<string, ClientConnection>();
             _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
             _Tools = new List<ToolDefinition>();
@@ -331,6 +334,8 @@ namespace Voltaic
                 _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}/");
                 _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_RpcPath}/");
                 _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_EventsPath}/");
+                if (!String.IsNullOrEmpty(_McpPath))
+                    _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_McpPath}/");
                 _Listener.Start();
                 _TokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
 
@@ -340,6 +345,8 @@ namespace Voltaic
                 LogMessage($"HTTP server started on port {_Port}");
                 LogMessage($"RPC endpoint: {_RpcPath}");
                 LogMessage($"SSE endpoint: {_EventsPath}");
+                if (!String.IsNullOrEmpty(_McpPath))
+                    LogMessage($"MCP Streamable HTTP endpoint: {_McpPath}");
 
                 while (!_TokenSource.Token.IsCancellationRequested)
                 {
@@ -697,7 +704,11 @@ namespace Voltaic
                     return;
                 }
 
-                if (path.StartsWith(_RpcPath))
+                if (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath))
+                {
+                    await HandleMcpRequestAsync(context, token).ConfigureAwait(false);
+                }
+                else if (path.StartsWith(_RpcPath))
                 {
                     await HandleRpcRequestAsync(context, token).ConfigureAwait(false);
                 }
@@ -727,6 +738,173 @@ namespace Voltaic
                 {
                     // Ignore errors while sending error response
                 }
+            }
+        }
+
+        /// <summary>
+        /// Extracts the session ID from the request, checking both MCP Streamable HTTP
+        /// (Mcp-Session-Id) and legacy (X-Session-Id) headers.
+        /// </summary>
+        private string? GetSessionId(HttpListenerContext context)
+        {
+            return context.Request.Headers["Mcp-Session-Id"]
+                ?? context.Request.Headers["X-Session-Id"]
+                ?? context.Request.QueryString["session"];
+        }
+
+        /// <summary>
+        /// Sets session ID on the response using both MCP Streamable HTTP and legacy headers.
+        /// </summary>
+        private void SetSessionIdHeaders(HttpListenerResponse response, string sessionId)
+        {
+            response.AddHeader("Mcp-Session-Id", sessionId);
+            response.AddHeader("X-Session-Id", sessionId);
+        }
+
+        /// <summary>
+        /// Handles requests on the MCP Streamable HTTP endpoint (/mcp by default).
+        /// POST: JSON-RPC requests (same as /rpc, but with Mcp-Session-Id header).
+        /// GET: SSE stream for server-to-client notifications (same as /events).
+        /// DELETE: Session termination.
+        /// This provides compatibility with the MCP Streamable HTTP transport specification.
+        /// </summary>
+        private async Task HandleMcpRequestAsync(HttpListenerContext context, CancellationToken token)
+        {
+            string method = context.Request.HttpMethod;
+
+            if (method == "POST")
+            {
+                // Get or create session
+                string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+                bool isNewSession = !_Sessions.ContainsKey(sessionId);
+                ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+                {
+                    ClientConnection newConnection = new ClientConnection(id);
+                    newConnection.MaxQueueSize = _MaxQueueSize;
+                    return newConnection;
+                });
+
+                if (isNewSession && _Sessions.ContainsKey(sessionId))
+                {
+                    RaiseClientConnected(connection);
+                }
+
+                // Read request body
+                string requestBody;
+                using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
+                {
+                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+
+                LogMessage($"MCP request from session {sessionId}: {requestBody}");
+
+                // Process JSON-RPC request
+                JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+                // Send response
+                if (_EnableCors)
+                {
+                    foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                        context.Response.AddHeader(kvp.Key, kvp.Value);
+                }
+
+                SetSessionIdHeaders(context.Response, sessionId);
+                context.Response.ContentType = "application/json";
+
+                string responseJson = JsonSerializer.Serialize(response);
+                byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+
+                context.Response.ContentLength64 = buffer.Length;
+                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+                context.Response.Close();
+
+                LogMessage($"MCP response to session {sessionId}: {responseJson}");
+            }
+            else if (method == "GET")
+            {
+                // SSE stream for server-to-client notifications
+                string? sessionId = GetSessionId(context);
+                if (String.IsNullOrEmpty(sessionId) || !_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
+                {
+                    context.Response.StatusCode = 400;
+                    byte[] errorBytes = Encoding.UTF8.GetBytes("Missing or invalid session ID. Send a POST to initialize first.");
+                    await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+                    context.Response.Close();
+                    return;
+                }
+
+                // Set up SSE headers
+                if (_EnableCors)
+                {
+                    foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                        context.Response.AddHeader(kvp.Key, kvp.Value);
+                }
+
+                context.Response.ContentType = "text/event-stream";
+                context.Response.AddHeader("Cache-Control", "no-cache");
+                context.Response.AddHeader("Connection", "keep-alive");
+                context.Response.SendChunked = true;
+
+                LogMessage($"MCP SSE connection established for session {sessionId}");
+
+                try
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                        {
+                            timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+
+                            try
+                            {
+                                JsonRpcRequest? notification = await connection.DequeueAsync(timeoutCts.Token).ConfigureAwait(false);
+
+                                if (notification != null)
+                                {
+                                    string json = JsonSerializer.Serialize(notification);
+                                    string sseMessage = $"data: {json}\n\n";
+                                    byte[] buffer = Encoding.UTF8.GetBytes(sseMessage);
+
+                                    await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+                                    await context.Response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+                                }
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                byte[] keepAlive = Encoding.UTF8.GetBytes(": keep-alive\n\n");
+                                await context.Response.OutputStream.WriteAsync(keepAlive, 0, keepAlive.Length, token).ConfigureAwait(false);
+                                await context.Response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"MCP SSE error for session {sessionId}: {ex.Message}");
+                }
+                finally
+                {
+                    context.Response.Close();
+                    LogMessage($"MCP SSE connection closed for session {sessionId}");
+                }
+            }
+            else if (method == "DELETE")
+            {
+                // Session termination
+                string? sessionId = GetSessionId(context);
+                if (!String.IsNullOrEmpty(sessionId))
+                {
+                    RemoveSession(sessionId);
+                    LogMessage($"MCP session terminated: {sessionId}");
+                }
+
+                context.Response.StatusCode = 200;
+                context.Response.Close();
+            }
+            else
+            {
+                context.Response.StatusCode = 405;
+                context.Response.Close();
             }
         }
 
@@ -773,7 +951,7 @@ namespace Voltaic
             }
 
             // Get or create session
-            string sessionId = context.Request.Headers["X-Session-Id"] ?? Guid.NewGuid().ToString();
+            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
             bool isNewSession = !_Sessions.ContainsKey(sessionId);
             ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
             {
@@ -806,7 +984,7 @@ namespace Voltaic
                     context.Response.AddHeader(kvp.Key, kvp.Value);
             }
 
-            context.Response.AddHeader("X-Session-Id", sessionId);
+            SetSessionIdHeaders(context.Response, sessionId);
             context.Response.ContentType = "application/json";
 
             string responseJson = JsonSerializer.Serialize(response);
@@ -828,7 +1006,7 @@ namespace Voltaic
                 return;
             }
 
-            string sessionId = context.Request.Headers["X-Session-Id"] ?? context.Request.QueryString["session"] ?? "";
+            string sessionId = GetSessionId(context) ?? "";
             if (String.IsNullOrEmpty(sessionId) || !_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
             {
                 context.Response.StatusCode = 400;
