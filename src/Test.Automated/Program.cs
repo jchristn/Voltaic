@@ -78,6 +78,7 @@ namespace Test.Automated
             bool testTcp = false;
             bool testWebsockets = false;
             bool testHttp = false;
+            bool testStreamable = false;
             bool testAll = args.Length == 0;
 
             foreach (string arg in args)
@@ -99,12 +100,17 @@ namespace Test.Automated
                 {
                     testHttp = true;
                 }
+                else if (argLower == "-streamable")
+                {
+                    testStreamable = true;
+                }
                 else
                 {
                     Console.WriteLine($"Unknown argument: {arg}");
-                    Console.WriteLine("Usage: Test.Automated [-tcp] [-http] [-ws] [-stdio]");
+                    Console.WriteLine("Usage: Test.Automated [-tcp] [-http] [-streamable] [-ws] [-stdio]");
                     Console.WriteLine("  -tcp         Test only TCP transport");
                     Console.WriteLine("  -http        Test only HTTP transport");
+                    Console.WriteLine("  -streamable  Test only Streamable HTTP transport");
                     Console.WriteLine("  -ws          Test only WebSocket transport");
                     Console.WriteLine("  -stdio       Test only stdio transport");
                     Console.WriteLine("  (no args)    Test all transports");
@@ -128,6 +134,7 @@ namespace Test.Automated
                 if (testTcp) transports.Add("TCP");
                 if (testWebsockets) transports.Add("WebSockets");
                 if (testHttp) transports.Add("HTTP");
+                if (testStreamable) transports.Add("Streamable HTTP");
                 Console.WriteLine($"Testing: {String.Join(", ", transports)}");
             }
             Console.WriteLine();
@@ -194,6 +201,12 @@ namespace Test.Automated
             if (testAll || testHttp)
             {
                 await RunMcpHttpTests();
+            }
+
+            // Streamable HTTP transport tests
+            if (testAll || testStreamable)
+            {
+                await RunMcpStreamableHttpTests();
             }
 
             // Print summary
@@ -3101,6 +3114,542 @@ namespace Test.Automated
                 Assert(hasCorsHeader, "Expected Access-Control-Allow-Origin header");
 
                 server.Stop();
+            });
+        }
+
+        static async Task RunMcpStreamableHttpTests()
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- MCP: Streamable HTTP Transport Tests ---");
+
+            await Test("MCP Streamable HTTP: POST /mcp with valid JSON-RPC echo request", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9850);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectStreamableAsync("http://localhost:9850");
+                Assert(connected, "Client should connect via Streamable HTTP");
+                Assert(!String.IsNullOrEmpty(client.SessionId), "Session ID should be assigned");
+
+                string result = await client.CallAsync<string>("echo", new { message = "streamable-test" });
+                Assert(result == "streamable-test", $"Expected 'streamable-test', got '{result}'");
+
+                client.Disconnect();
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: POST /mcp with ping method", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9851);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9851");
+
+                string result = await client.CallAsync<string>("ping");
+                Assert(result == "pong", $"Expected 'pong', got '{result}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: POST /mcp multiple sequential requests", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9852);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9852");
+
+                for (int i = 0; i < 10; i++)
+                {
+                    string result = await client.CallAsync<string>("echo", new { message = $"msg{i}" });
+                    Assert(result == $"msg{i}", $"Expected 'msg{i}', got '{result}'");
+                }
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: GET /mcp SSE stream establishment", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9853);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9853");
+
+                bool notificationReceived = false;
+                string notificationMethod = "";
+
+                client.NotificationReceived += (sender, notification) =>
+                {
+                    notificationReceived = true;
+                    notificationMethod = notification.Method;
+                };
+
+                bool sseStarted = await client.StartSseAsync();
+                Assert(sseStarted, "SSE connection should start successfully via /mcp GET");
+                await Task.Delay(300);
+
+                server.SendNotificationToSession(client.SessionId!, "streamableNotification", new { data = "test" });
+                await Task.Delay(500);
+
+                Assert(notificationReceived, "Should receive notification via SSE on /mcp");
+                Assert(notificationMethod == "streamableNotification", $"Expected 'streamableNotification', got '{notificationMethod}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: DELETE /mcp session termination", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9854);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9854");
+                string sessionId = client.SessionId!;
+
+                List<string> sessions = server.GetActiveSessions();
+                Assert(sessions.Count == 1, $"Expected 1 active session, got {sessions.Count}");
+
+                // Send DELETE /mcp with Mcp-Session-Id header
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage deleteRequest = new HttpRequestMessage(HttpMethod.Delete, "http://localhost:9854/mcp");
+                deleteRequest.Headers.Add("Mcp-Session-Id", sessionId);
+                HttpResponseMessage deleteResponse = await httpClient.SendAsync(deleteRequest);
+
+                Assert(deleteResponse.StatusCode == HttpStatusCode.OK, $"Expected 200 OK on DELETE, got {deleteResponse.StatusCode}");
+
+                await Task.Delay(200);
+                sessions = server.GetActiveSessions();
+                Assert(sessions.Count == 0, $"Expected 0 active sessions after DELETE, got {sessions.Count}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Mcp-Session-Id header persistence across requests", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9855);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9855");
+
+                string sessionId1 = client.SessionId!;
+                await client.CallAsync<string>("ping");
+                string sessionId2 = client.SessionId!;
+                await client.CallAsync<string>("echo", new { message = "test" });
+                string sessionId3 = client.SessionId!;
+
+                Assert(sessionId1 == sessionId2, "Session ID should persist across requests (1 == 2)");
+                Assert(sessionId2 == sessionId3, "Session ID should persist across requests (2 == 3)");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Mcp-Session-Id header in response", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9856);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                // Make raw HTTP POST to /mcp and check response headers
+                using HttpClient httpClient = new HttpClient();
+                string requestJson = JsonSerializer.Serialize(new JsonRpcRequest
+                {
+                    Method = "ping",
+                    Id = Guid.NewGuid().ToString()
+                });
+
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9856/mcp");
+                request.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+                Assert(response.StatusCode == HttpStatusCode.OK, $"Expected 200, got {response.StatusCode}");
+
+                bool hasMcpSessionHeader = response.Headers.Contains("Mcp-Session-Id");
+                Assert(hasMcpSessionHeader, "Response should contain Mcp-Session-Id header");
+
+                IEnumerable<string> headerValues = response.Headers.GetValues("Mcp-Session-Id");
+                string sessionId = headerValues.First();
+                Assert(!String.IsNullOrEmpty(sessionId), "Mcp-Session-Id header should not be empty");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: ConnectStreamableAsync uses single /mcp endpoint", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9857);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectStreamableAsync("http://localhost:9857");
+                Assert(connected, "ConnectStreamableAsync should succeed");
+
+                string result = await client.CallAsync<string>("echo", new { message = "verify" });
+                Assert(result == "verify", $"Expected 'verify', got '{result}'");
+
+                List<string> sessions = server.GetActiveSessions();
+                Assert(sessions.Count == 1, $"Expected 1 session, got {sessions.Count}");
+                Assert(sessions[0] == client.SessionId, "Server session should match client session ID");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Custom mcpPath configuration", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9858, mcpPath: "/custom-mcp");
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectStreamableAsync("http://localhost:9858", mcpPath: "/custom-mcp");
+                Assert(connected, "ConnectStreamableAsync should succeed with custom mcpPath");
+
+                string result = await client.CallAsync<string>("echo", new { message = "custom-path" });
+                Assert(result == "custom-path", $"Expected 'custom-path', got '{result}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: mcpPath null disables endpoint", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9859, mcpPath: null);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                // Attempting to POST /mcp should fail (404 or connection error)
+                using HttpClient httpClient = new HttpClient();
+                string requestJson = JsonSerializer.Serialize(new JsonRpcRequest
+                {
+                    Method = "ping",
+                    Id = Guid.NewGuid().ToString()
+                });
+
+                bool requestFailed = false;
+                try
+                {
+                    HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9859/mcp");
+                    request.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+                    HttpResponseMessage response = await httpClient.SendAsync(request);
+                    // Should get 404 since /mcp prefix wasn't registered
+                    requestFailed = (response.StatusCode == HttpStatusCode.NotFound || (int)response.StatusCode >= 400);
+                }
+                catch
+                {
+                    requestFailed = true;
+                }
+
+                Assert(requestFailed, "POST /mcp should fail when mcpPath is null");
+
+                // But /rpc should still work
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectAsync("http://localhost:9859");
+                Assert(connected, "ConnectAsync via /rpc should still work when mcpPath is null");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: GET /mcp missing session ID returns 400", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9860);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, "http://localhost:9860/mcp");
+                request.Headers.Add("Accept", "text/event-stream");
+
+                HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                Assert(response.StatusCode == HttpStatusCode.BadRequest, $"Expected 400, got {response.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: GET /mcp invalid session ID returns 400", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9861);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, "http://localhost:9861/mcp");
+                request.Headers.Add("Accept", "text/event-stream");
+                request.Headers.Add("Mcp-Session-Id", "nonexistent-session-id");
+
+                HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                Assert(response.StatusCode == HttpStatusCode.BadRequest, $"Expected 400, got {response.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Method not found error", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9862);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9862");
+
+                bool errorThrown = false;
+                try
+                {
+                    await client.CallAsync<string>("nonExistentMethod");
+                }
+                catch (Exception ex)
+                {
+                    errorThrown = ex.Message.Contains("Method not found");
+                }
+
+                Assert(errorThrown, "Should receive method not found error via /mcp");
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Malformed JSON request", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9863);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9863/mcp");
+                request.Content = new StringContent("{ not valid json !!!", Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+                string responseBody = await response.Content.ReadAsStringAsync();
+
+                // Should return a JSON-RPC parse error response
+                Assert(responseBody.Contains("-32700") || responseBody.Contains("Parse error"),
+                    $"Expected parse error in response, got: {responseBody}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Invalid HTTP method returns 405", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9864);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Put, "http://localhost:9864/mcp");
+                request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+                Assert(response.StatusCode == HttpStatusCode.MethodNotAllowed, $"Expected 405, got {response.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Large message handling", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9865);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9865");
+
+                string largeString = new string('Z', 100000);
+                string result = await client.CallAsync<string>("echo", new { message = largeString }, timeoutMs: 10000);
+
+                Assert(result.Length == largeString.Length, $"Expected {largeString.Length} chars, got {result.Length}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Concurrent requests", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9866);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                await client.ConnectStreamableAsync("http://localhost:9866");
+
+                List<Task<string>> tasks = new List<Task<string>>();
+                for (int i = 0; i < 20; i++)
+                {
+                    int num = i;
+                    tasks.Add(client.CallAsync<string>("echo", new { message = $"concurrent{num}" }));
+                }
+
+                string[] results = await Task.WhenAll(tasks);
+                for (int i = 0; i < 20; i++)
+                {
+                    Assert(results[i] == $"concurrent{i}", $"Concurrent call {i} failed: got '{results[i]}'");
+                }
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Broadcast notifications via SSE", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9867);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                List<McpHttpClient> clients = new List<McpHttpClient>();
+                List<bool> notificationsReceived = new List<bool> { false, false };
+
+                for (int i = 0; i < 2; i++)
+                {
+                    McpHttpClient client = new McpHttpClient();
+                    await client.ConnectStreamableAsync("http://localhost:9867");
+                    int index = i;
+                    client.NotificationReceived += (sender, notification) =>
+                    {
+                        lock (notificationsReceived)
+                        {
+                            notificationsReceived[index] = true;
+                        }
+                    };
+                    await client.StartSseAsync();
+                    clients.Add(client);
+                }
+
+                await Task.Delay(500);
+
+                server.BroadcastNotification("streamableBroadcast", new { message = "hello all" });
+                await Task.Delay(700);
+
+                Assert(notificationsReceived.All(x => x), "All clients should receive broadcast via streamable SSE");
+
+                foreach (McpHttpClient client in clients)
+                {
+                    client.Disconnect();
+                }
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: DELETE /mcp without session ID still returns 200", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9868);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage deleteRequest = new HttpRequestMessage(HttpMethod.Delete, "http://localhost:9868/mcp");
+                HttpResponseMessage deleteResponse = await httpClient.SendAsync(deleteRequest);
+
+                Assert(deleteResponse.StatusCode == HttpStatusCode.OK, $"Expected 200, got {deleteResponse.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: POST /mcp creates new session without header", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9869);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                string requestJson = JsonSerializer.Serialize(new JsonRpcRequest
+                {
+                    Method = "ping",
+                    Id = Guid.NewGuid().ToString()
+                });
+
+                // POST without Mcp-Session-Id should create a new session
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9869/mcp");
+                request.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+                Assert(response.StatusCode == HttpStatusCode.OK, $"Expected 200, got {response.StatusCode}");
+
+                bool hasMcpSessionHeader = response.Headers.Contains("Mcp-Session-Id");
+                Assert(hasMcpSessionHeader, "Response should assign a new Mcp-Session-Id");
+
+                List<string> sessions = server.GetActiveSessions();
+                Assert(sessions.Count == 1, $"Expected 1 session created, got {sessions.Count}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Session reuse with Mcp-Session-Id header", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9870);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                string requestJson = JsonSerializer.Serialize(new JsonRpcRequest
+                {
+                    Method = "ping",
+                    Id = Guid.NewGuid().ToString()
+                });
+
+                // First request creates a session
+                HttpRequestMessage request1 = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9870/mcp");
+                request1.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+                HttpResponseMessage response1 = await httpClient.SendAsync(request1);
+                string sessionId = response1.Headers.GetValues("Mcp-Session-Id").First();
+
+                // Second request reuses the session
+                string requestJson2 = JsonSerializer.Serialize(new JsonRpcRequest
+                {
+                    Method = "echo",
+                    Params = new { message = "reuse" },
+                    Id = Guid.NewGuid().ToString()
+                });
+                HttpRequestMessage request2 = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9870/mcp");
+                request2.Content = new StringContent(requestJson2, Encoding.UTF8, "application/json");
+                request2.Headers.Add("Mcp-Session-Id", sessionId);
+                HttpResponseMessage response2 = await httpClient.SendAsync(request2);
+                string sessionId2 = response2.Headers.GetValues("Mcp-Session-Id").First();
+
+                Assert(sessionId == sessionId2, $"Session ID should be reused: '{sessionId}' vs '{sessionId2}'");
+
+                List<string> sessions = server.GetActiveSessions();
+                Assert(sessions.Count == 1, $"Expected 1 session (reused), got {sessions.Count}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: ConnectStreamableAsync with invalid URL fails gracefully", async () =>
+            {
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectStreamableAsync("http://localhost:19999");
+                Assert(!connected, "ConnectStreamableAsync should return false for unreachable server");
+                Assert(!client.IsConnected, "Client should not be connected");
+            });
+
+            await Test("MCP Streamable HTTP: ConnectStreamableAsync null URL throws", async () =>
+            {
+                using McpHttpClient client = new McpHttpClient();
+                bool exceptionThrown = false;
+                try
+                {
+                    await client.ConnectStreamableAsync(null!);
+                }
+                catch (ArgumentNullException)
+                {
+                    exceptionThrown = true;
+                }
+                Assert(exceptionThrown, "ConnectStreamableAsync should throw ArgumentNullException for null URL");
+            });
+
+            await Test("MCP Streamable HTTP: ConnectStreamableAsync empty URL throws", async () =>
+            {
+                using McpHttpClient client = new McpHttpClient();
+                bool exceptionThrown = false;
+                try
+                {
+                    await client.ConnectStreamableAsync("");
+                }
+                catch (ArgumentNullException)
+                {
+                    exceptionThrown = true;
+                }
+                Assert(exceptionThrown, "ConnectStreamableAsync should throw ArgumentNullException for empty URL");
             });
         }
 

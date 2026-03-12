@@ -150,7 +150,7 @@ namespace Voltaic
             { "Access-Control-Allow-Origin", "*" },
             { "Access-Control-Allow-Methods", "POST, GET, OPTIONS" },
             { "Access-Control-Allow-Headers", "*"},
-            { "Access-Control-Expose-Headers", "X-Session-Id"},
+            { "Access-Control-Expose-Headers", "Mcp-Session-Id"},
             { "Access-Control-Max-Age", "86400" }
         };
         private volatile bool _IsStopping = false;
@@ -742,23 +742,21 @@ namespace Voltaic
         }
 
         /// <summary>
-        /// Extracts the session ID from the request, checking both MCP Streamable HTTP
-        /// (Mcp-Session-Id) and legacy (X-Session-Id) headers.
+        /// Extracts the session ID from the request using the Mcp-Session-Id header
+        /// or the session query string parameter.
         /// </summary>
         private string? GetSessionId(HttpListenerContext context)
         {
             return context.Request.Headers["Mcp-Session-Id"]
-                ?? context.Request.Headers["X-Session-Id"]
                 ?? context.Request.QueryString["session"];
         }
 
         /// <summary>
-        /// Sets session ID on the response using both MCP Streamable HTTP and legacy headers.
+        /// Sets the Mcp-Session-Id header on the response.
         /// </summary>
         private void SetSessionIdHeaders(HttpListenerResponse response, string sessionId)
         {
             response.AddHeader("Mcp-Session-Id", sessionId);
-            response.AddHeader("X-Session-Id", sessionId);
         }
 
         /// <summary>

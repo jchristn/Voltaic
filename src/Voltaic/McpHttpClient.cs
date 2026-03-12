@@ -82,7 +82,7 @@ namespace Voltaic
         private CancellationTokenSource? _SseTokenSource;
         private Task? _SseTask;
         private bool _IsSseConnected = false;
-        private bool _UseMcpSessionHeader = false;
+
         private int _RequestTimeoutMs = 30000;
         private DateTime _ConnectedUtc;
 
@@ -115,8 +115,6 @@ namespace Voltaic
                 _BaseUrl = baseUrl.TrimEnd('/');
                 _RpcUrl = $"{_BaseUrl}{rpcPath}";
                 _EventsUrl = $"{_BaseUrl}{eventsPath}";
-                _UseMcpSessionHeader = false;
-
                 // Make initial ping request to establish session
                 await CallAsync<string>("ping", null, _RequestTimeoutMs, token).ConfigureAwait(false);
 
@@ -153,8 +151,6 @@ namespace Voltaic
                 _BaseUrl = baseUrl.TrimEnd('/');
                 _RpcUrl = $"{_BaseUrl}{mcpPath}";
                 _EventsUrl = $"{_BaseUrl}{mcpPath}";
-                _UseMcpSessionHeader = true;
-
                 // Make initial ping request to establish session
                 await CallAsync<string>("ping", null, _RequestTimeoutMs, token).ConfigureAwait(false);
 
@@ -255,34 +251,21 @@ namespace Voltaic
 
                 if (!String.IsNullOrEmpty(SessionId))
                 {
-                    if (_UseMcpSessionHeader)
-                        httpRequest.Headers.Add("Mcp-Session-Id", SessionId);
-                    else
-                        httpRequest.Headers.Add("X-Session-Id", SessionId);
+                    httpRequest.Headers.Add("Mcp-Session-Id", SessionId);
                 }
 
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
                 httpResponse.EnsureSuccessStatusCode();
 
-                // Extract session ID from response (check both headers)
-                string? responseSessionId = null;
-                if (httpResponse.Headers.TryGetValues("Mcp-Session-Id", out System.Collections.Generic.IEnumerable<string>? mcpSessionHeaders))
-                {
-                    foreach (string sessionHeader in mcpSessionHeaders)
-                    {
-                        responseSessionId = sessionHeader;
-                        break;
-                    }
-                }
-                if (responseSessionId == null && httpResponse.Headers.TryGetValues("X-Session-Id", out System.Collections.Generic.IEnumerable<string>? sessionHeaders))
+                // Extract session ID from response
+                if (httpResponse.Headers.TryGetValues("Mcp-Session-Id", out System.Collections.Generic.IEnumerable<string>? sessionHeaders))
                 {
                     foreach (string sessionHeader in sessionHeaders)
                     {
-                        responseSessionId = sessionHeader;
+                        SessionId = sessionHeader;
                         break;
                     }
                 }
-                if (responseSessionId != null) SessionId = responseSessionId;
 
                 string responseJson = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
                 LogMessage($"Received response: {responseJson}");
@@ -354,10 +337,7 @@ namespace Voltaic
                 }
 
                 HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, _EventsUrl);
-                if (_UseMcpSessionHeader)
-                    request.Headers.Add("Mcp-Session-Id", SessionId);
-                else
-                    request.Headers.Add("X-Session-Id", SessionId);
+                request.Headers.Add("Mcp-Session-Id", SessionId);
                 request.Headers.Add("Accept", "text/event-stream");
 
                 HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);

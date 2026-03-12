@@ -923,6 +923,17 @@
             <returns>A task that represents the asynchronous operation. The task result is true if the connection was successful; otherwise, false.</returns>
             <exception cref="T:System.ArgumentNullException">Thrown when baseUrl is null or empty.</exception>
         </member>
+        <member name="M:Voltaic.McpHttpClient.ConnectStreamableAsync(System.String,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously connects to an HTTP MCP server using the Streamable HTTP transport.
+            Uses a single endpoint path for both RPC (POST) and SSE (GET), with Mcp-Session-Id headers.
+            </summary>
+            <param name="baseUrl">The base URL of the server (e.g., "http://localhost:7891").</param>
+            <param name="mcpPath">The MCP endpoint path. Default is "/mcp".</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result is true if the connection was successful; otherwise, false.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when baseUrl is null or empty.</exception>
+        </member>
         <member name="M:Voltaic.McpHttpClient.StartSseAsync(System.Threading.CancellationToken)">
             <summary>
             Asynchronously starts the Server-Sent Events (SSE) connection to receive notifications from the server.
@@ -1041,7 +1052,7 @@
             Occurs when a JSON-RPC response is sent to a client.
             </summary>
         </member>
-        <member name="M:Voltaic.McpHttpServer.#ctor(System.String,System.Int32,System.String,System.String,System.Boolean)">
+        <member name="M:Voltaic.McpHttpServer.#ctor(System.String,System.Int32,System.String,System.String,System.Boolean,System.String)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.McpHttpServer"/> class.
             </summary>
@@ -1050,6 +1061,7 @@
             <param name="rpcPath">The URL path for JSON-RPC requests. Default is "/rpc".</param>
             <param name="eventsPath">The URL path for Server-Sent Events connections. Default is "/events".</param>
             <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getSessions.</param>
+            <param name="mcpPath">The URL path for the MCP Streamable HTTP endpoint. Default is "/mcp". Set to null to disable.</param>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         </member>
         <member name="M:Voltaic.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
@@ -1184,6 +1196,26 @@
             <summary>
             Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
             This method is virtual to allow derived classes to customize the set of built-in methods.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.GetSessionId(System.Net.HttpListenerContext)">
+            <summary>
+            Extracts the session ID from the request using the Mcp-Session-Id header
+            or the session query string parameter.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.SetSessionIdHeaders(System.Net.HttpListenerResponse,System.String)">
+            <summary>
+            Sets the Mcp-Session-Id header on the response.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.HandleMcpRequestAsync(System.Net.HttpListenerContext,System.Threading.CancellationToken)">
+            <summary>
+            Handles requests on the MCP Streamable HTTP endpoint (/mcp by default).
+            POST: JSON-RPC requests (same as /rpc, but with Mcp-Session-Id header).
+            GET: SSE stream for server-to-client notifications (same as /events).
+            DELETE: Session termination.
+            This provides compatibility with the MCP Streamable HTTP transport specification.
             </summary>
         </member>
         <member name="T:Voltaic.McpServer">
