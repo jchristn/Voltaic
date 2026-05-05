@@ -2302,6 +2302,42 @@ namespace Test.Automated
             }
         }
 
+        static async Task<string> InitializeMcpSessionAsync(HttpClient httpClient, string url)
+        {
+            string requestJson = JsonSerializer.Serialize(new JsonRpcRequest
+            {
+                Method = "initialize",
+                Params = new
+                {
+                    protocolVersion = "2025-03-26",
+                    capabilities = new { },
+                    clientInfo = new
+                    {
+                        name = "Test.Automated",
+                        version = "1.0.0"
+                    }
+                },
+                Id = Guid.NewGuid().ToString()
+            });
+
+            using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+
+            using HttpResponseMessage response = await httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            Assert(response.Headers.Contains("Mcp-Session-Id"), "Initialize response should contain Mcp-Session-Id header");
+            return response.Headers.GetValues("Mcp-Session-Id").First();
+        }
+
+        static async Task<string> ReadSseBytesAsync(Stream stream, int maxBytes, int timeoutMs)
+        {
+            byte[] buffer = new byte[maxBytes];
+            using CancellationTokenSource cts = new CancellationTokenSource(timeoutMs);
+            int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cts.Token);
+            return Encoding.UTF8.GetString(buffer, 0, bytesRead);
+        }
+
         static int CountOccurrences(string text, string pattern)
         {
             int count = 0;
@@ -3115,12 +3151,347 @@ namespace Test.Automated
 
                 server.Stop();
             });
+
+            await Test("MCP HTTP: AuthenticationHandler null allows all requests (default behavior)", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9814);
+                // AuthenticationHandler is null by default — no auth should be enforced
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectAsync("http://localhost:9814");
+                Assert(connected, "Expected connection to succeed without authentication handler");
+
+                string echoResult = await client.CallAsync<string>("echo", new { message = "no-auth" });
+                Assert(echoResult == "no-auth", $"Expected 'no-auth', got '{echoResult}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: AuthenticationHandler rejects unauthenticated request with 401", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9815);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult
+                    {
+                        IsAuthenticated = false,
+                        StatusCode = 401,
+                        ErrorMessage = "Missing token"
+                    };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                StringContent content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage response = await httpClient.PostAsync("http://localhost:9815/rpc", content);
+
+                Assert(response.StatusCode == HttpStatusCode.Unauthorized, $"Expected 401, got {response.StatusCode}");
+                string body = await response.Content.ReadAsStringAsync();
+                Assert(body.Contains("Missing token"), $"Expected error message 'Missing token', got '{body}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: AuthenticationHandler rejects with custom 403 status", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9816);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult
+                    {
+                        IsAuthenticated = false,
+                        StatusCode = 403,
+                        ErrorMessage = "Forbidden"
+                    };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                StringContent content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage response = await httpClient.PostAsync("http://localhost:9816/rpc", content);
+
+                Assert(response.StatusCode == HttpStatusCode.Forbidden, $"Expected 403, got {response.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: AuthenticationHandler allows authenticated request", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9817);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    string? authHeader = request.Headers["Authorization"];
+                    if (authHeader == "Bearer valid-token")
+                    {
+                        return new AuthenticationResult
+                        {
+                            IsAuthenticated = true,
+                            Principal = "test-user"
+                        };
+                    }
+                    return new AuthenticationResult
+                    {
+                        IsAuthenticated = false,
+                        StatusCode = 401,
+                        ErrorMessage = "Invalid token"
+                    };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+
+                // Request without token should fail
+                StringContent content1 = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage response1 = await httpClient.PostAsync("http://localhost:9817/rpc", content1);
+                Assert(response1.StatusCode == HttpStatusCode.Unauthorized, $"Expected 401 without token, got {response1.StatusCode}");
+
+                // Request with valid token should succeed
+                HttpRequestMessage request2 = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9817/rpc");
+                request2.Content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "authenticated" }, id = 2 }),
+                    Encoding.UTF8, "application/json");
+                request2.Headers.Add("Authorization", "Bearer valid-token");
+                HttpResponseMessage response2 = await httpClient.SendAsync(request2);
+                Assert(response2.StatusCode == HttpStatusCode.OK, $"Expected 200 with valid token, got {response2.StatusCode}");
+
+                string responseBody = await response2.Content.ReadAsStringAsync();
+                Assert(responseBody.Contains("authenticated"), $"Expected echo response, got '{responseBody}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: AuthenticationHandler rejection includes CORS headers", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9818);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult { IsAuthenticated = false, StatusCode = 401, ErrorMessage = "No" };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                StringContent content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage response = await httpClient.PostAsync("http://localhost:9818/rpc", content);
+
+                Assert(response.StatusCode == HttpStatusCode.Unauthorized, $"Expected 401, got {response.StatusCode}");
+                bool hasCorsHeader = response.Headers.Contains("Access-Control-Allow-Origin");
+                Assert(hasCorsHeader, "Expected CORS headers on auth failure response");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Health check bypasses AuthenticationHandler", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9819);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult { IsAuthenticated = false, StatusCode = 401 };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpResponseMessage response = await httpClient.GetAsync("http://localhost:9819/");
+                // Health check should bypass auth and return 200
+                Assert(response.StatusCode == HttpStatusCode.OK, $"Expected 200 for health check, got {response.StatusCode}");
+                string body = await response.Content.ReadAsStringAsync();
+                Assert(body.Contains("Ok"), $"Expected health check body, got '{body}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP HTTP: Ping method bypasses AuthenticationHandler", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9820);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult { IsAuthenticated = false, StatusCode = 401, ErrorMessage = "Denied" };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+
+                // Ping should bypass auth
+                StringContent pingContent = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "ping", id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage pingResponse = await httpClient.PostAsync("http://localhost:9820/rpc", pingContent);
+                Assert(pingResponse.StatusCode == HttpStatusCode.OK, $"Expected 200 for ping, got {pingResponse.StatusCode}");
+                string pingBody = await pingResponse.Content.ReadAsStringAsync();
+                Assert(pingBody.Contains("pong"), $"Expected 'pong' in response, got '{pingBody}'");
+
+                // Non-ping method should still be rejected
+                StringContent echoContent = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 2 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage echoResponse = await httpClient.PostAsync("http://localhost:9820/rpc", echoContent);
+                Assert(echoResponse.StatusCode == HttpStatusCode.Unauthorized, $"Expected 401 for echo, got {echoResponse.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("Dispose: McpHttpServer double-dispose does not throw", async () =>
+            {
+                McpHttpServer server = new McpHttpServer("localhost", 9821);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                server.Dispose();
+                server.Dispose(); // Second dispose should not throw
+
+                await Task.CompletedTask;
+            });
+
+            await Test("Dispose: McpHttpClient double-dispose does not throw", async () =>
+            {
+                McpHttpClient client = new McpHttpClient();
+                client.Dispose();
+                client.Dispose(); // Second dispose should not throw
+
+                await Task.CompletedTask;
+            });
+
+            await Test("Dispose: JsonRpcServer double-dispose does not throw", async () =>
+            {
+                JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9822);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                server.Dispose();
+                server.Dispose(); // Second dispose should not throw
+            });
+
+            await Test("Dispose: JsonRpcClient double-dispose does not throw", async () =>
+            {
+                JsonRpcClient client = new JsonRpcClient();
+                client.Dispose();
+                client.Dispose(); // Second dispose should not throw
+
+                await Task.CompletedTask;
+            });
+
+            await Test("Dispose: McpWebsocketsServer double-dispose does not throw", async () =>
+            {
+                McpWebsocketsServer server = new McpWebsocketsServer("localhost", 9823);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                server.Dispose();
+                server.Dispose(); // Second dispose should not throw
+            });
+
+            await Test("Dispose: McpWebsocketsClient double-dispose does not throw", async () =>
+            {
+                McpWebsocketsClient client = new McpWebsocketsClient();
+                client.Dispose();
+                client.Dispose(); // Second dispose should not throw
+
+                await Task.CompletedTask;
+            });
+
+            await Test("Dispose: ClientConnection double-dispose does not throw", async () =>
+            {
+                ClientConnection connection = new ClientConnection("test-session");
+                connection.Dispose();
+                connection.Dispose(); // Second dispose should not throw
+
+                await Task.CompletedTask;
+            });
+
+            await Test("Dispose: McpHttpServer resources cleaned up after dispose", async () =>
+            {
+                McpHttpServer server = new McpHttpServer("localhost", 9824);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using McpHttpClient client = new McpHttpClient();
+                bool connected = await client.ConnectAsync("http://localhost:9824");
+                Assert(connected, "Expected connection before dispose");
+
+                server.Dispose();
+                await Task.Delay(200);
+
+                // Server should no longer accept connections
+                using HttpClient httpClient = new HttpClient();
+                bool connectionFailed = false;
+                try
+                {
+                    await httpClient.GetAsync("http://localhost:9824/");
+                }
+                catch
+                {
+                    connectionFailed = true;
+                }
+                Assert(connectionFailed, "Expected connection to fail after server dispose");
+            });
+
+            await Test("Dispose: JsonRpcServer resources cleaned up after dispose", async () =>
+            {
+                JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 9825);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using JsonRpcClient client = new JsonRpcClient();
+                bool connected = await client.ConnectAsync("127.0.0.1", 9825);
+                Assert(connected, "Expected connection before dispose");
+
+                string echo = await client.CallAsync<string>("echo", new { message = "pre-dispose" });
+                Assert(echo == "pre-dispose", "Expected echo before dispose");
+
+                client.Disconnect();
+                server.Dispose();
+                await Task.Delay(200);
+
+                // Server should no longer accept connections
+                using JsonRpcClient client2 = new JsonRpcClient();
+                bool connected2 = await client2.ConnectAsync("127.0.0.1", 9825);
+                Assert(!connected2, "Expected connection to fail after server dispose");
+            });
         }
 
         static async Task RunMcpStreamableHttpTests()
         {
             Console.WriteLine();
             Console.WriteLine("--- MCP: Streamable HTTP Transport Tests ---");
+
+            await Test("MCP Streamable HTTP: ClientConnection.DequeueAsync throws on cancellation", async () =>
+            {
+                using ClientConnection connection = new ClientConnection("cancel-test");
+                using CancellationTokenSource cts = new CancellationTokenSource(100);
+
+                bool canceled = false;
+                try
+                {
+                    await connection.DequeueAsync(cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    canceled = true;
+                }
+
+                Assert(canceled, "DequeueAsync should throw OperationCanceledException when cancelled");
+            });
 
             await Test("MCP Streamable HTTP: POST /mcp with valid JSON-RPC echo request", async () =>
             {
@@ -3200,6 +3571,94 @@ namespace Test.Automated
 
                 Assert(notificationReceived, "Should receive notification via SSE on /mcp");
                 Assert(notificationMethod == "streamableNotification", $"Expected 'streamableNotification', got '{notificationMethod}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: GET /mcp emits immediate SSE prelude and keeps session usable", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9876);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                string sessionId = await InitializeMcpSessionAsync(httpClient, "http://localhost:9876/mcp");
+
+                using HttpRequestMessage sseRequest = new HttpRequestMessage(HttpMethod.Get, "http://localhost:9876/mcp");
+                sseRequest.Headers.Add("Accept", "text/event-stream");
+                sseRequest.Headers.Add("Mcp-Session-Id", sessionId);
+
+                using CancellationTokenSource sseConnectCts = new CancellationTokenSource(1000);
+                using HttpResponseMessage sseResponse = await httpClient.SendAsync(
+                    sseRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    sseConnectCts.Token);
+
+                Assert(sseResponse.StatusCode == HttpStatusCode.OK, $"Expected 200, got {sseResponse.StatusCode}");
+                Assert(sseResponse.Content.Headers.ContentType?.MediaType == "text/event-stream", "SSE response should use text/event-stream");
+
+                using Stream sseStream = await sseResponse.Content.ReadAsStreamAsync();
+                string initialPayload = await ReadSseBytesAsync(sseStream, 64, 1000);
+                Assert(initialPayload.Contains(": connected"), $"Expected immediate SSE prelude, got '{initialPayload}'");
+
+                string initializedJson = JsonSerializer.Serialize(new JsonRpcRequest
+                {
+                    Method = "notifications/initialized",
+                    Params = new { },
+                    Id = Guid.NewGuid().ToString()
+                });
+
+                using HttpRequestMessage initializedRequest = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9876/mcp");
+                initializedRequest.Headers.Add("Mcp-Session-Id", sessionId);
+                initializedRequest.Content = new StringContent(initializedJson, Encoding.UTF8, "application/json");
+                using HttpResponseMessage initializedResponse = await httpClient.SendAsync(initializedRequest);
+                Assert(initializedResponse.StatusCode == HttpStatusCode.OK, $"Expected initialized POST to return 200, got {initializedResponse.StatusCode}");
+
+                string toolsListJson = JsonSerializer.Serialize(new JsonRpcRequest
+                {
+                    Method = "tools/list",
+                    Id = Guid.NewGuid().ToString()
+                });
+
+                using HttpRequestMessage toolsListRequest = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9876/mcp");
+                toolsListRequest.Headers.Add("Mcp-Session-Id", sessionId);
+                toolsListRequest.Content = new StringContent(toolsListJson, Encoding.UTF8, "application/json");
+                using HttpResponseMessage toolsListResponse = await httpClient.SendAsync(toolsListRequest);
+                string toolsListBody = await toolsListResponse.Content.ReadAsStringAsync();
+
+                Assert(toolsListResponse.StatusCode == HttpStatusCode.OK, $"Expected tools/list POST to return 200, got {toolsListResponse.StatusCode}");
+                Assert(toolsListBody.Contains("\"tools\""), $"Expected tools/list response body to contain tools, got '{toolsListBody}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: GET /mcp sends keep-alive when idle", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9877);
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                string sessionId = await InitializeMcpSessionAsync(httpClient, "http://localhost:9877/mcp");
+
+                using HttpRequestMessage sseRequest = new HttpRequestMessage(HttpMethod.Get, "http://localhost:9877/mcp");
+                sseRequest.Headers.Add("Accept", "text/event-stream");
+                sseRequest.Headers.Add("Mcp-Session-Id", sessionId);
+
+                using CancellationTokenSource sseConnectCts = new CancellationTokenSource(1000);
+                using HttpResponseMessage sseResponse = await httpClient.SendAsync(
+                    sseRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    sseConnectCts.Token);
+
+                Assert(sseResponse.StatusCode == HttpStatusCode.OK, $"Expected 200, got {sseResponse.StatusCode}");
+
+                using Stream sseStream = await sseResponse.Content.ReadAsStreamAsync();
+                string initialPayload = await ReadSseBytesAsync(sseStream, 64, 1000);
+                Assert(initialPayload.Contains(": connected"), $"Expected immediate SSE prelude, got '{initialPayload}'");
+
+                string keepAlivePayload = await ReadSseBytesAsync(sseStream, 64, 35000);
+                Assert(keepAlivePayload.Contains(": keep-alive"), $"Expected keep-alive comment, got '{keepAlivePayload}'");
 
                 server.Stop();
             });
@@ -3650,6 +4109,153 @@ namespace Test.Automated
                     exceptionThrown = true;
                 }
                 Assert(exceptionThrown, "ConnectStreamableAsync should throw ArgumentNullException for empty URL");
+            });
+
+            await Test("MCP Streamable HTTP: AuthenticationHandler rejects POST /mcp with 401", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9871);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult
+                    {
+                        IsAuthenticated = false,
+                        StatusCode = 401,
+                        ErrorMessage = "Unauthorized"
+                    };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9871/mcp");
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+
+                Assert(response.StatusCode == HttpStatusCode.Unauthorized, $"Expected 401, got {response.StatusCode}");
+                string body = await response.Content.ReadAsStringAsync();
+                Assert(body.Contains("Unauthorized"), $"Expected 'Unauthorized' in body, got '{body}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: AuthenticationHandler allows authenticated POST /mcp", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9872);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    string? authHeader = request.Headers["Authorization"];
+                    return new AuthenticationResult
+                    {
+                        IsAuthenticated = authHeader == "Bearer secret-key",
+                        StatusCode = 401,
+                        ErrorMessage = "Bad token"
+                    };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+
+                // Without token — rejected (using echo, not ping, since ping bypasses auth)
+                HttpRequestMessage request1 = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9872/mcp");
+                request1.Content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage response1 = await httpClient.SendAsync(request1);
+                Assert(response1.StatusCode == HttpStatusCode.Unauthorized, $"Expected 401 without token, got {response1.StatusCode}");
+
+                // With valid token — accepted
+                HttpRequestMessage request2 = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9872/mcp");
+                request2.Content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "hello" }, id = 2 }),
+                    Encoding.UTF8, "application/json");
+                request2.Headers.Add("Authorization", "Bearer secret-key");
+                HttpResponseMessage response2 = await httpClient.SendAsync(request2);
+                Assert(response2.StatusCode == HttpStatusCode.OK, $"Expected 200 with valid token, got {response2.StatusCode}");
+
+                string responseBody = await response2.Content.ReadAsStringAsync();
+                Assert(responseBody.Contains("hello"), $"Expected 'hello' in response, got '{responseBody}'");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: CORS preflight bypasses AuthenticationHandler", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9873);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult { IsAuthenticated = false, StatusCode = 401 };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Options, "http://localhost:9873/mcp");
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+
+                // OPTIONS should return 204 (CORS preflight), not 401
+                Assert(response.StatusCode == HttpStatusCode.NoContent, $"Expected 204 for CORS preflight, got {response.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: Ping bypasses AuthenticationHandler on /mcp", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9875);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult { IsAuthenticated = false, StatusCode = 401, ErrorMessage = "Denied" };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+
+                // Ping via /mcp should bypass auth
+                HttpRequestMessage pingRequest = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9875/mcp");
+                pingRequest.Content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "ping", id = 1 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage pingResponse = await httpClient.SendAsync(pingRequest);
+                Assert(pingResponse.StatusCode == HttpStatusCode.OK, $"Expected 200 for ping on /mcp, got {pingResponse.StatusCode}");
+                string pingBody = await pingResponse.Content.ReadAsStringAsync();
+                Assert(pingBody.Contains("pong"), $"Expected 'pong' in response, got '{pingBody}'");
+
+                // Non-ping via /mcp should still be rejected
+                HttpRequestMessage echoRequest = new HttpRequestMessage(HttpMethod.Post, "http://localhost:9875/mcp");
+                echoRequest.Content = new StringContent(
+                    JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "echo", @params = new { message = "test" }, id = 2 }),
+                    Encoding.UTF8, "application/json");
+                HttpResponseMessage echoResponse = await httpClient.SendAsync(echoRequest);
+                Assert(echoResponse.StatusCode == HttpStatusCode.Unauthorized, $"Expected 401 for echo on /mcp, got {echoResponse.StatusCode}");
+
+                server.Stop();
+            });
+
+            await Test("MCP Streamable HTTP: AuthenticationHandler DELETE /mcp rejected when unauthenticated", async () =>
+            {
+                using McpHttpServer server = new McpHttpServer("localhost", 9874);
+                server.AuthenticationHandler = async (HttpListenerRequest request) =>
+                {
+                    await Task.CompletedTask;
+                    return new AuthenticationResult { IsAuthenticated = false, StatusCode = 403, ErrorMessage = "No access" };
+                };
+                Task serverTask = Task.Run(() => server.StartAsync());
+                await Task.Delay(200);
+
+                using HttpClient httpClient = new HttpClient();
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Delete, "http://localhost:9874/mcp");
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+
+                Assert(response.StatusCode == HttpStatusCode.Forbidden, $"Expected 403, got {response.StatusCode}");
+
+                server.Stop();
             });
         }
 

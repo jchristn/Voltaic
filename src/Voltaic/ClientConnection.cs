@@ -201,25 +201,19 @@ namespace Voltaic
         /// This method will block until a notification is available or the cancellation token is triggered.
         /// </summary>
         /// <param name="token">Cancellation token for the operation.</param>
-        /// <returns>A task that represents the asynchronous operation. The task result contains the dequeued notification, or null if the operation was cancelled.</returns>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the dequeued notification, or null if the connection is disposed or no item is available after the wait completes.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the cancellation token is triggered before a notification is available.</exception>
         public async Task<JsonRpcRequest?> DequeueAsync(CancellationToken token = default)
         {
             if (_IsDisposed) return null;
 
-            try
+            await _Semaphore.WaitAsync(token).ConfigureAwait(false);
+            if (_Queue.TryDequeue(out JsonRpcRequest? notification))
             {
-                await _Semaphore.WaitAsync(token).ConfigureAwait(false);
-                if (_Queue.TryDequeue(out JsonRpcRequest? notification))
-                {
-                    LastActivity = DateTime.UtcNow;
-                    return notification;
-                }
-                return null;
+                LastActivity = DateTime.UtcNow;
+                return notification;
             }
-            catch (OperationCanceledException)
-            {
-                return null;
-            }
+            return null;
         }
 
         /// <summary>
@@ -253,21 +247,34 @@ namespace Voltaic
         /// </summary>
         public void Dispose()
         {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="ClientConnection"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
             if (!_IsDisposed)
             {
                 _IsDisposed = true;
 
-                // Cancel any pending operations
-                TokenSource?.Cancel();
-                TokenSource?.Dispose();
+                if (disposing)
+                {
+                    // Cancel any pending operations
+                    TokenSource?.Cancel();
+                    TokenSource?.Dispose();
 
-                // Dispose connection-specific resources
-                Stream?.Dispose();
-                TcpClient?.Close();
-                WebSocket?.Dispose();
+                    // Dispose connection-specific resources
+                    Stream?.Dispose();
+                    TcpClient?.Dispose();
+                    WebSocket?.Dispose();
 
-                // Dispose queue resources
-                _Semaphore.Dispose();
+                    // Dispose queue resources
+                    _Semaphore.Dispose();
+                }
             }
         }
 

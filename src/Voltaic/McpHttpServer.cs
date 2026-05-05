@@ -107,6 +107,25 @@ namespace Voltaic
         }
 
         /// <summary>
+        /// Gets or sets an optional asynchronous authentication handler.
+        /// When set, incoming HTTP requests are passed through this handler before processing.
+        /// If the handler returns an <see cref="AuthenticationResult"/> with <see cref="AuthenticationResult.IsAuthenticated"/> set to false,
+        /// the server immediately returns the specified status code and error message without processing the request.
+        /// When null (the default), no authentication is performed and all requests are accepted — preserving
+        /// backward compatibility with existing deployments.
+        /// The handler receives the full <see cref="HttpListenerRequest"/> so it can inspect headers, query strings,
+        /// client certificates, or any other request property needed for authentication.
+        /// The following endpoints always bypass authentication to allow connectivity validation:
+        /// the health check endpoint (<c>/</c>) and the <c>ping</c> JSON-RPC method.
+        /// CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
+        /// </summary>
+        public Func<HttpListenerRequest, Task<AuthenticationResult>>? AuthenticationHandler
+        {
+            get => _AuthenticationHandler;
+            set => _AuthenticationHandler = value;
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
@@ -153,10 +172,15 @@ namespace Voltaic
             { "Access-Control-Expose-Headers", "Mcp-Session-Id"},
             { "Access-Control-Max-Age", "86400" }
         };
+        private Func<HttpListenerRequest, Task<AuthenticationResult>>? _AuthenticationHandler;
         private volatile bool _IsStopping = false;
+        private bool _IsDisposed = false;
         private string _ProtocolVersion = "2025-03-26";
         private string _ServerName = "Voltaic.Mcp.HttpServer";
         private string _ServerVersion = "1.0.0";
+        private static readonly TimeSpan _SseHeartbeatInterval = TimeSpan.FromSeconds(30);
+        private static readonly byte[] _SseConnectedPrelude = Encoding.UTF8.GetBytes(": connected\n\n");
+        private static readonly byte[] _SseKeepAliveComment = Encoding.UTF8.GetBytes(": keep-alive\n\n");
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpHttpServer"/> class.
@@ -496,9 +520,27 @@ namespace Voltaic
         /// </summary>
         public void Dispose()
         {
-            Stop();
-            _TokenSource?.Dispose();
-            _Listener?.Close();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="McpHttpServer"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Stop();
+                    _TokenSource?.Dispose();
+                    ((IDisposable?)_Listener)?.Dispose();
+                }
+            }
         }
 
         /// <summary>
@@ -704,6 +746,75 @@ namespace Voltaic
                     return;
                 }
 
+                // Health check endpoint is always unauthenticated
+                if (path == "/")
+                {
+                    await HandleHealthCheckAsync(context, token).ConfigureAwait(false);
+                    return;
+                }
+
+                // Authenticate request if handler is configured
+                if (_AuthenticationHandler != null)
+                {
+                    // Buffer the request body so we can inspect the method for ping bypass
+                    string? requestBody = null;
+                    if (context.Request.HttpMethod == "POST" && context.Request.HasEntityBody)
+                    {
+                        using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: true))
+                        {
+                            requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+                        }
+
+                        // Allow ping requests without authentication
+                        if (!String.IsNullOrEmpty(requestBody))
+                        {
+                            try
+                            {
+                                JsonRpcRequest? rpcRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                                if (rpcRequest != null && rpcRequest.Method == "ping")
+                                {
+                                    await HandlePreAuthRpcRequestAsync(context, requestBody, token).ConfigureAwait(false);
+                                    return;
+                                }
+                            }
+                            catch (JsonException)
+                            {
+                                // Not valid JSON-RPC — fall through to auth check
+                            }
+                        }
+                    }
+
+                    AuthenticationResult authResult = await _AuthenticationHandler(context.Request).ConfigureAwait(false);
+                    if (!authResult.IsAuthenticated)
+                    {
+                        context.Response.StatusCode = authResult.StatusCode;
+                        if (_EnableCors)
+                        {
+                            foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                                context.Response.AddHeader(kvp.Key, kvp.Value);
+                        }
+
+                        if (!String.IsNullOrEmpty(authResult.ErrorMessage))
+                        {
+                            byte[] errorBytes = Encoding.UTF8.GetBytes(authResult.ErrorMessage);
+                            context.Response.ContentType = "text/plain";
+                            context.Response.ContentLength64 = errorBytes.Length;
+                            await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+                        }
+
+                        context.Response.Close();
+                        LogMessage($"Authentication failed for {path}: {authResult.ErrorMessage ?? "no details"}");
+                        return;
+                    }
+
+                    // If we already buffered the body, pass it through to avoid re-reading
+                    if (requestBody != null)
+                    {
+                        await HandlePreReadRpcRequestAsync(context, path, requestBody, token).ConfigureAwait(false);
+                        return;
+                    }
+                }
+
                 if (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath))
                 {
                     await HandleMcpRequestAsync(context, token).ConfigureAwait(false);
@@ -715,10 +826,6 @@ namespace Voltaic
                 else if (path.StartsWith(_EventsPath))
                 {
                     await HandleSseRequestAsync(context, token).ConfigureAwait(false);
-                }
-                else if (path == "/")
-                {
-                    await HandleHealthCheckAsync(context, token).ConfigureAwait(false);
                 }
                 else
                 {
@@ -847,11 +954,13 @@ namespace Voltaic
 
                 try
                 {
+                    await SendSsePreludeAsync(context.Response, token).ConfigureAwait(false);
+
                     while (!token.IsCancellationRequested)
                     {
                         using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token))
                         {
-                            timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+                            timeoutCts.CancelAfter(_SseHeartbeatInterval);
 
                             try
                             {
@@ -859,19 +968,16 @@ namespace Voltaic
 
                                 if (notification != null)
                                 {
-                                    string json = JsonSerializer.Serialize(notification);
-                                    string sseMessage = $"data: {json}\n\n";
-                                    byte[] buffer = Encoding.UTF8.GetBytes(sseMessage);
-
-                                    await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-                                    await context.Response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+                                    await SendSseNotificationAsync(context.Response, notification, token).ConfigureAwait(false);
                                 }
                             }
-                            catch (OperationCanceledException)
+                            catch (OperationCanceledException) when (!token.IsCancellationRequested)
                             {
-                                byte[] keepAlive = Encoding.UTF8.GetBytes(": keep-alive\n\n");
-                                await context.Response.OutputStream.WriteAsync(keepAlive, 0, keepAlive.Length, token).ConfigureAwait(false);
-                                await context.Response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+                                await SendSseKeepAliveAsync(context.Response, token).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException) when (token.IsCancellationRequested)
+                            {
+                                break;
                             }
                         }
                     }
@@ -916,6 +1022,89 @@ namespace Voltaic
 
             context.Response.StatusCode = 204;
             context.Response.Close();
+        }
+
+        /// <summary>
+        /// Handles a ping request that bypassed authentication.
+        /// The request body has already been read and parsed.
+        /// </summary>
+        private async Task HandlePreAuthRpcRequestAsync(HttpListenerContext context, string requestBody, CancellationToken token)
+        {
+            string path = context.Request.Url?.AbsolutePath ?? "";
+            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+            {
+                ClientConnection newConnection = new ClientConnection(id);
+                newConnection.MaxQueueSize = _MaxQueueSize;
+                return newConnection;
+            });
+
+
+            LogMessage($"Pre-auth ping request from session {sessionId}");
+
+            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            SetSessionIdHeaders(context.Response, sessionId);
+            context.Response.ContentType = "application/json";
+
+            string responseJson = JsonSerializer.Serialize(response);
+            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+        }
+
+        /// <summary>
+        /// Handles an RPC request where the body was already read during authentication inspection.
+        /// Routes to the appropriate handler (MCP or RPC) based on the request path.
+        /// </summary>
+        private async Task HandlePreReadRpcRequestAsync(HttpListenerContext context, string path, string requestBody, CancellationToken token)
+        {
+            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+            bool isNewSession = !_Sessions.ContainsKey(sessionId);
+            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+            {
+                ClientConnection newConnection = new ClientConnection(id);
+                newConnection.MaxQueueSize = _MaxQueueSize;
+                return newConnection;
+            });
+
+            if (isNewSession && _Sessions.ContainsKey(sessionId))
+            {
+                RaiseClientConnected(connection);
+            }
+
+
+
+            string logPrefix = (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath)) ? "MCP" : "RPC";
+            LogMessage($"{logPrefix} request from session {sessionId}: {requestBody}");
+
+            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            SetSessionIdHeaders(context.Response, sessionId);
+            context.Response.ContentType = "application/json";
+
+            string responseJson = JsonSerializer.Serialize(response);
+            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+
+            LogMessage($"{logPrefix} response to session {sessionId}: {responseJson}");
         }
 
         private async Task HandleHealthCheckAsync(HttpListenerContext context, CancellationToken token)
@@ -1029,12 +1218,14 @@ namespace Voltaic
 
             try
             {
+                await SendSsePreludeAsync(context.Response, token).ConfigureAwait(false);
+
                 // Keep connection alive and send notifications
                 while (!token.IsCancellationRequested)
                 {
                     using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token))
                     {
-                        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+                        timeoutCts.CancelAfter(_SseHeartbeatInterval);
 
                         try
                         {
@@ -1042,20 +1233,16 @@ namespace Voltaic
 
                             if (notification != null)
                             {
-                                string json = JsonSerializer.Serialize(notification);
-                                string sseMessage = $"data: {json}\n\n";
-                                byte[] buffer = Encoding.UTF8.GetBytes(sseMessage);
-
-                                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-                                await context.Response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+                                await SendSseNotificationAsync(context.Response, notification, token).ConfigureAwait(false);
                             }
                         }
-                        catch (OperationCanceledException)
+                        catch (OperationCanceledException) when (!token.IsCancellationRequested)
                         {
-                            // Send keep-alive comment
-                            byte[] keepAlive = Encoding.UTF8.GetBytes(": keep-alive\n\n");
-                            await context.Response.OutputStream.WriteAsync(keepAlive, 0, keepAlive.Length, token).ConfigureAwait(false);
-                            await context.Response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+                            await SendSseKeepAliveAsync(context.Response, token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested)
+                        {
+                            break;
                         }
                     }
                 }
@@ -1069,6 +1256,28 @@ namespace Voltaic
                 context.Response.Close();
                 LogMessage($"SSE connection closed for session {sessionId}");
             }
+        }
+
+        private async Task SendSsePreludeAsync(HttpListenerResponse response, CancellationToken token)
+        {
+            await response.OutputStream.WriteAsync(_SseConnectedPrelude, 0, _SseConnectedPrelude.Length, token).ConfigureAwait(false);
+            await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        private async Task SendSseNotificationAsync(HttpListenerResponse response, JsonRpcRequest notification, CancellationToken token)
+        {
+            string json = JsonSerializer.Serialize(notification);
+            string sseMessage = $"data: {json}\n\n";
+            byte[] buffer = Encoding.UTF8.GetBytes(sseMessage);
+
+            await response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        private async Task SendSseKeepAliveAsync(HttpListenerResponse response, CancellationToken token)
+        {
+            await response.OutputStream.WriteAsync(_SseKeepAliveComment, 0, _SseKeepAliveComment.Length, token).ConfigureAwait(false);
+            await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
         }
 
         private async Task<JsonRpcResponse> ProcessRpcRequestAsync(ClientConnection connection, string requestString, CancellationToken token = default)

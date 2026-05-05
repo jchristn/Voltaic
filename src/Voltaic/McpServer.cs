@@ -16,6 +16,7 @@ namespace Voltaic
     {
         private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
         private readonly List<ToolDefinition> _Tools;
+        private bool _IsDisposed = false;
 
         /// <summary>
         /// Gets or sets the MCP protocol version.
@@ -232,8 +233,26 @@ namespace Voltaic
         /// </summary>
         public void Dispose()
         {
-            _Methods.Clear();
-            _Tools.Clear();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="McpServer"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    _Methods.Clear();
+                    _Tools.Clear();
+                }
+            }
         }
 
         private void RegisterBuiltInMethods()

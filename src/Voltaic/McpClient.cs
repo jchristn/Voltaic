@@ -59,6 +59,7 @@ namespace Voltaic
         private Task? _ReceiveTask;
         private Task? _StderrTask;
         private bool _IsConnected = false;
+        private bool _IsDisposed = false;
         private int _RequestIdCounter = 0;
         private readonly ConcurrentDictionary<object, ClientPendingRequest> _PendingRequests;
         private string? _Endpoint;
@@ -251,12 +252,30 @@ namespace Voltaic
         /// </summary>
         public void Dispose()
         {
-            Shutdown();
-            _CancellationTokenSource?.Dispose();
-            _StdinWriter?.Dispose();
-            _StdoutReader?.Dispose();
-            _StderrReader?.Dispose();
-            _ServerProcess?.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="McpClient"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Shutdown();
+                    _CancellationTokenSource?.Dispose();
+                    _StdinWriter?.Dispose();
+                    _StdoutReader?.Dispose();
+                    _StderrReader?.Dispose();
+                    _ServerProcess?.Dispose();
+                }
+            }
         }
 
         private async Task SendRequestAsync(JsonRpcRequest request, CancellationToken token = default)

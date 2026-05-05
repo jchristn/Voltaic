@@ -84,6 +84,7 @@
         private Task? _ReceiveTask;
         private int _RequestIdCounter = 0;
         private bool _IsConnected = false;
+        private bool _IsDisposed = false;
         private string _DefaultContentType = "application/json; charset=utf-8";
         private string? _Endpoint;
         private DateTime _ConnectedUtc;
@@ -254,9 +255,6 @@
                 }
                 _PendingRequests.Clear();
 
-                _Stream?.Dispose();
-                _TcpClient?.Close();
-
                 LogMessage("Disconnected");
                 RaiseDisconnected("Client disconnected");
             }
@@ -267,10 +265,28 @@
         /// </summary>
         public void Dispose()
         {
-            Disconnect();
-            _TokenSource?.Dispose();
-            _Stream?.Dispose();
-            _TcpClient?.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="JsonRpcClient"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Disconnect();
+                    _TokenSource?.Dispose();
+                    _Stream?.Dispose();
+                    _TcpClient?.Dispose();
+                }
+            }
         }
 
         private async Task ReceiveLoop(CancellationToken token)

@@ -42,9 +42,51 @@ Client and server implementations for Anthropic's Model Context Protocol, suppor
 - Request/response event tracking with timing information
 - Compatible with MCP server ecosystem
 
-### Important
+### Authentication
 
-Voltaic currently does not support authorization, which is listed as OPTIONAL in the [spec](https://modelcontextprotocol.io/specification/draft/basic/authorization).
+`McpHttpServer` supports an optional async authentication handler that runs before any request processing. When set, every incoming HTTP request is passed through the handler, which receives the full `HttpListenerRequest` and returns an `AuthenticationResult`. If authentication fails, the server returns the configured HTTP status code and error message without processing the request. When not set, all requests are accepted (preserving backward compatibility).
+
+```csharp
+using System.Net;
+using Voltaic;
+
+McpHttpServer server = new McpHttpServer("localhost", 8080);
+
+server.AuthenticationHandler = async (HttpListenerRequest request) =>
+{
+    string? token = request.Headers["Authorization"];
+    if (string.IsNullOrEmpty(token) || !token.StartsWith("Bearer "))
+    {
+        return new AuthenticationResult
+        {
+            IsAuthenticated = false,
+            StatusCode = 401,
+            ErrorMessage = "Missing or invalid Authorization header"
+        };
+    }
+
+    // Validate the token (call your JWT validation, database lookup, etc.)
+    bool isValid = await ValidateTokenAsync(token.Substring("Bearer ".Length));
+
+    return new AuthenticationResult
+    {
+        IsAuthenticated = isValid,
+        Principal = "my-user",
+        Claims = new Dictionary<string, string> { { "role", "admin" } }
+    };
+};
+
+await server.StartAsync();
+```
+
+The following endpoints always bypass authentication to allow connectivity validation without credentials:
+- **Health check** (`GET /`) — returns `{"status":"Ok"}`, useful for load balancer probes
+- **Ping** (`ping` JSON-RPC method via any RPC endpoint) — returns `"pong"`, validates application-layer connectivity
+- **CORS preflight** (`OPTIONS` requests) — returns `204` with CORS headers
+
+All other requests are rejected with the configured status code and error message when authentication fails.
+
+Full authorization flows (such as OAuth 2.1 as described in the [MCP spec](https://modelcontextprotocol.io/specification/draft/basic/authorization)) remain the responsibility of the application developer. The `AuthenticationHandler` provides the hook point for integrating any authentication scheme.
 
 ---
 
@@ -321,6 +363,13 @@ Console.WriteLine("MCP HTTP server running on http://localhost:8080");
 await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ```
 
+The default `McpHttpServer` listens on all three HTTP endpoints:
+- `/rpc` for request/response JSON-RPC
+- `/events` for classic SSE notifications
+- `/mcp` for MCP Streamable HTTP
+
+Set `mcpPath: null` in the constructor if you want to disable the Streamable HTTP endpoint.
+
 ### Quick Start: MCP Client (HTTP)
 
 ```csharp
@@ -338,6 +387,26 @@ await client.StartSseAsync();
 object? result = await client.CallAsync<object>("tools/list");
 Console.WriteLine(result);
 ```
+
+### Quick Start: MCP Client (Streamable HTTP)
+
+```csharp
+using Voltaic;
+
+McpHttpClient client = new McpHttpClient();
+
+// Establish the RPC/session side on POST /mcp
+await client.ConnectStreamableAsync("http://localhost:8080");
+
+// Open the SSE side on GET /mcp for notifications
+await client.StartSseAsync();
+
+// Call methods on the same session
+object? result = await client.CallAsync<object>("tools/list");
+Console.WriteLine(result);
+```
+
+`ConnectStreamableAsync()` establishes the session and POST endpoint. Call `StartSseAsync()` when you want the SSE notification stream to become active on the same `/mcp` endpoint.
 
 ### Quick Start: MCP Server (WebSocket)
 
@@ -428,6 +497,36 @@ Voltaic might not be the right fit if you need:
 
 ---
 
+## Resource Management
+
+All server and client classes implement `IDisposable` using the full Dispose pattern (`protected virtual void Dispose(bool disposing)`) with double-disposal protection. Use `using` statements or call `Dispose()` to ensure proper resource cleanup:
+
+```csharp
+// Recommended: using statement ensures cleanup
+using McpHttpServer server = new McpHttpServer("localhost", 8080);
+await server.StartAsync();
+
+// Or manually dispose
+McpHttpServer server2 = new McpHttpServer("localhost", 8081);
+try
+{
+    await server2.StartAsync();
+}
+finally
+{
+    server2.Dispose();
+}
+```
+
+**Key points:**
+- `Dispose()` is safe to call multiple times — subsequent calls are no-ops
+- For servers, `Dispose()` calls `Stop()` internally, disconnecting all clients and releasing the listening port
+- For clients, `Dispose()` calls `Disconnect()` internally, cancelling pending requests
+- `Disconnect()`/`Stop()` manage connection state only — `Dispose()` releases underlying resources (sockets, listeners, cancellation tokens)
+- All classes support the `protected virtual void Dispose(bool disposing)` pattern for subclass extensibility
+
+---
+
 ## Documentation
 
 All classes and methods are available in the `Voltaic` namespace.
@@ -448,6 +547,7 @@ All classes and methods are available in the `Voltaic` namespace.
 - `List<string> GetConnectedClients()` - Get list of connected client IDs
 - `bool KickClient(string clientId)` - Disconnect a specific client by ID
 - `void Stop()` - Gracefully shut down the server
+- `void Dispose()` - Release all resources (calls Stop() internally, safe to call multiple times)
 
 *Properties:*
 - `int MaxQueueSize { get; set; }` - Maximum queued notifications per client (default: 100, min: 1)
@@ -469,6 +569,7 @@ All classes and methods are available in the `Voltaic` namespace.
 - `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Make an RPC call and await response
 - `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send a notification (no response)
 - `void Disconnect()` - Close the connection
+- `void Dispose()` - Release all resources (calls Disconnect() internally, safe to call multiple times)
 
 *Properties:*
 - `bool IsConnected { get; }` - Whether the client is currently connected
@@ -492,6 +593,7 @@ All classes and methods are available in the `Voltaic` namespace.
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)` - Register tool with asynchronous handler
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register tool with async cancellable handler
 - `Task RunAsync(CancellationToken token = default)` - Run the server (blocks until stdin closes)
+- `void Dispose()` - Release all resources (safe to call multiple times)
 
 *Properties:*
 - `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-03-26")
@@ -516,6 +618,7 @@ All classes and methods are available in the `Voltaic` namespace.
 - `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call server method
 - `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send notification
 - `void StopServer()` - Stop the subprocess server
+- `void Dispose()` - Release all resources (calls Shutdown() internally, safe to call multiple times)
 
 *Events:*
 - `event EventHandler<JsonRpcRequest> NotificationReceived` - Handle server notifications
@@ -540,7 +643,7 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 **McpHttpServer (HTTP-based MCP with SSE):**
 
 *Constructor:*
-- `McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true)`
+- `McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true, string? mcpPath = "/mcp")`
 
 *Methods:*
 - `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
@@ -557,8 +660,10 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `bool KickClient(string clientId)` - Disconnect a specific client
 - `bool RemoveSession(string sessionId)` - Remove a session
 - `void Stop()` - Stop the server
+- `void Dispose()` - Release all resources (calls Stop() internally, safe to call multiple times)
 
 *Properties:*
+- `Func<HttpListenerRequest, Task<AuthenticationResult>>? AuthenticationHandler { get; set; }` - Optional async authentication handler. When set, every request is authenticated before processing. When null (default), all requests are accepted
 - `int SessionTimeoutSeconds { get; set; }` - Session timeout (default: 300, min: 10)
 - `int MaxQueueSize { get; set; }` - Max queued notifications per client (default: 100, min: 1)
 - `bool EnableCors { get; set; }` - Enable CORS support (default: true)
@@ -578,15 +683,19 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 
 *Methods:*
 - `Task<bool> ConnectAsync(string baseUrl, CancellationToken token = default)` - Connect to HTTP server
-- `Task<bool> StartSseAsync(CancellationToken token = default)` - Start Server-Sent Events for notifications
+- `Task<bool> ConnectStreamableAsync(string baseUrl, string mcpPath = "/mcp", CancellationToken token = default)` - Establish a Streamable HTTP session on `/mcp`
+- `Task<bool> StartSseAsync(CancellationToken token = default)` - Start Server-Sent Events for notifications on `/events` or `/mcp`
 - `void StopSse()` - Stop SSE connection
 - `Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call with typed response
 - `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call method
 - `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send notification
+- `void Disconnect()` - Disconnect from the server
+- `void Dispose()` - Release all resources (calls Disconnect() internally, safe to call multiple times)
 
 *Properties:*
 - `string? SessionId { get; }` - Session ID assigned by server
 - `bool IsConnected { get; }` - Connection status
+- `bool IsSseConnected { get; }` - SSE connection status
 
 *Events:*
 - `event EventHandler<JsonRpcRequest> NotificationReceived` - Handle server notifications
@@ -606,6 +715,7 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `List<string> GetConnectedClients()` - Get list of connected client IDs
 - `bool KickClient(string clientId)` - Disconnect a specific client
 - `void Stop()` - Stop the server
+- `void Dispose()` - Release all resources (calls Stop() internally, safe to call multiple times)
 
 *Properties:*
 - `int MaxMessageSize { get; set; }` - Maximum message size in bytes (default: 1MB, min: 4096)
@@ -630,6 +740,7 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call method
 - `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send notification
 - `void Disconnect()` - Close connection
+- `void Dispose()` - Release all resources (calls Disconnect() internally, safe to call multiple times)
 
 *Properties:*
 - `bool IsConnected { get; }` - Connection status
@@ -896,9 +1007,9 @@ The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a visu
 
 3. **Configure the connection**:
    - **Transport Type**: Select `Streamable HTTP`
-   - **URL**: Enter `http://{hostname}:{port}/rpc`
-     - For example: `http://localhost:8080/rpc`
-     - If you specified a custom `rpcPath` when creating the server, use that instead of `/rpc`
+   - **URL**: Enter `http://{hostname}:{port}/mcp`
+     - For example: `http://localhost:8080/mcp`
+     - If you specified a custom `mcpPath` when creating the server, use that instead of `/mcp`
 
 4. **Click Connect**
 

@@ -4,6 +4,49 @@
         <name>Voltaic</name>
     </assembly>
     <members>
+        <member name="T:Voltaic.AuthenticationResult">
+            <summary>
+            Represents the result of an authentication attempt performed by the <see cref="P:Voltaic.McpHttpServer.AuthenticationHandler"/>.
+            When <see cref="P:Voltaic.AuthenticationResult.IsAuthenticated"/> is false, the server returns the specified <see cref="P:Voltaic.AuthenticationResult.StatusCode"/> and <see cref="P:Voltaic.AuthenticationResult.ErrorMessage"/>
+            to the client without processing the request further.
+            When <see cref="P:Voltaic.AuthenticationResult.IsAuthenticated"/> is true, optional identity information such as <see cref="P:Voltaic.AuthenticationResult.Principal"/> and <see cref="P:Voltaic.AuthenticationResult.Claims"/>
+            can be carried forward for use in downstream tool handlers.
+            </summary>
+        </member>
+        <member name="P:Voltaic.AuthenticationResult.IsAuthenticated">
+            <summary>
+            Gets or sets a value indicating whether the request was successfully authenticated.
+            When false, the server will reject the request with the configured <see cref="P:Voltaic.AuthenticationResult.StatusCode"/> and <see cref="P:Voltaic.AuthenticationResult.ErrorMessage"/>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.AuthenticationResult.Principal">
+            <summary>
+            Gets or sets the authenticated principal name (e.g., username, service account, API key identifier).
+            This value is informational and can be used by tool handlers to determine who is calling.
+            Default is null, indicating no principal information is available.
+            </summary>
+        </member>
+        <member name="P:Voltaic.AuthenticationResult.Claims">
+            <summary>
+            Gets or sets additional claims or metadata associated with the authenticated identity.
+            Tool handlers can use these claims for fine-grained authorization decisions.
+            Default is null, indicating no additional claims are available.
+            </summary>
+        </member>
+        <member name="P:Voltaic.AuthenticationResult.StatusCode">
+            <summary>
+            Gets or sets the HTTP status code to return when authentication fails.
+            Common values are 401 (Unauthorized) and 403 (Forbidden).
+            Default is 401. Only used when <see cref="P:Voltaic.AuthenticationResult.IsAuthenticated"/> is false.
+            </summary>
+        </member>
+        <member name="P:Voltaic.AuthenticationResult.ErrorMessage">
+            <summary>
+            Gets or sets the error message to include in the response body when authentication fails.
+            Default is null, which results in no response body being sent.
+            Only used when <see cref="P:Voltaic.AuthenticationResult.IsAuthenticated"/> is false.
+            </summary>
+        </member>
         <member name="T:Voltaic.ClientConnectedEventArgs">
             <summary>
             Provides data for client connection events.
@@ -130,7 +173,8 @@
             This method will block until a notification is available or the cancellation token is triggered.
             </summary>
             <param name="token">Cancellation token for the operation.</param>
-            <returns>A task that represents the asynchronous operation. The task result contains the dequeued notification, or null if the operation was cancelled.</returns>
+            <returns>A task that represents the asynchronous operation. The task result contains the dequeued notification, or null if the connection is disposed or no item is available after the wait completes.</returns>
+            <exception cref="T:System.OperationCanceledException">Thrown when the cancellation token is triggered before a notification is available.</exception>
         </member>
         <member name="M:Voltaic.ClientConnection.DequeueAll">
             <summary>
@@ -148,6 +192,12 @@
             <summary>
             Releases all resources used by the <see cref="T:Voltaic.ClientConnection"/>.
             </summary>
+        </member>
+        <member name="M:Voltaic.ClientConnection.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.ClientConnection"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
         <member name="T:Voltaic.ClientConnectionTypeEnum">
             <summary>
@@ -377,6 +427,12 @@
             <summary>
             Releases all resources used by the <see cref="T:Voltaic.JsonRpcClient"/>.
             </summary>
+        </member>
+        <member name="M:Voltaic.JsonRpcClient.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.JsonRpcClient"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
         <member name="T:Voltaic.JsonRpcError">
             <summary>
@@ -755,6 +811,12 @@
             Releases all resources used by the <see cref="T:Voltaic.JsonRpcServer"/>.
             </summary>
         </member>
+        <member name="M:Voltaic.JsonRpcServer.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.JsonRpcServer"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        </member>
         <member name="M:Voltaic.JsonRpcServer.RegisterBuiltInMethods">
             <summary>
             Registers the built-in RPC methods: ping, echo, getTime, add, and getClients.
@@ -847,6 +909,12 @@
             Releases all resources used by the <see cref="T:Voltaic.McpClient"/>.
             </summary>
         </member>
+        <member name="M:Voltaic.McpClient.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.McpClient"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        </member>
         <member name="T:Voltaic.McpHttpClient">
             <summary>
             Provides an HTTP-based MCP (Model Context Protocol) client implementation.
@@ -927,6 +995,7 @@
             <summary>
             Asynchronously connects to an HTTP MCP server using the Streamable HTTP transport.
             Uses a single endpoint path for both RPC (POST) and SSE (GET), with Mcp-Session-Id headers.
+            This establishes the RPC/session side of the transport; call <see cref="M:Voltaic.McpHttpClient.StartSseAsync(System.Threading.CancellationToken)"/> to start the SSE stream used for notifications.
             </summary>
             <param name="baseUrl">The base URL of the server (e.g., "http://localhost:7891").</param>
             <param name="mcpPath">The MCP endpoint path. Default is "/mcp".</param>
@@ -938,6 +1007,7 @@
             <summary>
             Asynchronously starts the Server-Sent Events (SSE) connection to receive notifications from the server.
             A session must be established before calling this method.
+            When using Streamable HTTP, this opens the GET side of the shared /mcp endpoint.
             </summary>
             <param name="token">Cancellation token for the operation.</param>
             <returns>A task that represents the asynchronous operation. The task result is true if the SSE connection was established; otherwise, false.</returns>
@@ -970,6 +1040,12 @@
             <summary>
             Releases all resources used by the <see cref="T:Voltaic.McpHttpClient"/>.
             </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.McpHttpClient"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
         <member name="T:Voltaic.McpHttpServer">
             <summary>
@@ -1025,6 +1101,21 @@
             <summary>
             Gets or sets the server version for MCP serverInfo.
             Default is "1.0.0".
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpServer.AuthenticationHandler">
+            <summary>
+            Gets or sets an optional asynchronous authentication handler.
+            When set, incoming HTTP requests are passed through this handler before processing.
+            If the handler returns an <see cref="T:Voltaic.AuthenticationResult"/> with <see cref="P:Voltaic.AuthenticationResult.IsAuthenticated"/> set to false,
+            the server immediately returns the specified status code and error message without processing the request.
+            When null (the default), no authentication is performed and all requests are accepted — preserving
+            backward compatibility with existing deployments.
+            The handler receives the full <see cref="T:System.Net.HttpListenerRequest"/> so it can inspect headers, query strings,
+            client certificates, or any other request property needed for authentication.
+            The following endpoints always bypass authentication to allow connectivity validation:
+            the health check endpoint (<c>/</c>) and the <c>ping</c> JSON-RPC method.
+            CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
             </summary>
         </member>
         <member name="E:Voltaic.McpHttpServer.Log">
@@ -1192,6 +1283,12 @@
             Releases all resources used by the <see cref="T:Voltaic.McpHttpServer"/>.
             </summary>
         </member>
+        <member name="M:Voltaic.McpHttpServer.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.McpHttpServer"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        </member>
         <member name="M:Voltaic.McpHttpServer.RegisterBuiltInMethods">
             <summary>
             Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
@@ -1216,6 +1313,18 @@
             GET: SSE stream for server-to-client notifications (same as /events).
             DELETE: Session termination.
             This provides compatibility with the MCP Streamable HTTP transport specification.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.HandlePreAuthRpcRequestAsync(System.Net.HttpListenerContext,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Handles a ping request that bypassed authentication.
+            The request body has already been read and parsed.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.HandlePreReadRpcRequestAsync(System.Net.HttpListenerContext,System.String,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Handles an RPC request where the body was already read during authentication inspection.
+            Routes to the appropriate handler (MCP or RPC) based on the request path.
             </summary>
         </member>
         <member name="T:Voltaic.McpServer">
@@ -1330,6 +1439,12 @@
             <summary>
             Releases all resources used by the <see cref="T:Voltaic.McpServer"/>.
             </summary>
+        </member>
+        <member name="M:Voltaic.McpServer.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.McpServer"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
         <member name="T:Voltaic.McpTcpClient">
             <summary>
@@ -1474,6 +1589,12 @@
             <summary>
             Releases all resources used by the <see cref="T:Voltaic.McpWebsocketsClient"/>.
             </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsClient.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.McpWebsocketsClient"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
         <member name="T:Voltaic.McpWebsocketsServer">
             <summary>
@@ -1629,6 +1750,12 @@
             <summary>
             Releases all resources used by the <see cref="T:Voltaic.McpWebsocketsServer"/>.
             </summary>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.Dispose(System.Boolean)">
+            <summary>
+            Releases the unmanaged resources used by the <see cref="T:Voltaic.McpWebsocketsServer"/> and optionally releases the managed resources.
+            </summary>
+            <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
         <member name="M:Voltaic.McpWebsocketsServer.RegisterBuiltInMethods">
             <summary>

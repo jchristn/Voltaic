@@ -87,6 +87,7 @@
         private int _ClientIdCounter = 0;
         private string _DefaultContentType = "application/json; charset=utf-8";
         private int _MaxQueueSize = 100;
+        private bool _IsDisposed = false;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="JsonRpcServer"/> class.
@@ -269,9 +270,35 @@
         /// </summary>
         public void Dispose()
         {
-            Stop();
-            _TokenSource?.Dispose();
-            _Listener?.Stop();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="JsonRpcServer"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Stop();
+                    _TokenSource?.Dispose();
+
+                    try
+                    {
+                        ((IDisposable?)_Listener)?.Dispose();
+                    }
+                    catch
+                    {
+                        // Ignore errors during listener disposal
+                    }
+                }
+            }
         }
 
         /// <summary>

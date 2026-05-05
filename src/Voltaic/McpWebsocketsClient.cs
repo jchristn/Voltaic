@@ -70,6 +70,7 @@ namespace Voltaic
         private Task? _ReceiveTask;
         private int _RequestIdCounter = 0;
         private bool _IsConnected = false;
+        private bool _IsDisposed = false;
         private int _MaxMessageSize = 1048576; // 1 MB
         private string? _Endpoint;
         private DateTime _ConnectedUtc;
@@ -239,7 +240,6 @@ namespace Voltaic
                     }
                 }
 
-                _WebSocket?.Dispose();
                 LogMessage("Disconnected");
                 RaiseDisconnected("Client disconnected");
             }
@@ -250,9 +250,27 @@ namespace Voltaic
         /// </summary>
         public void Dispose()
         {
-            Disconnect();
-            _TokenSource?.Dispose();
-            _WebSocket?.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="McpWebsocketsClient"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Disconnect();
+                    _TokenSource?.Dispose();
+                    _WebSocket?.Dispose();
+                }
+            }
         }
 
         private async Task ReceiveLoop(CancellationToken token)

@@ -84,6 +84,7 @@ namespace Voltaic
         private bool _IsSseConnected = false;
 
         private int _RequestTimeoutMs = 30000;
+        private bool _IsDisposed = false;
         private DateTime _ConnectedUtc;
 
         /// <summary>
@@ -134,6 +135,7 @@ namespace Voltaic
         /// <summary>
         /// Asynchronously connects to an HTTP MCP server using the Streamable HTTP transport.
         /// Uses a single endpoint path for both RPC (POST) and SSE (GET), with Mcp-Session-Id headers.
+        /// This establishes the RPC/session side of the transport; call <see cref="StartSseAsync(System.Threading.CancellationToken)"/> to start the SSE stream used for notifications.
         /// </summary>
         /// <param name="baseUrl">The base URL of the server (e.g., "http://localhost:7891").</param>
         /// <param name="mcpPath">The MCP endpoint path. Default is "/mcp".</param>
@@ -170,6 +172,7 @@ namespace Voltaic
         /// <summary>
         /// Asynchronously starts the Server-Sent Events (SSE) connection to receive notifications from the server.
         /// A session must be established before calling this method.
+        /// When using Streamable HTTP, this opens the GET side of the shared /mcp endpoint.
         /// </summary>
         /// <param name="token">Cancellation token for the operation.</param>
         /// <returns>A task that represents the asynchronous operation. The task result is true if the SSE connection was established; otherwise, false.</returns>
@@ -177,7 +180,7 @@ namespace Voltaic
         public async Task<bool> StartSseAsync(CancellationToken token = default)
         {
             if (String.IsNullOrEmpty(SessionId))
-                throw new InvalidOperationException("No session established. Call ConnectAsync first.");
+                throw new InvalidOperationException("No session established. Call ConnectAsync or ConnectStreamableAsync first.");
 
             try
             {
@@ -321,9 +324,27 @@ namespace Voltaic
         /// </summary>
         public void Dispose()
         {
-            Disconnect();
-            _SseTokenSource?.Dispose();
-            _HttpClient?.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="McpHttpClient"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Disconnect();
+                    _SseTokenSource?.Dispose();
+                    _HttpClient?.Dispose();
+                }
+            }
         }
 
         private async Task SseLoop(CancellationToken token)

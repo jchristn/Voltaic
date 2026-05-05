@@ -107,6 +107,7 @@ namespace Voltaic
         private int _KeepAliveIntervalSeconds = 30;
         private int _MaxQueueSize = 100;
         private volatile bool _IsStopping = false;
+        private bool _IsDisposed = false;
         private string _ProtocolVersion = "2025-03-26";
         private string _ServerName = "Voltaic.Mcp.WebSocketsServer";
         private string _ServerVersion = "1.0.0";
@@ -331,9 +332,27 @@ namespace Voltaic
         /// </summary>
         public void Dispose()
         {
-            Stop();
-            _TokenSource?.Dispose();
-            _Listener?.Close();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="McpWebsocketsServer"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Stop();
+                    _TokenSource?.Dispose();
+                    ((IDisposable?)_Listener)?.Dispose();
+                }
+            }
         }
 
         /// <summary>
