@@ -37,6 +37,36 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Host HTTP compatibility endpoints (`/rpc` and `/events`) alongside the current Streamable HTTP endpoint (`/mcp`).
 - Run the same 253-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
 
+## MCP Endpoint Requirements
+
+MCP uses JSON-RPC method names for protocol endpoints. For Streamable HTTP, those JSON-RPC messages are sent through the HTTP `/mcp` endpoint; `/rpc` and `/events` are Voltaic compatibility endpoints.
+
+Every MCP connection starts with the lifecycle methods:
+
+- `initialize` - required first request. The client sends its supported protocol version, capabilities, and client info; the server responds with the negotiated protocol version, capabilities, and server info.
+- `notifications/initialized` - required client notification after successful initialization. Normal operation starts after this notification.
+
+Base utility methods:
+
+- `ping` - utility request that either side may send to check liveness. A receiver must respond promptly when it receives one.
+
+Streamable HTTP transport requirements:
+
+- `POST /mcp` receives JSON-RPC requests and notifications.
+- `GET /mcp` opens the SSE stream when the client wants server notifications.
+- Session-aware clients send `MCP-Session-Id` after the server creates a session.
+- After initialization, HTTP clients send `MCP-Protocol-Version` on subsequent requests.
+
+Server feature endpoints are capability-driven. If your server advertises a capability, it must support the corresponding methods:
+
+- `tools` capability: `tools/list` and `tools/call`.
+- `resources` capability: `resources/list` and `resources/read`. If resource templates are exposed, also support `resources/templates/list`. If `resources.subscribe` is advertised, also support `resources/subscribe`, `resources/unsubscribe`, and `notifications/resources/updated`.
+- `prompts` capability: `prompts/list` and `prompts/get`.
+- `completions` capability: `completion/complete` for prompt argument or resource-template argument suggestions.
+- `logging` capability: `logging/setLevel` from client to server, plus server `notifications/message` when logs are emitted.
+
+Voltaic registers the protocol methods for its MCP server types when default methods are enabled. Your application registers the handlers and data behind those methods with `RegisterTool`, `RegisterResource`, `RegisterResourceTemplate`, `RegisterPrompt`, and `RegisterCompletionProvider`.
+
 ## Why Use Voltaic?
 
 - **Small API surface**: Register handlers and start a transport; avoid framework-level ceremony.
@@ -68,7 +98,7 @@ dotnet add package Voltaic
 
 ### End-to-End MCP Example (Streamable HTTP)
 
-This example creates a small MCP HTTP server with one `add` tool, then connects with `McpHttpClient`, performs the MCP initialization flow, lists tools, and calls the tool.
+This example creates a small MCP HTTP server with a tool, resource, resource template, prompt, and completion provider. The client connects with `McpHttpClient`, performs the MCP initialization flow, and calls the endpoint families those handlers power.
 
 Create the server:
 
@@ -81,7 +111,11 @@ dotnet add package Voltaic
 Replace `Program.cs`:
 
 ```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Voltaic;
 
 using McpHttpServer server = new McpHttpServer("localhost", 8080)
@@ -114,6 +148,89 @@ server.RegisterTool(
 
         return (object)(a + b);
     });
+
+server.RegisterResource(
+    "voltaic://calculator/status",
+    "status",
+    "text/plain",
+    () => new McpReadResourceResult
+    {
+        Contents = new List<object>
+        {
+            new McpTextResourceContents
+            {
+                Uri = "voltaic://calculator/status",
+                MimeType = "text/plain",
+                Text = "Calculator server is running."
+            }
+        }
+    });
+
+server.RegisterResourceTemplate(
+    "voltaic://calculator/help/{topic}",
+    "help-topic",
+    "text/plain",
+    uri => new McpReadResourceResult
+    {
+        Contents = new List<object>
+        {
+            new McpTextResourceContents
+            {
+                Uri = uri,
+                MimeType = "text/plain",
+                Text = $"Help content for {uri}."
+            }
+        }
+    });
+
+server.RegisterPrompt(
+    "explain",
+    "Creates an explanation prompt",
+    new[]
+    {
+        new McpPromptArgument
+        {
+            Name = "topic",
+            Description = "Topic to explain",
+            Required = true
+        }
+    },
+    args =>
+    {
+        string topic = args.HasValue && args.Value.TryGetProperty("topic", out JsonElement topicEl)
+            ? topicEl.GetString() ?? "the topic"
+            : "the topic";
+
+        return new McpGetPromptResult
+        {
+            Messages = new List<McpPromptMessage>
+            {
+                new McpPromptMessage
+                {
+                    Role = "user",
+                    Content = new McpTextContent
+                    {
+                        Text = $"Explain {topic} with a calculator example."
+                    }
+                }
+            }
+        };
+    });
+
+server.RegisterCompletionProvider(
+    "ref/prompt",
+    "explain",
+    "topic",
+    (request, token) => Task.FromResult(new McpCompleteResult
+    {
+        Completion = new McpCompletion
+        {
+            Values = new List<string> { "addition", "subtraction", "multiplication", "division" }
+                .Where(value => value.StartsWith(request.Argument.Value, StringComparison.OrdinalIgnoreCase))
+                .Take(100)
+                .ToList()
+        }
+    }));
 
 await server.StartAsync();
 Console.WriteLine("MCP server listening at http://localhost:8080/mcp");
@@ -158,6 +275,15 @@ await client.NotifyAsync("notifications/initialized");
 JsonRpcResponse tools = await client.CallAsync("tools/list");
 Console.WriteLine(tools.Result);
 
+JsonRpcResponse resources = await client.CallAsync("resources/list");
+Console.WriteLine(resources.Result);
+
+JsonRpcResponse templates = await client.CallAsync("resources/templates/list");
+Console.WriteLine(templates.Result);
+
+JsonRpcResponse prompts = await client.CallAsync("prompts/list");
+Console.WriteLine(prompts.Result);
+
 JsonRpcResponse sum = await client.CallAsync("tools/call", new
 {
     name = "add",
@@ -168,6 +294,41 @@ JsonRpcResponse sum = await client.CallAsync("tools/call", new
     }
 });
 Console.WriteLine(sum.Result);
+
+JsonRpcResponse resource = await client.CallAsync("resources/read", new
+{
+    uri = "voltaic://calculator/status"
+});
+Console.WriteLine(resource.Result);
+
+JsonRpcResponse prompt = await client.CallAsync("prompts/get", new
+{
+    name = "explain",
+    arguments = new
+    {
+        topic = "addition"
+    }
+});
+Console.WriteLine(prompt.Result);
+
+JsonRpcResponse completion = await client.CallAsync("completion/complete", new
+{
+    @ref = new
+    {
+        type = "ref/prompt",
+        name = "explain"
+    },
+    argument = new
+    {
+        name = "topic",
+        value = "ad"
+    }
+});
+Console.WriteLine(completion.Result);
+
+await client.CallAsync("logging/setLevel", new { level = "info" });
+await client.CallAsync("resources/subscribe", new { uri = "voltaic://calculator/status" });
+await client.CallAsync("resources/unsubscribe", new { uri = "voltaic://calculator/status" });
 ```
 
 Run it:
@@ -177,6 +338,15 @@ dotnet run
 ```
 
 `McpHttpClient` automatically uses the required Streamable HTTP headers, including `Accept: application/json, text/event-stream` and the `MCP-Session-Id` returned by the server. Call `StartSseAsync()` after `ConnectStreamableAsync()` if the client also needs server-sent notifications.
+
+The server registrations above are the handlers behind the MCP endpoints:
+
+- `RegisterTool(...)` backs `tools/list` and `tools/call`.
+- `RegisterResource(...)` backs `resources/list` and `resources/read`.
+- `RegisterResourceTemplate(...)` backs `resources/templates/list` and template-based `resources/read`.
+- `RegisterPrompt(...)` backs `prompts/list` and `prompts/get`.
+- `RegisterCompletionProvider(...)` backs `completion/complete`.
+- `initialize`, `notifications/initialized`, `notifications/cancelled`, `resources/subscribe`, `resources/unsubscribe`, `logging/setLevel`, and `ping` are built in when default methods are enabled.
 
 ---
 
@@ -255,6 +425,93 @@ Console.WriteLine(greeting); // "Hello, Developer!"
 await client.NotifyAsync("logEvent", new { level = "info", message = "User logged in" });
 ```
 
+### MCP Endpoint Handler Pattern
+
+Use the same registration pattern with `McpServer`, `McpHttpServer`, `McpTcpServer`, and `McpWebsocketsServer`. Voltaic registers the protocol methods described in [MCP Endpoint Requirements](#mcp-endpoint-requirements); your handlers supply the application data returned by the capability-driven endpoint families. The snippet uses `System`, `System.Collections.Generic`, `System.Linq`, `System.Text.Json`, and `System.Threading.Tasks`.
+
+```csharp
+// tools/list and tools/call
+server.RegisterTool(
+    "add",
+    "Adds two numbers",
+    new
+    {
+        type = "object",
+        properties = new
+        {
+            a = new { type = "number" },
+            b = new { type = "number" }
+        },
+        required = new[] { "a", "b" }
+    },
+    args =>
+    {
+        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        return (object)(a + b);
+    });
+
+// resources/list and resources/read
+server.RegisterResource("voltaic://example/status", "status", "text/plain",
+    () => new McpReadResourceResult
+    {
+        Contents = new List<object>
+        {
+            new McpTextResourceContents
+            {
+                Uri = "voltaic://example/status",
+                MimeType = "text/plain",
+                Text = "Service is running."
+            }
+        }
+    });
+
+// resources/templates/list and template-based resources/read
+server.RegisterResourceTemplate("voltaic://example/{name}", "example-item", "text/plain",
+    uri => new McpReadResourceResult
+    {
+        Contents = new List<object>
+        {
+            new McpTextResourceContents
+            {
+                Uri = uri,
+                MimeType = "text/plain",
+                Text = $"Dynamic resource for {uri}."
+            }
+        }
+    });
+
+// prompts/list and prompts/get
+server.RegisterPrompt("summarize", "Creates a summary prompt",
+    new[] { new McpPromptArgument { Name = "topic", Required = true } },
+    args => new McpGetPromptResult
+    {
+        Messages = new List<McpPromptMessage>
+        {
+            new McpPromptMessage
+            {
+                Role = "user",
+                Content = new McpTextContent { Text = "Summarize the requested topic." }
+            }
+        }
+    });
+
+// completion/complete
+server.RegisterCompletionProvider("ref/prompt", "summarize", "topic",
+    (request, token) => Task.FromResult(new McpCompleteResult
+    {
+        Completion = new McpCompletion
+        {
+            Values = new List<string> { "Voltaic", "MCP", "JSON-RPC" }
+                .Where(value => value.StartsWith(request.Argument.Value, StringComparison.OrdinalIgnoreCase))
+                .Take(100)
+                .ToList()
+        }
+    }));
+```
+
+`initialize`, `notifications/initialized`, `notifications/cancelled`, `resources/subscribe`, `resources/unsubscribe`, `logging/setLevel`, and `ping` are built in when default methods are enabled.
+
 ### MCP Server (stdio)
 
 ```csharp
@@ -291,7 +548,13 @@ server.RegisterTool("add",
 // - initialize (returns capabilities and serverInfo)
 // - tools/list (returns all registered tools)
 // - tools/call (invokes a tool by name)
+// - resources/list, resources/templates/list, resources/read
+// - resources/subscribe, resources/unsubscribe
+// - prompts/list, prompts/get
+// - completion/complete
+// - logging/setLevel
 // - notifications/initialized (handles client init notification)
+// - notifications/cancelled
 // - ping, echo, getTime (utility tools)
 
 // Run the server (reads from stdin, writes to stdout)
@@ -704,485 +967,19 @@ dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.
 
 ---
 
-## API Reference
+## API Surface
 
-All classes and methods are available in the `Voltaic` namespace.
+All public types are in the `Voltaic` namespace. The main entry points are:
 
-### JSON-RPC Server and Client
+- `JsonRpcServer` / `JsonRpcClient` for TCP JSON-RPC 2.0.
+- `McpServer` / `McpClient` for stdio MCP servers and subprocess clients.
+- `McpHttpServer` / `McpHttpClient` for HTTP MCP, including Streamable HTTP on `/mcp`.
+- `McpTcpServer` / `McpTcpClient` for MCP over TCP framing.
+- `McpWebsocketsServer` / `McpWebsocketsClient` for MCP over WebSockets.
 
-**Server API (JsonRpcServer):**
+The core server pattern is the same across transports: configure identity, register methods/tools/resources/prompts/completions, subscribe to lifecycle events if needed, then start the server. Clients connect, call JSON-RPC methods with `CallAsync`, send notifications with `NotifyAsync`, and dispose when finished.
 
-*Constructor:*
-- `JsonRpcServer(IPAddress ip, int port, bool includeDefaultMethods = true)` - Create a server listening on the specified IP address and port
-
-*Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
-- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
-- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
-- `Task StartAsync(CancellationToken token = default)` - Start accepting connections
-- `Task BroadcastNotificationAsync(string method, object? parameters, CancellationToken token = default)` - Send notifications to all clients
-- `List<string> GetConnectedClients()` - Get list of connected client IDs
-- `bool KickClient(string clientId)` - Disconnect a specific client by ID
-- `void Stop()` - Gracefully shut down the server
-- `void Dispose()` - Release all resources (calls Stop() internally, safe to call multiple times)
-
-*Properties:*
-- `int MaxQueueSize { get; set; }` - Maximum queued notifications per client (default: 100, min: 1)
-- `CancellationTokenSource? TokenSource { get; }` - Cancellation token source for the server
-- `string DefaultContentType { get; set; }` - Content-Type header for messages (default: "application/json; charset=utf-8")
-
-*Events:*
-- `event EventHandler<ClientConnection> ClientConnected` - Fires when a client connects
-- `event EventHandler<ClientConnection> ClientDisconnected` - Fires when a client disconnects
-- `event EventHandler<JsonRpcRequestEventArgs> RequestReceived` - Fires when a request is received
-- `event EventHandler<JsonRpcResponseEventArgs> ResponseSent` - Fires when a response is sent
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-**Client API (JsonRpcClient):**
-
-*Methods:*
-- `Task<bool> ConnectAsync(string host, int port, CancellationToken token = default)` - Connect to a server
-- `Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Make an RPC call and await typed response
-- `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Make an RPC call and await response
-- `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send a notification (no response)
-- `void Disconnect()` - Close the connection
-- `void Dispose()` - Release all resources (calls Disconnect() internally, safe to call multiple times)
-
-*Properties:*
-- `bool IsConnected { get; }` - Whether the client is currently connected
-- `TcpClient? TcpClient { get; }` - Underlying TCP client
-- `CancellationTokenSource? TokenSource { get; }` - Cancellation token source
-- `string DefaultContentType { get; set; }` - Content-Type header for messages
-
-*Events:*
-- `event EventHandler<JsonRpcRequest> NotificationReceived` - Fires when a notification is received from the server
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-### MCP Servers and Clients
-
-**McpServer (stdio):**
-
-*Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous MCP method
-- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous MCP method
-- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async MCP method with cancellation support
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with synchronous handler
-- `void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, object> handler)` - Register tool with output schema metadata
-- `void RegisterTool(ToolDefinition definition, Func<JsonElement?, object> handler)` - Register tool with full MCP metadata
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)` - Register tool with asynchronous handler
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register tool with async cancellable handler
-- `void RegisterResource(string uri, string name, string mimeType, Func<McpReadResourceResult> readHandler)` - Register a static resource
-- `void RegisterResourceTemplate(string uriTemplate, string name, string mimeType, Func<string, McpReadResourceResult> readHandler)` - Register a URI-template resource
-- `void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<JsonElement?, McpGetPromptResult> handler)` - Register a prompt
-- `void RegisterCompletionProvider(string referenceType, string? referenceId, string? argumentName, Func<McpCompleteRequest, CancellationToken, Task<McpCompleteResult>> handler)` - Register completions for prompt arguments or resource template variables
-- `Task RunAsync(CancellationToken token = default)` - Run the server (blocks until stdin closes)
-- `void Dispose()` - Release all resources (safe to call multiple times)
-
-*Properties:*
-- `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-11-25")
-- `string ServerName { get; set; }` - Server name for MCP serverInfo (default: "Voltaic.Mcp.StdioServer")
-- `string ServerVersion { get; set; }` - Server version for MCP serverInfo (default: "1.0.0")
-
-*Built-in Methods:*
-- `initialize` - MCP protocol initialization (returns capabilities and serverInfo)
-- `tools/list` - List registered tools
-- `tools/call` - Invoke a tool by name
-- `resources/list`, `resources/templates/list`, `resources/read`, `resources/subscribe`, `resources/unsubscribe`
-- `prompts/list`, `prompts/get`
-- `completion/complete`
-- `logging/setLevel`
-- `notifications/initialized`, `notifications/cancelled`
-- `ping`, `echo`, `getTime` - Utility tools
-
-*Events:*
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-**McpClient (stdio):**
-
-*Methods:*
-- `Task<bool> LaunchServerAsync(string executable, string[] args, CancellationToken token = default)` - Launch subprocess server
-- `Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call server method with typed response
-- `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call server method
-- `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send notification
-- `void StopServer()` - Stop the subprocess server
-- `void Dispose()` - Release all resources (calls Shutdown() internally, safe to call multiple times)
-
-*Events:*
-- `event EventHandler<JsonRpcRequest> NotificationReceived` - Handle server notifications
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-**McpTcpServer (TCP-based MCP):**
-
-Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All JsonRpcServer APIs apply, plus:
-
-*Additional Methods:*
-- `RegisterTool(...)` overloads matching `McpServer`
-- `RegisterResource(...)`, `RegisterResourceTemplate(...)`, and `RegisterPrompt(...)`
-- `RegisterCompletionProvider(...)`
-- `Task NotifyToolsChangedAsync(CancellationToken token = default)`
-- `Task NotifyResourcesChangedAsync(CancellationToken token = default)`
-- `Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)`
-- `Task NotifyPromptsChangedAsync(CancellationToken token = default)`
-- `Task NotifyProgressAsync(object progressToken, double progress, double? total = null, string? message = null, CancellationToken token = default)`
-- `Task NotifyCancelledAsync(object requestId, string? reason = null, CancellationToken token = default)`
-- `Task NotifyLogMessageAsync(string level, object? data, string? logger = null, CancellationToken token = default)`
-
-*Additional Built-in Methods:*
-- `initialize` - MCP protocol initialization
-- `tools/list` - List registered tools
-- `tools/call` - Invoke a tool by name
-- `resources/list`, `resources/templates/list`, `resources/read`, `resources/subscribe`, `resources/unsubscribe`
-- `prompts/list`, `prompts/get`
-- `completion/complete`, `logging/setLevel`, `notifications/cancelled`
-
-**McpTcpClient (TCP-based MCP):**
-
-*Methods:*
-- Same as `JsonRpcClient`
-- `Task<bool> ConnectAsync(string host, int port, CancellationToken token = default)` - Connect to TCP server
-- `Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call with typed response
-
-**McpHttpServer (HTTP-based MCP with SSE):**
-
-*Constructor:*
-- `McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true, string? mcpPath = "/mcp")`
-
-*Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
-- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
-- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with synchronous handler
-- `void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, object> handler)` - Register tool with output schema metadata
-- `void RegisterTool(ToolDefinition definition, Func<JsonElement?, object> handler)` - Register tool with full MCP metadata
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)` - Register tool with asynchronous handler
-- `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register tool with async cancellable handler
-- `void RegisterResource(string uri, string name, string mimeType, Func<McpReadResourceResult> readHandler)` - Register a static resource
-- `void RegisterResourceTemplate(string uriTemplate, string name, string mimeType, Func<string, McpReadResourceResult> readHandler)` - Register a URI-template resource
-- `void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<JsonElement?, McpGetPromptResult> handler)` - Register a prompt
-- `void RegisterCompletionProvider(string referenceType, string? referenceId, string? argumentName, Func<McpCompleteRequest, CancellationToken, Task<McpCompleteResult>> handler)` - Register completions
-- `void NotifyToolsChanged()` - Queue `notifications/tools/list_changed` for active sessions
-- `void NotifyResourcesChanged()` - Queue `notifications/resources/list_changed` for active sessions
-- `void NotifyResourceUpdated(string uri)` - Queue `notifications/resources/updated` for active sessions
-- `void NotifyPromptsChanged()` - Queue `notifications/prompts/list_changed` for active sessions
-- `bool NotifyProgress(string sessionId, object progressToken, double progress, double? total = null, string? message = null)` - Queue `notifications/progress`
-- `bool NotifyCancelled(string sessionId, object requestId, string? reason = null)` - Queue `notifications/cancelled`
-- `bool NotifyLogMessage(string sessionId, string level, object? data, string? logger = null)` - Queue `notifications/message`
-- `Task StartAsync(CancellationToken token = default)` - Start the HTTP server
-- `bool SendNotificationToSession(string sessionId, string method, object? parameters = null)` - Send notification to specific session
-- `void BroadcastNotification(string method, object? parameters = null)` - Broadcast to all sessions
-- `List<string> GetActiveSessions()` - Get list of active session IDs
-- `List<string> GetConnectedClients()` - Get list of connected client IDs
-- `bool KickClient(string clientId)` - Disconnect a specific client
-- `bool RemoveSession(string sessionId)` - Remove a session
-- `void Stop()` - Stop the server
-- `void Dispose()` - Release all resources (calls Stop() internally, safe to call multiple times)
-
-*Properties:*
-- `Func<HttpListenerRequest, Task<AuthenticationResult>>? AuthenticationHandler { get; set; }` - Optional async authentication handler. When set, every request is authenticated before processing. When null (default), all requests are accepted
-- `int SessionTimeoutSeconds { get; set; }` - Session timeout (default: 300, min: 10)
-- `int MaxQueueSize { get; set; }` - Max queued notifications per client (default: 100, min: 1)
-- `bool EnableCors { get; set; }` - Enable CORS support (default: true)
-- `Dictionary<string, string> CorsHeaders { get; set; }` - CORS headers configuration
-- `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-11-25")
-- `string ServerName { get; set; }` - Server name for MCP serverInfo
-- `string ServerVersion { get; set; }` - Server version for MCP serverInfo
-
-*Events:*
-- `event EventHandler<ClientConnection> ClientConnected` - Fires when a session is created
-- `event EventHandler<ClientConnection> ClientDisconnected` - Fires when a session is removed
-- `event EventHandler<JsonRpcRequestEventArgs> RequestReceived` - Fires when a request is received
-- `event EventHandler<JsonRpcResponseEventArgs> ResponseSent` - Fires when a response is sent
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-**McpHttpClient (HTTP-based MCP):**
-
-*Methods:*
-- `Task<bool> ConnectAsync(string baseUrl, CancellationToken token = default)` - Connect to HTTP server
-- `Task<bool> ConnectStreamableAsync(string baseUrl, string mcpPath = "/mcp", CancellationToken token = default)` - Establish a Streamable HTTP session on `/mcp`
-- `Task<bool> StartSseAsync(CancellationToken token = default)` - Start Server-Sent Events for notifications on `/events` or `/mcp`
-- `void StopSse()` - Stop SSE connection
-- `Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call with typed response
-- `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call method
-- `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send notification
-- `void Disconnect()` - Disconnect from the server
-- `void Dispose()` - Release all resources (calls Disconnect() internally, safe to call multiple times)
-
-*Properties:*
-- `string? SessionId { get; }` - Session ID assigned by server
-- `bool IsConnected { get; }` - Connection status
-- `bool IsSseConnected { get; }` - SSE connection status
-- `string ProtocolVersion { get; set; }` - MCP protocol version header sent after a session is established
-
-*Events:*
-- `event EventHandler<JsonRpcRequest> NotificationReceived` - Handle server notifications
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-**McpWebsocketsServer (WebSocket-based MCP):**
-
-*Constructor:*
-- `McpWebsocketsServer(string hostname, int port, string path = "/mcp", bool includeDefaultMethods = true)`
-
-*Methods:*
-- `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
-- `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
-- `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
-- `RegisterTool(...)` overloads matching `McpServer`
-- `RegisterResource(...)`, `RegisterResourceTemplate(...)`, and `RegisterPrompt(...)`
-- `RegisterCompletionProvider(...)`
-- `Task NotifyToolsChangedAsync(CancellationToken token = default)`
-- `Task NotifyResourcesChangedAsync(CancellationToken token = default)`
-- `Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)`
-- `Task NotifyPromptsChangedAsync(CancellationToken token = default)`
-- `Task NotifyProgressAsync(object progressToken, double progress, double? total = null, string? message = null, CancellationToken token = default)`
-- `Task NotifyCancelledAsync(object requestId, string? reason = null, CancellationToken token = default)`
-- `Task NotifyLogMessageAsync(string level, object? data, string? logger = null, CancellationToken token = default)`
-- `Task StartAsync(CancellationToken token = default)` - Start the WebSocket server
-- `Task BroadcastNotificationAsync(string method, object? parameters = null, CancellationToken token = default)` - Broadcast to all clients
-- `List<string> GetConnectedClients()` - Get list of connected client IDs
-- `bool KickClient(string clientId)` - Disconnect a specific client
-- `void Stop()` - Stop the server
-- `void Dispose()` - Release all resources (calls Stop() internally, safe to call multiple times)
-
-*Properties:*
-- `int MaxMessageSize { get; set; }` - Maximum message size in bytes (default: 1MB, min: 4096)
-- `int KeepAliveIntervalSeconds { get; set; }` - WebSocket keep-alive interval (default: 30, 0 to disable)
-- `int MaxQueueSize { get; set; }` - Max queued notifications per client (default: 100, min: 1)
-- `string ProtocolVersion { get; set; }` - MCP protocol version
-- `string ServerName { get; set; }` - Server name for MCP serverInfo
-- `string ServerVersion { get; set; }` - Server version for MCP serverInfo
-
-*Events:*
-- `event EventHandler<ClientConnection> ClientConnected` - Fires when a client connects
-- `event EventHandler<ClientConnection> ClientDisconnected` - Fires when a client disconnects
-- `event EventHandler<JsonRpcRequestEventArgs> RequestReceived` - Fires when a request is received
-- `event EventHandler<JsonRpcResponseEventArgs> ResponseSent` - Fires when a response is sent
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-**McpWebsocketsClient (WebSocket-based MCP):**
-
-*Methods:*
-- `Task<bool> ConnectAsync(string url, CancellationToken token = default)` - Connect to WebSocket server
-- `Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call with typed response
-- `Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 30000, CancellationToken token = default)` - Call method
-- `Task NotifyAsync(string method, object? parameters = null, CancellationToken token = default)` - Send notification
-- `void Disconnect()` - Close connection
-- `void Dispose()` - Release all resources (calls Disconnect() internally, safe to call multiple times)
-
-*Properties:*
-- `bool IsConnected { get; }` - Connection status
-- `int MaxMessageSize { get; set; }` - Maximum message size
-
-*Events:*
-- `event EventHandler<JsonRpcRequest> NotificationReceived` - Handle server notifications
-- `event EventHandler<string> Log` - Fires when a log message is generated
-
-### Event Handler Examples
-
-All server types support event handlers for monitoring connection lifecycle and request/response activity:
-
-**Monitoring Client Connections:**
-
-```csharp
-using System.Net;
-using Voltaic;
-
-JsonRpcServer server = new JsonRpcServer(IPAddress.Any, 8080);
-
-server.ClientConnected += (sender, client) =>
-{
-    Console.WriteLine($"New client: {client.SessionId}");
-    Console.WriteLine($"Connection type: {client.Type}");
-    Console.WriteLine($"Connected at: {client.LastActivity:yyyy-MM-dd HH:mm:ss}");
-};
-
-server.ClientDisconnected += (sender, client) =>
-{
-    Console.WriteLine($"Client {client.SessionId} disconnected");
-    Console.WriteLine($"Queued notifications: {client.Count()}");
-};
-
-await server.StartAsync();
-```
-
-**Tracking Requests and Responses:**
-
-```csharp
-using System.Net;
-using Voltaic;
-
-JsonRpcServer server = new JsonRpcServer(IPAddress.Any, 8080);
-
-server.RequestReceived += (sender, e) =>
-{
-    Console.WriteLine($"[{e.ReceivedUtc:HH:mm:ss.fff}] Request from {e.Client.SessionId}");
-    Console.WriteLine($"  Method: {e.Method}");
-    Console.WriteLine($"  Request ID: {e.RequestId}");
-    Console.WriteLine($"  Is Notification: {e.IsNotification}");
-};
-
-server.ResponseSent += (sender, e) =>
-{
-    string status = e.IsSuccess ? "OK" : "ERR";
-    Console.WriteLine($"[{e.SentUtc:HH:mm:ss.fff}] {status} Response to {e.Client.SessionId}");
-    Console.WriteLine($"  Method: {e.Method}");
-    Console.WriteLine($"  Duration: {e.Duration.TotalMilliseconds:F2}ms");
-    Console.WriteLine($"  Success: {e.IsSuccess}");
-
-    if (e.IsError)
-    {
-        Console.WriteLine($"  Error: {e.Response.Error?.Message}");
-    }
-};
-
-await server.StartAsync();
-```
-
-**Managing Client Queues:**
-
-```csharp
-using System.Net;
-using Voltaic;
-
-JsonRpcServer server = new JsonRpcServer(IPAddress.Any, 8080);
-
-// Configure queue size
-server.MaxQueueSize = 50; // Max 50 notifications per client
-
-server.ClientConnected += (sender, client) =>
-{
-    // Per-client queue configuration
-    client.MaxQueueSize = 100; // Override for this specific client
-    Console.WriteLine($"Client {client.SessionId} queue size: {client.MaxQueueSize}");
-};
-
-// Monitor queue activity
-server.ResponseSent += (sender, e) =>
-{
-    int queuedCount = e.Client.Count();
-    if (queuedCount > 40)
-    {
-        Console.WriteLine($"WARNING: Client {e.Client.SessionId} queue is {queuedCount}/50");
-    }
-};
-
-await server.StartAsync();
-```
-
-**Building Request Metrics:**
-
-```csharp
-using System.Collections.Concurrent;
-using System.Net;
-using Voltaic;
-
-JsonRpcServer server = new JsonRpcServer(IPAddress.Any, 8080);
-
-ConcurrentDictionary<string, int> requestCounts = new();
-ConcurrentDictionary<string, List<double>> responseTimes = new();
-
-server.RequestReceived += (sender, e) =>
-{
-    requestCounts.AddOrUpdate(e.Method, 1, (key, count) => count + 1);
-};
-
-server.ResponseSent += (sender, e) =>
-{
-    double ms = e.Duration.TotalMilliseconds;
-    responseTimes.AddOrUpdate(
-        e.Method,
-        new List<double> { ms },
-        (key, list) => { list.Add(ms); return list; }
-    );
-};
-
-// Print stats every 10 seconds
-Timer statsTimer = new Timer(_ =>
-{
-    Console.WriteLine("\n=== Request Statistics ===");
-    foreach (var kvp in requestCounts.OrderByDescending(x => x.Value))
-    {
-        var times = responseTimes.GetValueOrDefault(kvp.Key, new List<double>());
-        double avgMs = times.Count > 0 ? times.Average() : 0;
-        Console.WriteLine($"{kvp.Key}: {kvp.Value} requests, avg {avgMs:F2}ms");
-    }
-}, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
-
-await server.StartAsync();
-```
-
-**Handling Client Notifications:**
-
-```csharp
-using Voltaic;
-
-JsonRpcClient client = new JsonRpcClient();
-
-client.NotificationReceived += (sender, request) =>
-{
-    Console.WriteLine($"Server notification: {request.Method}");
-
-    // Handle specific notification types
-    switch (request.Method)
-    {
-        case "server/shutdown":
-            Console.WriteLine("Server is shutting down!");
-            break;
-
-        case "broadcast":
-            var message = request.Params?.ToString();
-            Console.WriteLine($"Broadcast: {message}");
-            break;
-
-        default:
-            Console.WriteLine($"Unknown notification: {request.Method}");
-            break;
-    }
-};
-
-await client.ConnectAsync("localhost", 8080);
-```
-
-**Event-Driven Client Management:**
-
-```csharp
-using System.Collections.Concurrent;
-using Voltaic;
-
-McpWebsocketsServer server = new McpWebsocketsServer("localhost", 8080);
-
-ConcurrentDictionary<string, ClientConnection> activeClients = new();
-
-server.ClientConnected += (sender, client) =>
-{
-    activeClients[client.SessionId] = client;
-
-    // Send welcome notification to the new client
-    JsonRpcRequest welcome = new JsonRpcRequest
-    {
-        Method = "welcome",
-        Params = new { message = $"Welcome {client.SessionId}!" }
-    };
-    client.Enqueue(welcome);
-};
-
-server.ClientDisconnected += (sender, client) =>
-{
-    activeClients.TryRemove(client.SessionId, out _);
-
-    // Notify other clients
-    foreach (var otherClient in activeClients.Values)
-    {
-        JsonRpcRequest notification = new JsonRpcRequest
-        {
-            Method = "client_left",
-            Params = new { clientId = client.SessionId }
-        };
-        otherClient.Enqueue(notification);
-    }
-};
-
-await server.StartAsync();
-```
+For exact overloads and model types, use your IDE's IntelliSense, the generated XML documentation in `src/Voltaic/Voltaic.xml`, and the sample/test projects listed above. `src/Test.Shared/API_COVERAGE.md` tracks the public API areas covered by the Touchstone suite.
 
 ---
 
