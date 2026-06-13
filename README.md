@@ -6,115 +6,55 @@
 
 [![NuGet](https://img.shields.io/nuget/v/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![Downloads](https://img.shields.io/nuget/dt/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md) [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4.svg)](https://dotnet.microsoft.com/)
 
-**Modern, lightweight JSON-RPC 2.0 and MCP implementations for .NET 8.0 and .NET 10.0**
+**Modern, lightweight JSON-RPC 2.0 and Model Context Protocol (MCP) implementations for .NET 8.0 and .NET 10.0**
 
-Voltaic v0.3.0 targets MCP protocol version `2025-11-25` while preserving the small API shape from earlier releases.
+Voltaic gives .NET applications a small, direct way to expose and consume structured RPC APIs. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or multiple MCP transports without adopting a larger application framework.
 
-Voltaic provides client and server implementations for JSON-RPC 2.0 and the Model Context Protocol (MCP). Whether you're building microservices, AI integrations, or distributed systems, Voltaic gives you the tools to communicate clearly and reliably.
-
----
-
-## What's Inside
-
-### JSON-RPC 2.0
-A complete JSON-RPC 2.0 implementation with TCP-based client and server. Perfect for building RPC-based APIs, microservices, and distributed applications.
-
-**Features:**
-- Full JSON-RPC 2.0 specification compliance
-- TCP-based transport with LSP-style message framing (`Content-Length` headers)
-- Async/await throughout for modern .NET performance
-- Support for requests, responses, notifications, and broadcasts
-- Type-safe method registration and invocation
-- Connection management with graceful shutdown
-- Thread-safe concurrent request handling
-- Event-driven architecture with connection and request/response events
-- Per-client notification queue management with configurable limits
-
-### Model Context Protocol (MCP)
-Client and server implementations for Anthropic's Model Context Protocol, supporting multiple transport options.
-
-**Features:**
-- **Stdio transport**: Subprocess-based MCP servers (standard MCP pattern)
-- **Streamable HTTP endpoint**: `/mcp` with `MCP-Session-Id` session headers and SSE notifications
-- **TCP transport**: Network-based MCP communication with LSP-style framing
-- **HTTP compatibility endpoints**: `/rpc` and `/events` remain available for existing integrations
-- **WebSocket transport**: Full-duplex bidirectional communication
-- MCP `initialize` version negotiation for `2025-11-25` and `2025-03-26`
-- Tool registration with current MCP metadata, structured content, and full `McpToolCallResult` returns
-- Tool input and structured-output schema validation for common JSON Schema object/type/required cases
-- Resource registration, resource templates, `resources/list`, `resources/templates/list`, `resources/read`, `resources/subscribe`, and `resources/unsubscribe`
-- Prompt registration, `prompts/list`, `prompts/get`, and required prompt argument validation
-- Completion providers through `completion/complete`
-- MCP logging level handling plus progress, cancellation, and log-message notification helpers
-- List-changed and resource-updated notification helpers on transports that can notify connected clients
-- JSON-RPC 2.0 protocol across all transports
-- Process lifecycle management for subprocess servers
-- Event-driven notification handling with connection lifecycle events
-- Request/response event tracking with timing information
-- Touchstone-based console, xUnit, and NUnit test projects under `src/`
-
-### Authentication
-
-`McpHttpServer` supports an optional async authentication handler that runs before any request processing. When set, every incoming HTTP request is passed through the handler, which receives the full `HttpListenerRequest` and returns an `AuthenticationResult`. If authentication fails, the server returns the configured HTTP status code and error message without processing the request. When not set, all requests are accepted (preserving backward compatibility).
-
-```csharp
-using System.Net;
-using Voltaic;
-
-McpHttpServer server = new McpHttpServer("localhost", 8080);
-
-server.AuthenticationHandler = async (HttpListenerRequest request) =>
-{
-    string? token = request.Headers["Authorization"];
-    if (string.IsNullOrEmpty(token) || !token.StartsWith("Bearer "))
-    {
-        return new AuthenticationResult
-        {
-            IsAuthenticated = false,
-            StatusCode = 401,
-            ErrorMessage = "Missing or invalid Authorization header"
-        };
-    }
-
-    // Validate the token (call your JWT validation, database lookup, etc.)
-    bool isValid = await ValidateTokenAsync(token.Substring("Bearer ".Length));
-
-    return new AuthenticationResult
-    {
-        IsAuthenticated = isValid,
-        Principal = "my-user",
-        Claims = new Dictionary<string, string> { { "role", "admin" } }
-    };
-};
-
-await server.StartAsync();
-```
-
-The following endpoints always bypass authentication to allow connectivity validation without credentials:
-- **Health check** (`GET /`) - returns `{"status":"Ok"}`, useful for load balancer probes
-- **Ping** (`ping` JSON-RPC method via any RPC endpoint) - returns `"pong"`, validates application-layer connectivity
-- **CORS preflight** (`OPTIONS` requests) - returns `204` with CORS headers
-
-All other requests are rejected with the configured status code and error message when authentication fails.
-
-Full authorization flows (such as OAuth 2.1 as described in the [MCP spec](https://modelcontextprotocol.io/specification/draft/basic/authorization)) remain the responsibility of the application developer. The `AuthenticationHandler` provides the hook point for integrating any authentication scheme.
+Voltaic v0.3.0 targets MCP protocol version `2025-11-25` and keeps compatibility helpers for `2025-03-26`.
 
 ---
+
+## What Is Voltaic?
+
+Voltaic is a protocol library, not an application framework. It provides:
+
+- JSON-RPC 2.0 clients and servers over TCP with LSP-style `Content-Length` framing
+- MCP stdio servers and clients for subprocess-hosted tools
+- MCP Streamable HTTP on `/mcp` with `MCP-Session-Id` sessions and SSE notifications
+- MCP TCP and WebSocket transports for networked or full-duplex scenarios
+- Shared request/response, notification, lifecycle, and event handling across transports
+
+You bring your business logic. Voltaic handles the protocol surface, message framing, method dispatch, session headers, and transport-specific plumbing.
+
+## What Can It Do?
+
+- Register JSON-RPC methods with synchronous, asynchronous, or cancellation-aware handlers.
+- Register MCP tools with input schema metadata, output schema metadata, structured content, annotations, icons, and full `McpToolCallResult` returns.
+- Validate common JSON Schema object/type/required cases for tool input and structured output.
+- Expose MCP resources, resource templates, prompts, and completion providers.
+- Handle MCP `initialize`, `tools/list`, `tools/call`, `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, and utility notifications.
+- Send list-changed, resource-updated, progress, cancellation, and log-message notifications where the transport supports server-to-client notifications.
+- Host HTTP compatibility endpoints (`/rpc` and `/events`) alongside the current Streamable HTTP endpoint (`/mcp`).
+- Run the same 253-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+
+## Why Use Voltaic?
+
+- **Small API surface**: Register handlers and start a transport; avoid framework-level ceremony.
+- **Current MCP coverage**: Tools, resources, prompts, completions, Streamable HTTP, sessions, and utility notifications are first-class.
+- **Transport choice**: Use stdio for local MCP servers, Streamable HTTP for MCP clients and inspectors, TCP for service-to-service RPC, or WebSockets for full-duplex web-facing systems.
+- **Plain .NET**: Works with normal C# delegates, `System.Text.Json`, `Task`, `CancellationToken`, and `IDisposable`.
+- **Testable behavior**: Protocol behavior is covered by shared Touchstone descriptors and adapter-backed test projects.
 
 ## Who Is This For?
 
-Voltaic is designed for developers who need:
+Voltaic is designed for developers building:
 
-- **Microservice Communication**: Build services that talk to each other using a standard RPC protocol
-- **AI Tool Integration**: Connect to MCP servers for AI assistant integrations (Claude, etc.)
-- **Custom RPC APIs**: Implement your own remote procedure call interfaces
-- **Subprocess Orchestration**: Launch and communicate with child processes using stdio transport
-- **Language Server Protocols**: Build LSP-style applications that use Content-Length framing
-- **Real-time Systems**: Low-latency RPC communication over TCP sockets
-- **Web-based Integration**: HTTP and WebSocket transports for browser-compatible communication
-- **Flexible Transport Options**: Choose the right transport for your architecture
-
-If you're building .NET applications that need structured, bidirectional communication, Voltaic has you covered.
+- AI assistant integrations that need to expose MCP tools, resources, prompts, or completions from .NET.
+- Services that need structured JSON-RPC calls without REST resource modeling or gRPC contracts.
+- Local agents, CLIs, and desktop tools that launch MCP subprocesses over stdio.
+- Language-server-style protocols that use `Content-Length` message framing.
+- Web integrations that need Streamable HTTP, SSE notifications, or WebSocket communication.
+- Libraries and products that need protocol primitives without handing control to a large host framework.
 
 ---
 
@@ -123,11 +63,126 @@ If you're building .NET applications that need structured, bidirectional communi
 ### Installation
 
 ```bash
-# Install the Voltaic package
 dotnet add package Voltaic
 ```
 
-### Quick Start: JSON-RPC Server (TCP)
+### End-to-End MCP Example (Streamable HTTP)
+
+This example creates a small MCP HTTP server with one `add` tool, then connects with `McpHttpClient`, performs the MCP initialization flow, lists tools, and calls the tool.
+
+Create the server:
+
+```bash
+dotnet new console -n CalculatorServer
+cd CalculatorServer
+dotnet add package Voltaic
+```
+
+Replace `Program.cs`:
+
+```csharp
+using System.Text.Json;
+using Voltaic;
+
+using McpHttpServer server = new McpHttpServer("localhost", 8080)
+{
+    ServerName = "CalculatorServer",
+    ServerVersion = "1.0.0"
+};
+
+server.RegisterTool(
+    "add",
+    "Adds two numbers",
+    new
+    {
+        type = "object",
+        properties = new
+        {
+            a = new { type = "number", description = "First number" },
+            b = new { type = "number", description = "Second number" }
+        },
+        required = new[] { "a", "b" }
+    },
+    (JsonElement? args) =>
+    {
+        double a = args.HasValue && args.Value.TryGetProperty("a", out JsonElement aEl)
+            ? aEl.GetDouble()
+            : 0;
+        double b = args.HasValue && args.Value.TryGetProperty("b", out JsonElement bEl)
+            ? bEl.GetDouble()
+            : 0;
+
+        return (object)(a + b);
+    });
+
+await server.StartAsync();
+Console.WriteLine("MCP server listening at http://localhost:8080/mcp");
+await Task.Delay(Timeout.Infinite);
+```
+
+Run it:
+
+```bash
+dotnet run
+```
+
+Create the client in a second terminal:
+
+```bash
+dotnet new console -n CalculatorClient
+cd CalculatorClient
+dotnet add package Voltaic
+```
+
+Replace `Program.cs`:
+
+```csharp
+using Voltaic;
+
+using McpHttpClient client = new McpHttpClient();
+
+await client.ConnectStreamableAsync("http://localhost:8080");
+
+await client.CallAsync("initialize", new
+{
+    protocolVersion = "2025-11-25",
+    capabilities = new { },
+    clientInfo = new
+    {
+        name = "CalculatorClient",
+        version = "1.0.0"
+    }
+});
+await client.NotifyAsync("notifications/initialized");
+
+JsonRpcResponse tools = await client.CallAsync("tools/list");
+Console.WriteLine(tools.Result);
+
+JsonRpcResponse sum = await client.CallAsync("tools/call", new
+{
+    name = "add",
+    arguments = new
+    {
+        a = 2,
+        b = 3
+    }
+});
+Console.WriteLine(sum.Result);
+```
+
+Run it:
+
+```bash
+dotnet run
+```
+
+`McpHttpClient` automatically uses the required Streamable HTTP headers, including `Accept: application/json, text/event-stream` and the `MCP-Session-Id` returned by the server. Call `StartSseAsync()` after `ConnectStreamableAsync()` if the client also needs server-sent notifications.
+
+---
+
+## More Quick Starts
+
+### JSON-RPC Server (TCP)
 
 ```csharp
 using System.Net;
@@ -179,7 +234,7 @@ Console.WriteLine("Server running on port 8080");
 await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ```
 
-### Quick Start: JSON-RPC Client (TCP)
+### JSON-RPC Client (TCP)
 
 ```csharp
 using Voltaic;
@@ -200,7 +255,7 @@ Console.WriteLine(greeting); // "Hello, Developer!"
 await client.NotifyAsync("logEvent", new { level = "info", message = "User logged in" });
 ```
 
-### Quick Start: MCP Server (stdio)
+### MCP Server (stdio)
 
 ```csharp
 using System.Text.Json;
@@ -243,179 +298,7 @@ server.RegisterTool("add",
 await server.RunAsync();
 ```
 
-### Build an MCP Server with Voltaic
-
-This walkthrough uses Streamable HTTP on `/mcp`, the primary HTTP MCP endpoint in Voltaic v0.3.0. The same registration style also works on stdio, TCP, and WebSocket server types where supported. The protocol flow is covered by the `McpHttp.Protocol.*` Touchstone descriptors in `src/Test.Shared`.
-
-```bash
-dotnet new console -n MyVoltaicServer
-cd MyVoltaicServer
-dotnet add package Voltaic
-```
-
-```csharp
-using System.Net;
-using System.Text.Json;
-using Voltaic;
-
-McpHttpServer server = new McpHttpServer("localhost", 8080);
-server.ServerName = "MyVoltaicServer";
-server.ServerVersion = "1.0.0";
-
-server.RegisterTool(
-    "add",
-    "Adds two numbers",
-    new
-    {
-        type = "object",
-        properties = new
-        {
-            a = new { type = "number" },
-            b = new { type = "number" }
-        },
-        required = new[] { "a", "b" }
-    },
-    (JsonElement? args) =>
-    {
-        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
-        return (object)(a + b);
-    });
-
-server.RegisterTool(
-    "addStructured",
-    "Adds two numbers and returns structured content",
-    new
-    {
-        type = "object",
-        properties = new
-        {
-            a = new { type = "number" },
-            b = new { type = "number" }
-        },
-        required = new[] { "a", "b" }
-    },
-    new
-    {
-        type = "object",
-        properties = new { total = new { type = "number" } },
-        required = new[] { "total" }
-    },
-    (JsonElement? args) =>
-    {
-        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
-        return McpToolCallResult.FromStructured(new { total = a + b });
-    });
-
-server.RegisterResource(
-    "voltaic://docs/readme",
-    "readme",
-    "text/plain",
-    () => new McpReadResourceResult
-    {
-        Contents = new List<object>
-        {
-            new McpTextResourceContents
-            {
-                Uri = "voltaic://docs/readme",
-                MimeType = "text/plain",
-                Text = "Hello from a Voltaic resource."
-            }
-        }
-    });
-
-server.RegisterResourceTemplate(
-    "voltaic://docs/{name}",
-    "doc",
-    "text/plain",
-    uri => new McpReadResourceResult
-    {
-        Contents = new List<object>
-        {
-            new McpTextResourceContents
-            {
-                Uri = uri,
-                MimeType = "text/plain",
-                Text = $"Dynamic content for {uri}"
-            }
-        }
-    });
-
-server.RegisterPrompt(
-    "summarize",
-    "Creates a summary prompt",
-    new[]
-    {
-        new McpPromptArgument
-        {
-            Name = "topic",
-            Required = true
-        }
-    },
-    args =>
-    {
-        string topic = args.HasValue && args.Value.TryGetProperty("topic", out JsonElement topicEl)
-            ? topicEl.GetString() ?? "the topic"
-            : "the topic";
-
-        return new McpGetPromptResult
-        {
-            Messages = new List<McpPromptMessage>
-            {
-                new McpPromptMessage
-                {
-                    Role = "user",
-                    Content = new McpTextContent
-                    {
-                        Text = $"Summarize {topic} in three bullets."
-                    }
-                }
-            }
-        };
-    });
-
-server.RegisterCompletionProvider(
-    "ref/prompt",
-    "summarize",
-    "topic",
-    (request, token) => Task.FromResult(new McpCompleteResult
-    {
-        Completion = new McpCompletion
-        {
-            Values = new List<string> { "Voltaic", "MCP", "JSON-RPC" }
-                .Where(value => value.StartsWith(request.Argument.Value, StringComparison.OrdinalIgnoreCase))
-                .Take(100)
-                .ToList()
-        }
-    }));
-
-server.AuthenticationHandler = request =>
-{
-    string? authorization = request.Headers["Authorization"];
-    bool authenticated = authorization == "Bearer local-dev-token";
-
-    return Task.FromResult(new AuthenticationResult
-    {
-        IsAuthenticated = authenticated,
-        Principal = authenticated ? "local-dev" : null,
-        StatusCode = authenticated ? 200 : 401,
-        ErrorMessage = authenticated ? null : "Missing or invalid bearer token"
-    });
-};
-
-await server.StartAsync();
-```
-
-Run the server:
-
-```bash
-dotnet run
-```
-
-Clients initialize against `http://localhost:8080/mcp`, then call `tools/list`, `tools/call`, `resources/list`, `resources/read`, `resources/templates/list`, `prompts/list`, `prompts/get`, and `completion/complete`. Streamable HTTP clients must send `Accept: application/json, text/event-stream` on POST requests and `Accept: text/event-stream` on GET SSE requests; `McpHttpClient` does this automatically. When resources, prompts, or utility events change at runtime, call `NotifyResourcesChanged()`, `NotifyResourceUpdated(uri)`, `NotifyPromptsChanged()`, `NotifyProgress(...)`, `NotifyCancelled(...)`, or `NotifyLogMessage(...)` on `McpHttpServer` to queue SSE notifications for active sessions.
-
-### Quick Start: MCP Client (stdio)
+### MCP Client (stdio)
 
 ```csharp
 using Voltaic;
@@ -430,7 +313,7 @@ JsonRpcResponse response = await client.CallAsync("tools/list");
 Console.WriteLine(response.Result);
 ```
 
-### Quick Start: MCP Server (TCP)
+### MCP Server (TCP)
 
 ```csharp
 using System.Net;
@@ -472,7 +355,7 @@ Console.WriteLine("MCP server running on port 8080");
 await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ```
 
-### Quick Start: MCP Client (TCP)
+### MCP Client (TCP)
 
 ```csharp
 using Voltaic;
@@ -491,7 +374,7 @@ object? tools = await client.CallAsync<object>("tools/list");
 Console.WriteLine(tools);
 ```
 
-### Quick Start: MCP Server (HTTP)
+### MCP Server (HTTP)
 
 ```csharp
 using System.Text.Json;
@@ -539,7 +422,7 @@ The default `McpHttpServer` listens on all three HTTP endpoints:
 
 Set `mcpPath: null` in the constructor if you want to disable the Streamable HTTP endpoint.
 
-### Quick Start: MCP Client (HTTP)
+### MCP Client (HTTP)
 
 ```csharp
 using Voltaic;
@@ -557,7 +440,7 @@ object? result = await client.CallAsync<object>("tools/list");
 Console.WriteLine(result);
 ```
 
-### Quick Start: MCP Client (Streamable HTTP)
+### MCP Client (Streamable HTTP)
 
 ```csharp
 using Voltaic;
@@ -577,7 +460,7 @@ Console.WriteLine(result);
 
 `ConnectStreamableAsync()` establishes the session and POST endpoint. Call `StartSseAsync()` when you want the SSE notification stream to become active on the same `/mcp` endpoint.
 
-### Quick Start: MCP Server (WebSocket)
+### MCP Server (WebSocket)
 
 ```csharp
 using System.Text.Json;
@@ -592,47 +475,33 @@ server.ClientConnected += (sender, client) =>
 server.ResponseSent += (sender, e) =>
     Console.WriteLine($"Sent response for {e.Method} in {e.Duration.TotalMilliseconds}ms");
 
-// Register a method (tools/call dispatches to registered methods by name)
-server.RegisterMethod("add", (JsonElement? args) =>
-{
-    double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-    double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
-    return (object)(a + b);
-});
-
-// Register tools/list so clients can discover available tools
-server.RegisterMethod("tools/list", (JsonElement? args) =>
-{
-    return new
+server.RegisterTool(
+    "add",
+    "Adds two numbers",
+    new
     {
-        tools = new[]
+        type = "object",
+        properties = new
         {
-            new
-            {
-                name = "add",
-                description = "Adds two numbers",
-                inputSchema = new
-                {
-                    type = "object",
-                    properties = new
-                    {
-                        a = new { type = "number", description = "First number" },
-                        b = new { type = "number", description = "Second number" }
-                    },
-                    required = new[] { "a", "b" }
-                }
-            }
-        }
-    };
-});
+            a = new { type = "number", description = "First number" },
+            b = new { type = "number", description = "Second number" }
+        },
+        required = new[] { "a", "b" }
+    },
+    (JsonElement? args) =>
+    {
+        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        return (object)(a + b);
+    });
 
 // Start the server
 await server.StartAsync();
-Console.WriteLine("MCP WebSocket server running on ws://localhost:8080");
+Console.WriteLine("MCP WebSocket server running on ws://localhost:8080/mcp");
 await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ```
 
-### Quick Start: MCP Client (WebSocket)
+### MCP Client (WebSocket)
 
 ```csharp
 using Voltaic;
@@ -653,6 +522,53 @@ Console.WriteLine(result);
 // Send a notification
 await client.NotifyAsync("log", new { message = "Hello from WebSocket client" });
 ```
+
+---
+
+## Authentication
+
+`McpHttpServer` supports an optional async authentication handler that runs before request processing. When set, every incoming HTTP request is passed through the handler, which receives the full `HttpListenerRequest` and returns an `AuthenticationResult`. If authentication fails, the server returns the configured HTTP status code and error message without processing the request. When not set, all requests are accepted.
+
+```csharp
+using System.Net;
+using Voltaic;
+
+McpHttpServer server = new McpHttpServer("localhost", 8080);
+
+server.AuthenticationHandler = async (HttpListenerRequest request) =>
+{
+    string? token = request.Headers["Authorization"];
+    if (string.IsNullOrEmpty(token) || !token.StartsWith("Bearer "))
+    {
+        return new AuthenticationResult
+        {
+            IsAuthenticated = false,
+            StatusCode = 401,
+            ErrorMessage = "Missing or invalid Authorization header"
+        };
+    }
+
+    // Validate the token with your JWT validator, database, identity provider, etc.
+    bool isValid = await ValidateTokenAsync(token.Substring("Bearer ".Length));
+
+    return new AuthenticationResult
+    {
+        IsAuthenticated = isValid,
+        Principal = "my-user",
+        Claims = new Dictionary<string, string> { { "role", "admin" } }
+    };
+};
+
+await server.StartAsync();
+```
+
+The following requests bypass authentication so infrastructure can validate connectivity:
+
+- **Health check** (`GET /`) - returns `{"status":"Ok"}` for load balancer probes.
+- **Ping** (`ping` JSON-RPC method via any RPC endpoint) - returns `"pong"` for application-layer connectivity checks.
+- **CORS preflight** (`OPTIONS` requests) - returns `204` with CORS headers.
+
+Full authorization flows, such as OAuth 2.1 from the MCP specification, remain the responsibility of the application. `AuthenticationHandler` is the hook for plugging in the scheme your product already uses.
 
 ---
 
@@ -696,7 +612,99 @@ finally
 
 ---
 
-## Documentation
+## Example Projects
+
+Check out the `src/Test.*` projects for working examples:
+
+- **Test.JsonRpcServer** / **Test.JsonRpcClient**: Interactive JSON-RPC demos over TCP
+- **Test.McpServer** / **Test.McpClient**: MCP stdio examples
+- **Test.McpHttpServer** / **Test.McpHttpClient**: MCP HTTP with SSE examples
+- **Test.McpWebsocketsServer** / **Test.McpWebsocketsClient**: MCP WebSocket examples
+- **Sample.McpServer**: MCP tool, structured-output, resource, template, and prompt sample
+- **Test.Shared**: Shared Touchstone descriptors and the central 253-case API/protocol matrix
+- **Test.Automated**: Touchstone console runner
+- **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
+
+Run examples:
+```bash
+# JSON-RPC Server (TCP)
+dotnet run --project src/Test.JsonRpcServer/Test.JsonRpcServer.csproj -- 8080
+
+# JSON-RPC Client (TCP)
+dotnet run --project src/Test.JsonRpcClient/Test.JsonRpcClient.csproj -- 8080
+
+# MCP Stdio Client (launches server subprocess)
+dotnet run --project src/Test.McpClient/Test.McpClient.csproj
+
+# MCP HTTP Server
+dotnet run --project src/Test.McpHttpServer/Test.McpHttpServer.csproj -- 8080
+
+# MCP HTTP Client
+dotnet run --project src/Test.McpHttpClient/Test.McpHttpClient.csproj -- 8080
+
+# MCP WebSocket Server
+dotnet run --project src/Test.McpWebsocketsServer/Test.McpWebsocketsServer.csproj -- 8080
+
+# MCP WebSocket Client
+dotnet run --project src/Test.McpWebsocketsClient/Test.McpWebsocketsClient.csproj -- 8080
+```
+
+### Connecting with MCP Inspector
+
+The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a visual tool for testing and debugging MCP servers. To connect MCP Inspector to a Voltaic MCP HTTP server:
+
+1. **Start your MCP HTTP server**:
+   ```bash
+   dotnet run --project src/Test.McpHttpServer/Test.McpHttpServer.csproj -- 8080
+   ```
+
+2. **Open MCP Inspector** in your web browser
+
+3. **Configure the connection**:
+   - **Transport Type**: Select `Streamable HTTP`
+   - **URL**: Enter `http://{hostname}:{port}/mcp`
+     - For example: `http://localhost:8080/mcp`
+     - If you specified a custom `mcpPath` when creating the server, use that instead of `/mcp`
+
+4. **Click Connect**
+
+5. **Verify the connection**: The inspector should display the list of registered tools and allow you to call them interactively
+
+**Note**: Use the `Streamable HTTP` transport in MCP Inspector for Voltaic's `/mcp` endpoint. For other Voltaic transports (TCP, WebSocket, stdio), use the corresponding client implementations or command-line tools.
+
+---
+
+## Building
+
+```bash
+# Build everything
+dotnet build src/Voltaic.sln
+
+# Build the library
+dotnet build src/Voltaic/Voltaic.csproj
+
+# Run Touchstone console tests
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
+
+# The shared suite currently projects 253 cases through the console, xUnit, and NUnit runners
+
+# Export Touchstone JSON results
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json
+
+# Filter by descriptor tag
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --tag mcp
+
+# Run adapter-backed tests
+dotnet test src/Test.Xunit/Test.Xunit.csproj --framework net8.0
+dotnet test src/Test.Nunit/Test.Nunit.csproj --framework net8.0
+
+# Cross-target the console runner
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.0
+```
+
+---
+
+## API Reference
 
 All classes and methods are available in the `Voltaic` namespace.
 
@@ -1174,98 +1182,6 @@ server.ClientDisconnected += (sender, client) =>
 };
 
 await server.StartAsync();
-```
-
----
-
-## Examples
-
-Check out the `src/Test.*` projects for working examples:
-
-- **Test.JsonRpcServer** / **Test.JsonRpcClient**: Interactive JSON-RPC demos over TCP
-- **Test.McpServer** / **Test.McpClient**: MCP stdio examples
-- **Test.McpHttpServer** / **Test.McpHttpClient**: MCP HTTP with SSE examples
-- **Test.McpWebsocketsServer** / **Test.McpWebsocketsClient**: MCP WebSocket examples
-- **Sample.McpServer**: MCP tool, structured-output, resource, template, and prompt sample
-- **Test.Shared**: Shared Touchstone descriptors and the central 253-case API/protocol matrix
-- **Test.Automated**: Touchstone console runner
-- **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
-
-Run examples:
-```bash
-# JSON-RPC Server (TCP)
-dotnet run --project src/Test.JsonRpcServer/Test.JsonRpcServer.csproj -- 8080
-
-# JSON-RPC Client (TCP)
-dotnet run --project src/Test.JsonRpcClient/Test.JsonRpcClient.csproj -- 8080
-
-# MCP Stdio Client (launches server subprocess)
-dotnet run --project src/Test.McpClient/Test.McpClient.csproj
-
-# MCP HTTP Server
-dotnet run --project src/Test.McpHttpServer/Test.McpHttpServer.csproj -- 8080
-
-# MCP HTTP Client
-dotnet run --project src/Test.McpHttpClient/Test.McpHttpClient.csproj -- 8080
-
-# MCP WebSocket Server
-dotnet run --project src/Test.McpWebsocketsServer/Test.McpWebsocketsServer.csproj -- 8080
-
-# MCP WebSocket Client
-dotnet run --project src/Test.McpWebsocketsClient/Test.McpWebsocketsClient.csproj -- 8080
-```
-
-### Connecting with MCP Inspector
-
-The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a visual tool for testing and debugging MCP servers. To connect MCP Inspector to a Voltaic MCP HTTP server:
-
-1. **Start your MCP HTTP server**:
-   ```bash
-   dotnet run --project src/Test.McpHttpServer/Test.McpHttpServer.csproj -- 8080
-   ```
-
-2. **Open MCP Inspector** in your web browser
-
-3. **Configure the connection**:
-   - **Transport Type**: Select `Streamable HTTP`
-   - **URL**: Enter `http://{hostname}:{port}/mcp`
-     - For example: `http://localhost:8080/mcp`
-     - If you specified a custom `mcpPath` when creating the server, use that instead of `/mcp`
-
-4. **Click Connect**
-
-5. **Verify the connection**: The inspector should display the list of registered tools and allow you to call them interactively
-
-**Note**: MCP Inspector currently supports HTTP transport via Streamable HTTP. For other transports (TCP, WebSocket, stdio), use the corresponding client implementations or command-line tools.
-
----
-
-## Building
-
-```bash
-# Build everything
-dotnet build src/Voltaic.sln
-
-# Build the library
-dotnet build src/Voltaic/Voltaic.csproj
-
-# Run Touchstone console tests
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
-
-# The shared suite currently projects 253 cases through the console, xUnit, and NUnit runners
-
-# Export Touchstone JSON results
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json
-
-# Filter by descriptor tag
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --tag mcp
-
-# Run adapter-backed tests
-dotnet test src/Test.Xunit/Test.Xunit.csproj --framework net8.0
-dotnet test src/Test.Nunit/Test.Nunit.csproj --framework net8.0
-
-# Cross-target the console runner
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.0
 ```
 
 ---
