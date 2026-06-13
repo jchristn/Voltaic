@@ -32,6 +32,16 @@ namespace Voltaic
         public bool IsSseConnected => _IsSseConnected;
 
         /// <summary>
+        /// Gets or sets the MCP protocol version header sent after a session is established.
+        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
+        /// </summary>
+        public string ProtocolVersion
+        {
+            get => _ProtocolVersion;
+            set => _ProtocolVersion = String.IsNullOrWhiteSpace(value) ? McpProtocol.LatestProtocolVersion : value;
+        }
+
+        /// <summary>
         /// Gets or sets the request timeout in milliseconds.
         /// Default is 30000 (30 seconds). Minimum is 1000 (1 second).
         /// </summary>
@@ -82,6 +92,7 @@ namespace Voltaic
         private CancellationTokenSource? _SseTokenSource;
         private Task? _SseTask;
         private bool _IsSseConnected = false;
+        private string _ProtocolVersion = McpProtocol.LatestProtocolVersion;
 
         private int _RequestTimeoutMs = 30000;
         private bool _IsDisposed = false;
@@ -254,14 +265,19 @@ namespace Voltaic
 
                 if (!String.IsNullOrEmpty(SessionId))
                 {
-                    httpRequest.Headers.Add("Mcp-Session-Id", SessionId);
+                    httpRequest.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
+                    httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
                 }
+
+                httpRequest.Headers.Accept.ParseAdd("application/json");
+                httpRequest.Headers.Accept.ParseAdd("text/event-stream");
 
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
                 httpResponse.EnsureSuccessStatusCode();
 
                 // Extract session ID from response
-                if (httpResponse.Headers.TryGetValues("Mcp-Session-Id", out System.Collections.Generic.IEnumerable<string>? sessionHeaders))
+                if (httpResponse.Headers.TryGetValues(McpProtocol.SessionIdHeader, out System.Collections.Generic.IEnumerable<string>? sessionHeaders) ||
+                    httpResponse.Headers.TryGetValues(McpProtocol.LegacySessionIdHeader, out sessionHeaders))
                 {
                     foreach (string sessionHeader in sessionHeaders)
                     {
@@ -302,6 +318,95 @@ namespace Voltaic
                 }
 
                 return (T)Convert.ChangeType(response.Result, typeof(T));
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously invokes a remote method and returns the raw JSON-RPC response.
+        /// </summary>
+        /// <param name="method">The name of the method to invoke.</param>
+        /// <param name="parameters">The parameters to pass to the method. Can be null.</param>
+        /// <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is the value of RequestTimeoutMs property.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the JSON-RPC response.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized.</exception>
+        /// <exception cref="Exception">Thrown when the HTTP response body cannot be parsed as JSON-RPC.</exception>
+        public async Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
+        {
+            if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
+                throw new InvalidOperationException("Client not initialized. Call ConnectAsync first.");
+
+            if (timeoutMs == 0) timeoutMs = _RequestTimeoutMs;
+
+            JsonRpcRequest request = new JsonRpcRequest
+            {
+                Method = method,
+                Params = parameters,
+                Id = Guid.NewGuid().ToString()
+            };
+
+            DateTime sentUtc = DateTime.UtcNow;
+            string requestJson = JsonSerializer.Serialize(request);
+            LogMessage($"Sending request: {requestJson}");
+            RaiseRequestSent(new RequestSentEventArgs(request));
+
+            using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                cts.CancelAfter(timeoutMs);
+
+                using HttpRequestMessage httpRequest = CreatePostRequest(requestJson);
+                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
+                httpResponse.EnsureSuccessStatusCode();
+                CaptureSessionId(httpResponse);
+
+                string responseJson = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                LogMessage($"Received response: {responseJson}");
+
+                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
+                if (response == null)
+                {
+                    throw new Exception("Invalid response from server");
+                }
+
+                RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously sends a JSON-RPC notification to the server.
+        /// </summary>
+        /// <param name="method">The notification method.</param>
+        /// <param name="parameters">The notification parameters. Can be null.</param>
+        /// <param name="timeoutMs">The timeout in milliseconds to wait for HTTP acceptance. Default is the value of RequestTimeoutMs property.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized.</exception>
+        public async Task NotifyAsync(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
+        {
+            if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
+                throw new InvalidOperationException("Client not initialized. Call ConnectAsync first.");
+
+            if (timeoutMs == 0) timeoutMs = _RequestTimeoutMs;
+
+            JsonRpcRequest request = new JsonRpcRequest
+            {
+                Method = method,
+                Params = parameters
+            };
+
+            string requestJson = JsonSerializer.Serialize(request);
+            LogMessage($"Sending notification: {requestJson}");
+            RaiseRequestSent(new RequestSentEventArgs(request));
+
+            using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                cts.CancelAfter(timeoutMs);
+
+                using HttpRequestMessage httpRequest = CreatePostRequest(requestJson);
+                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
+                httpResponse.EnsureSuccessStatusCode();
+                CaptureSessionId(httpResponse);
             }
         }
 
@@ -358,7 +463,8 @@ namespace Voltaic
                 }
 
                 HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, _EventsUrl);
-                request.Headers.Add("Mcp-Session-Id", SessionId);
+                request.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
+                request.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
                 request.Headers.Add("Accept", "text/event-stream");
 
                 HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
@@ -399,6 +505,35 @@ namespace Voltaic
             finally
             {
                 _IsSseConnected = false;
+            }
+        }
+
+        private HttpRequestMessage CreatePostRequest(string requestJson)
+        {
+            HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
+            httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+            httpRequest.Headers.Accept.ParseAdd("application/json");
+            httpRequest.Headers.Accept.ParseAdd("text/event-stream");
+
+            if (!String.IsNullOrEmpty(SessionId))
+            {
+                httpRequest.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
+                httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
+            }
+
+            return httpRequest;
+        }
+
+        private void CaptureSessionId(HttpResponseMessage httpResponse)
+        {
+            if (httpResponse.Headers.TryGetValues(McpProtocol.SessionIdHeader, out System.Collections.Generic.IEnumerable<string>? sessionHeaders) ||
+                httpResponse.Headers.TryGetValues(McpProtocol.LegacySessionIdHeader, out sessionHeaders))
+            {
+                foreach (string sessionHeader in sessionHeaders)
+                {
+                    SessionId = sessionHeader;
+                    break;
+                }
             }
         }
 

@@ -1,6 +1,8 @@
 namespace Sample.McpServer
 {
     using System;
+    using System.Collections.Generic;
+    using System.Linq;
     using System.Net;
     using System.Text.Json;
     using System.Threading;
@@ -136,7 +138,8 @@ namespace Sample.McpServer
         static async Task Main(string[] args)
         {
             Console.WriteLine("=== Voltaic MCP Sample Server ===");
-            Console.WriteLine($"HTTP Server:       http://{_Localhost}:{_HttpPort}/rpc");
+            Console.WriteLine($"HTTP Server:       http://{_Localhost}:{_HttpPort}/mcp");
+            Console.WriteLine($"Legacy HTTP RPC:   http://{_Localhost}:{_HttpPort}/rpc");
             Console.WriteLine($"TCP Server:        tcp://{_Localhost}:{_TcpPort}");
             Console.WriteLine($"WebSocket Server:  ws://{_Localhost}:{_WebsocketPort}/mcp");
             Console.WriteLine();
@@ -344,6 +347,126 @@ namespace Sample.McpServer
                     required = new[] { "value" }
                 },
                 _SlowComputeHandler);
+
+            server.RegisterTool(
+                "addStructured",
+                "Adds two numbers and returns structured content",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        a = new { type = "number", description = "First number" },
+                        b = new { type = "number", description = "Second number" }
+                    },
+                    required = new[] { "a", "b" }
+                },
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        total = new { type = "number", description = "The sum" }
+                    },
+                    required = new[] { "total" }
+                },
+                args =>
+                {
+                    double a = args?.TryGetProperty("a", out JsonElement aProp) == true ? aProp.GetDouble() : 0;
+                    double b = args?.TryGetProperty("b", out JsonElement bProp) == true ? bProp.GetDouble() : 0;
+                    return McpToolCallResult.FromStructured(new { total = a + b });
+                });
+
+            server.RegisterResource(
+                "voltaic://sample/status",
+                "status",
+                "text/plain",
+                () => new McpReadResourceResult
+                {
+                    Contents = new List<object>
+                    {
+                        new McpTextResourceContents
+                        {
+                            Uri = "voltaic://sample/status",
+                            MimeType = "text/plain",
+                            Text = "Sample server is running"
+                        }
+                    }
+                });
+
+            server.RegisterResourceTemplate(
+                "voltaic://sample/{name}",
+                "sample-item",
+                "text/plain",
+                uri => new McpReadResourceResult
+                {
+                    Contents = new List<object>
+                    {
+                        new McpTextResourceContents
+                        {
+                            Uri = uri,
+                            MimeType = "text/plain",
+                            Text = $"Dynamic sample resource for {uri}"
+                        }
+                    }
+                });
+
+            server.RegisterPrompt(
+                "summarize",
+                "Creates a short summary prompt for a topic",
+                new[]
+                {
+                    new McpPromptArgument
+                    {
+                        Name = "topic",
+                        Description = "Topic to summarize",
+                        Required = true
+                    }
+                },
+                args =>
+                {
+                    string topic = "the topic";
+                    if (args.HasValue && args.Value.TryGetProperty("topic", out JsonElement topicProp))
+                    {
+                        topic = topicProp.GetString() ?? topic;
+                    }
+
+                    return new McpGetPromptResult
+                    {
+                        Description = "Summary prompt",
+                        Messages = new List<McpPromptMessage>
+                        {
+                            new McpPromptMessage
+                            {
+                                Role = "user",
+                                Content = new McpTextContent
+                                {
+                                    Text = $"Summarize {topic} in three bullets."
+                                }
+                            }
+                        }
+                    };
+                });
+
+            server.RegisterCompletionProvider(
+                "ref/prompt",
+                "summarize",
+                "topic",
+                (request, token) => Task.FromResult(new McpCompleteResult
+                {
+                    Completion = new McpCompletion
+                    {
+                        Values = new List<string>
+                        {
+                            "Voltaic",
+                            "Model Context Protocol",
+                            "JSON-RPC"
+                        }
+                        .Where(value => value.StartsWith(request.Argument.Value, StringComparison.OrdinalIgnoreCase))
+                        .Take(100)
+                        .ToList()
+                    }
+                }));
         }
 
         private static void RegisterTcpMethods(McpTcpServer server)

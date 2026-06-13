@@ -823,6 +823,86 @@
             This method is virtual to allow derived classes to customize the set of built-in methods.
             </summary>
         </member>
+        <member name="T:Voltaic.McpClientCapabilities">
+            <summary>
+            Capabilities a client can expose to an MCP server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpClientCapabilities.Experimental">
+            <summary>
+            Gets or sets experimental capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpClientCapabilities.Roots">
+            <summary>
+            Gets or sets root capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpClientCapabilities.Sampling">
+            <summary>
+            Gets or sets sampling capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpClientCapabilities.Elicitation">
+            <summary>
+            Gets or sets elicitation capabilities.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpServerCapabilities">
+            <summary>
+            Capabilities an MCP server can expose to a client.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServerCapabilities.Experimental">
+            <summary>
+            Gets or sets experimental capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServerCapabilities.Logging">
+            <summary>
+            Gets or sets logging capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServerCapabilities.Completions">
+            <summary>
+            Gets or sets completion capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServerCapabilities.Prompts">
+            <summary>
+            Gets or sets prompt capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServerCapabilities.Resources">
+            <summary>
+            Gets or sets resource capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpServerCapabilities.Tools">
+            <summary>
+            Gets or sets tool capabilities.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpListChangedCapability">
+            <summary>
+            Common list-changed capability metadata.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpListChangedCapability.ListChanged">
+            <summary>
+            Gets or sets whether list changed notifications are supported.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpResourceCapability">
+            <summary>
+            Resource capability metadata.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceCapability.Subscribe">
+            <summary>
+            Gets or sets whether resource subscriptions are supported.
+            </summary>
+        </member>
         <member name="T:Voltaic.McpClient">
             <summary>
             MCP client using stdio transport for subprocess-based MCP servers.
@@ -915,6 +995,326 @@
             </summary>
             <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
+        <member name="T:Voltaic.McpImplementation">
+            <summary>
+            Describes an MCP implementation.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImplementation.Name">
+            <summary>
+            Gets or sets the implementation name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImplementation.Title">
+            <summary>
+            Gets or sets the optional display title.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImplementation.Version">
+            <summary>
+            Gets or sets the implementation version.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImplementation.Description">
+            <summary>
+            Gets or sets the optional description.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImplementation.WebsiteUrl">
+            <summary>
+            Gets or sets the optional website URL.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImplementation.Icons">
+            <summary>
+            Gets or sets optional icons.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpIcon">
+            <summary>
+            Describes an icon for an MCP item.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpIcon.Src">
+            <summary>
+            Gets or sets the icon URI.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpIcon.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpIcon.Sizes">
+            <summary>
+            Gets or sets supported sizes.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpIcon.Theme">
+            <summary>
+            Gets or sets the intended theme.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpAnnotations">
+            <summary>
+            Optional annotations for MCP items.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAnnotations.Title">
+            <summary>
+            Gets or sets a display title.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAnnotations.ReadOnlyHint">
+            <summary>
+            Gets or sets whether the item is read-only.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAnnotations.DestructiveHint">
+            <summary>
+            Gets or sets whether the item is destructive.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAnnotations.IdempotentHint">
+            <summary>
+            Gets or sets whether the item is idempotent.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAnnotations.OpenWorldHint">
+            <summary>
+            Gets or sets whether the item can operate in an open-world context.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpResult">
+            <summary>
+            Base result metadata shape used by MCP.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResult.Meta">
+            <summary>
+            Gets or sets protocol metadata.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpPaginatedResult">
+            <summary>
+            Base paginated result shape used by MCP.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPaginatedResult.NextCursor">
+            <summary>
+            Gets or sets the cursor for the next page, if one exists.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpCompleteRequest">
+            <summary>
+            Parameters supplied to an MCP completion request.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompleteRequest.Ref">
+            <summary>
+            Gets or sets the prompt or resource reference being completed.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompleteRequest.Argument">
+            <summary>
+            Gets or sets the argument being completed.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompleteRequest.Context">
+            <summary>
+            Gets or sets optional completion context.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpCompletionReference">
+            <summary>
+            Identifies a prompt or resource template for completion.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletionReference.Type">
+            <summary>
+            Gets or sets the reference type, such as ref/prompt or ref/resource.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletionReference.Name">
+            <summary>
+            Gets or sets the referenced prompt name when Type is ref/prompt.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletionReference.Uri">
+            <summary>
+            Gets or sets the referenced resource URI template when Type is ref/resource.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpCompletionArgument">
+            <summary>
+            Describes the argument currently being completed.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletionArgument.Name">
+            <summary>
+            Gets or sets the argument name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletionArgument.Value">
+            <summary>
+            Gets or sets the current partial value.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpCompletionContext">
+            <summary>
+            Carries previously resolved completion arguments.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletionContext.Arguments">
+            <summary>
+            Gets or sets already resolved argument values.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpCompleteResult">
+            <summary>
+            Result returned by completion/complete.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompleteResult.Completion">
+            <summary>
+            Gets or sets completion values and metadata.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpCompletion">
+            <summary>
+            Completion values and optional paging metadata.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletion.Values">
+            <summary>
+            Gets or sets ranked completion values. MCP responses are bounded to 100 values.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletion.Total">
+            <summary>
+            Gets or sets the total number of available matches.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCompletion.HasMore">
+            <summary>
+            Gets or sets whether more values are available.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpTextContent">
+            <summary>
+            Text content used by MCP prompts and tool results.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTextContent.Type">
+            <summary>
+            Gets the content type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTextContent.Text">
+            <summary>
+            Gets or sets the text content.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTextContent.Annotations">
+            <summary>
+            Gets or sets optional annotations.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTextContent.Meta">
+            <summary>
+            Gets or sets protocol metadata.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpImageContent">
+            <summary>
+            Image content used by MCP prompts and tool results.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImageContent.Type">
+            <summary>
+            Gets the content type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImageContent.Data">
+            <summary>
+            Gets or sets base64 image data.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImageContent.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpImageContent.Annotations">
+            <summary>
+            Gets or sets optional annotations.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpAudioContent">
+            <summary>
+            Audio content used by MCP prompts and tool results.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAudioContent.Type">
+            <summary>
+            Gets the content type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAudioContent.Data">
+            <summary>
+            Gets or sets base64 audio data.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpAudioContent.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpEmbeddedResourceContent">
+            <summary>
+            Embedded resource content used by MCP prompts and tool results.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpEmbeddedResourceContent.Type">
+            <summary>
+            Gets the content type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpEmbeddedResourceContent.Resource">
+            <summary>
+            Gets or sets the embedded resource contents.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpEmbeddedResourceContent.Annotations">
+            <summary>
+            Gets or sets optional annotations.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpResourceLinkContent">
+            <summary>
+            Resource link content used by MCP prompts and tool results.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceLinkContent.Type">
+            <summary>
+            Gets the content type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceLinkContent.Uri">
+            <summary>
+            Gets or sets the resource URI.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceLinkContent.Name">
+            <summary>
+            Gets or sets an optional display name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceLinkContent.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
         <member name="T:Voltaic.McpHttpClient">
             <summary>
             Provides an HTTP-based MCP (Model Context Protocol) client implementation.
@@ -936,6 +1336,12 @@
         <member name="P:Voltaic.McpHttpClient.IsSseConnected">
             <summary>
             Gets a value indicating whether the SSE (Server-Sent Events) connection is active.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpHttpClient.ProtocolVersion">
+            <summary>
+            Gets or sets the MCP protocol version header sent after a session is established.
+            Default is <see cref="F:Voltaic.McpProtocol.LatestProtocolVersion"/>.
             </summary>
         </member>
         <member name="P:Voltaic.McpHttpClient.RequestTimeoutMs">
@@ -1031,6 +1437,29 @@
             <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
             <exception cref="T:System.Exception">Thrown when the remote method returns an error.</exception>
         </member>
+        <member name="M:Voltaic.McpHttpClient.CallAsync(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously invokes a remote method and returns the raw JSON-RPC response.
+            </summary>
+            <param name="method">The name of the method to invoke.</param>
+            <param name="parameters">The parameters to pass to the method. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is the value of RequestTimeoutMs property.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation. The task result contains the JSON-RPC response.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
+            <exception cref="T:System.Exception">Thrown when the HTTP response body cannot be parsed as JSON-RPC.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpClient.NotifyAsync(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously sends a JSON-RPC notification to the server.
+            </summary>
+            <param name="method">The notification method.</param>
+            <param name="parameters">The notification parameters. Can be null.</param>
+            <param name="timeoutMs">The timeout in milliseconds to wait for HTTP acceptance. Default is the value of RequestTimeoutMs property.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
+        </member>
         <member name="M:Voltaic.McpHttpClient.Disconnect">
             <summary>
             Disconnects from the server and stops the SSE connection if active.
@@ -1088,7 +1517,7 @@
         <member name="P:Voltaic.McpHttpServer.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version.
-            Default is "2025-03-26".
+            Default is <see cref="F:Voltaic.McpProtocol.LatestProtocolVersion"/>.
             </summary>
         </member>
         <member name="P:Voltaic.McpHttpServer.ServerName">
@@ -1195,6 +1624,23 @@
             <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with input and output schema metadata using a synchronous handler.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The function that handles the tool invocation.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool from a full tool definition using a synchronous handler.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The function that handles the tool invocation.</param>
+        </member>
         <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
@@ -1208,6 +1654,23 @@
             <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using an asynchronous handler.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The async function that handles the tool invocation.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using an asynchronous handler.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The async function that handles the tool invocation.</param>
+        </member>
         <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
@@ -1219,6 +1682,80 @@
             <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using a cancellable asynchronous handler.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a static MCP resource with a synchronous read handler.
+            </summary>
+            <param name="uri">Resource URI.</param>
+            <param name="name">Resource name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterResource(Voltaic.McpResource,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a static MCP resource with a cancellable read handler.
+            </summary>
+            <param name="resource">Resource metadata.</param>
+            <param name="readHandler">Read handler that receives the requested URI.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterResourceTemplate(System.String,System.String,System.String,System.Func{System.String,Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a dynamic MCP resource template with a synchronous read handler.
+            </summary>
+            <param name="uriTemplate">URI template.</param>
+            <param name="name">Template name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler that receives the matched URI.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterResourceTemplate(Voltaic.McpResourceTemplate,System.Func{System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a dynamic MCP resource template with a cancellable read handler.
+            </summary>
+            <param name="template">Template metadata.</param>
+            <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.McpGetPromptResult})">
+            <summary>
+            Registers an MCP prompt with a synchronous handler.
+            </summary>
+            <param name="name">Prompt name.</param>
+            <param name="description">Prompt description.</param>
+            <param name="arguments">Prompt arguments.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterPrompt(Voltaic.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpGetPromptResult}})">
+            <summary>
+            Registers an MCP prompt with a cancellable handler.
+            </summary>
+            <param name="prompt">Prompt metadata.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.RegisterCompletionProvider(System.String,System.String,System.String,System.Func{Voltaic.McpCompleteRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpCompleteResult}})">
+            <summary>
+            Registers a completion provider for prompt arguments or resource template variables.
+            </summary>
+            <param name="referenceType">Reference type, usually <c>ref/prompt</c> or <c>ref/resource</c>.</param>
+            <param name="referenceId">Prompt name or resource URI template. Use null to match any reference of the type.</param>
+            <param name="argumentName">Argument name. Use null to match any argument on the reference.</param>
+            <param name="handler">Completion handler.</param>
         </member>
         <member name="M:Voltaic.McpHttpServer.StartAsync(System.Threading.CancellationToken)">
             <summary>
@@ -1246,6 +1783,57 @@
             </summary>
             <param name="method">The name of the notification method.</param>
             <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.NotifyToolsChanged">
+            <summary>
+            Notifies active HTTP sessions that the tool list changed.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.NotifyResourcesChanged">
+            <summary>
+            Notifies active HTTP sessions that the resource list changed.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.NotifyResourceUpdated(System.String)">
+            <summary>
+            Notifies active HTTP sessions that a resource was updated.
+            </summary>
+            <param name="uri">Updated resource URI.</param>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.NotifyPromptsChanged">
+            <summary>
+            Notifies active HTTP sessions that the prompt list changed.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.NotifyProgress(System.String,System.Object,System.Double,System.Nullable{System.Double},System.String)">
+            <summary>
+            Queues a progress notification for an active HTTP session.
+            </summary>
+            <param name="sessionId">Target session ID.</param>
+            <param name="progressToken">Progress token from request metadata.</param>
+            <param name="progress">Current progress value.</param>
+            <param name="total">Optional total progress value.</param>
+            <param name="message">Optional human-readable progress text.</param>
+            <returns>True if the session was found and the notification was queued.</returns>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.NotifyCancelled(System.String,System.Object,System.String)">
+            <summary>
+            Queues a cancellation notification for an active HTTP session.
+            </summary>
+            <param name="sessionId">Target session ID.</param>
+            <param name="requestId">Cancelled request ID.</param>
+            <param name="reason">Optional cancellation reason.</param>
+            <returns>True if the session was found and the notification was queued.</returns>
+        </member>
+        <member name="M:Voltaic.McpHttpServer.NotifyLogMessage(System.String,System.String,System.Object,System.String)">
+            <summary>
+            Queues a structured MCP log message for an active HTTP session.
+            </summary>
+            <param name="sessionId">Target session ID.</param>
+            <param name="level">Syslog-style level.</param>
+            <param name="data">JSON-serializable log data.</param>
+            <param name="logger">Optional logger name.</param>
+            <returns>True if the session was found and the notification was queued.</returns>
         </member>
         <member name="M:Voltaic.McpHttpServer.GetActiveSessions">
             <summary>
@@ -1327,6 +1915,383 @@
             Routes to the appropriate handler (MCP or RPC) based on the request path.
             </summary>
         </member>
+        <member name="T:Voltaic.McpListToolsResult">
+            <summary>
+            Result returned by tools/list.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpListToolsResult.Tools">
+            <summary>
+            Gets or sets the listed tools.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpListResourcesResult">
+            <summary>
+            Result returned by resources/list.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpListResourcesResult.Resources">
+            <summary>
+            Gets or sets the listed resources.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpListResourceTemplatesResult">
+            <summary>
+            Result returned by resources/templates/list.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpListResourceTemplatesResult.ResourceTemplates">
+            <summary>
+            Gets or sets the listed resource templates.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpListPromptsResult">
+            <summary>
+            Result returned by prompts/list.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpListPromptsResult.Prompts">
+            <summary>
+            Gets or sets the listed prompts.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpPrompt">
+            <summary>
+            Describes an MCP prompt.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPrompt.Name">
+            <summary>
+            Gets or sets the prompt name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPrompt.Title">
+            <summary>
+            Gets or sets the display title.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPrompt.Description">
+            <summary>
+            Gets or sets the description.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPrompt.Arguments">
+            <summary>
+            Gets or sets prompt arguments.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpPromptArgument">
+            <summary>
+            Describes an MCP prompt argument.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPromptArgument.Name">
+            <summary>
+            Gets or sets the argument name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPromptArgument.Title">
+            <summary>
+            Gets or sets the display title.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPromptArgument.Description">
+            <summary>
+            Gets or sets the description.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPromptArgument.Required">
+            <summary>
+            Gets or sets whether the argument is required.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpPromptMessage">
+            <summary>
+            Message returned as part of a prompt result.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPromptMessage.Role">
+            <summary>
+            Gets or sets the role.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpPromptMessage.Content">
+            <summary>
+            Gets or sets the content block.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpGetPromptResult">
+            <summary>
+            Result returned by prompts/get.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpGetPromptResult.Description">
+            <summary>
+            Gets or sets the optional description.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpGetPromptResult.Messages">
+            <summary>
+            Gets or sets prompt messages.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpProtocol">
+            <summary>
+            MCP protocol constants used by Voltaic.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpProtocol.LatestProtocolVersion">
+            <summary>
+            The latest MCP protocol version targeted by Voltaic.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpProtocol.ProtocolVersion20250326">
+            <summary>
+            The previous MCP protocol version supported for compatibility.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpProtocol.JsonRpcVersion">
+            <summary>
+            JSON-RPC version used by MCP.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpProtocol.SessionIdHeader">
+            <summary>
+            Streamable HTTP session header.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpProtocol.LegacySessionIdHeader">
+            <summary>
+            Legacy streamable HTTP session header spelling accepted for compatibility.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpProtocol.ProtocolVersionHeader">
+            <summary>
+            Streamable HTTP protocol version header.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpProtocol.IsSupportedVersion(System.String)">
+            <summary>
+            Determines whether the supplied protocol version is supported by this release.
+            </summary>
+            <param name="version">Protocol version to inspect.</param>
+            <returns>True if supported.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocol.NegotiateVersion(System.String)">
+            <summary>
+            Negotiates a protocol version from a client-requested version.
+            </summary>
+            <param name="requestedVersion">The client-requested version.</param>
+            <returns>The version to use for the session.</returns>
+            <exception cref="T:System.ArgumentException">Thrown when the requested version is unsupported.</exception>
+        </member>
+        <member name="T:Voltaic.McpProtocolException">
+            <summary>
+            Represents an MCP protocol error that should be surfaced as a JSON-RPC error response.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpProtocolException.Code">
+            <summary>
+            Gets the JSON-RPC error code.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpProtocolException.ErrorData">
+            <summary>
+            Gets optional JSON-RPC error data.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.#ctor(System.Int32,System.String,System.Object)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.McpProtocolException"/> class.
+            </summary>
+            <param name="code">JSON-RPC error code.</param>
+            <param name="message">Error message.</param>
+            <param name="data">Optional error data.</param>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.InvalidParams(System.String,System.Object)">
+            <summary>
+            Creates an invalid params error.
+            </summary>
+            <param name="message">Error message.</param>
+            <param name="data">Optional error data.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.ValidationError(System.String,System.Object)">
+            <summary>
+            Creates a validation error.
+            </summary>
+            <param name="message">Error message.</param>
+            <param name="data">Optional error data.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.UnsupportedVersion(System.String)">
+            <summary>
+            Creates an unsupported protocol version error.
+            </summary>
+            <param name="version">Unsupported version.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.InvalidCursor(System.String)">
+            <summary>
+            Creates an invalid cursor error.
+            </summary>
+            <param name="cursor">Invalid cursor value.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.InvalidSession(System.String)">
+            <summary>
+            Creates an invalid session error.
+            </summary>
+            <param name="sessionId">Invalid session identifier.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.CancelledRequest(System.String,System.Object)">
+            <summary>
+            Creates a cancelled request error.
+            </summary>
+            <param name="message">Error message.</param>
+            <param name="data">Optional error data.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.MethodNotFound(System.String,System.Object)">
+            <summary>
+            Creates a method not found error.
+            </summary>
+            <param name="message">Error message.</param>
+            <param name="data">Optional error data.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.McpProtocolException.ToJsonRpcError">
+            <summary>
+            Converts this exception into a JSON-RPC error object.
+            </summary>
+            <returns>JSON-RPC error.</returns>
+        </member>
+        <member name="T:Voltaic.McpResource">
+            <summary>
+            Describes an MCP resource.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.Uri">
+            <summary>
+            Gets or sets the resource URI.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.Name">
+            <summary>
+            Gets or sets the resource name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.Title">
+            <summary>
+            Gets or sets the display title.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.Description">
+            <summary>
+            Gets or sets the description.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.Size">
+            <summary>
+            Gets or sets the raw resource size in bytes.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.Annotations">
+            <summary>
+            Gets or sets optional annotations.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResource.Icons">
+            <summary>
+            Gets or sets optional icons.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpResourceTemplate">
+            <summary>
+            Describes an MCP resource template.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceTemplate.UriTemplate">
+            <summary>
+            Gets or sets the URI template.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceTemplate.Name">
+            <summary>
+            Gets or sets the template name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceTemplate.Title">
+            <summary>
+            Gets or sets the display title.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceTemplate.Description">
+            <summary>
+            Gets or sets the description.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpResourceTemplate.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpTextResourceContents">
+            <summary>
+            Text contents returned by a resource read.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTextResourceContents.Uri">
+            <summary>
+            Gets or sets the resource URI.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTextResourceContents.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpTextResourceContents.Text">
+            <summary>
+            Gets or sets the text contents.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpBlobResourceContents">
+            <summary>
+            Binary contents returned by a resource read.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpBlobResourceContents.Uri">
+            <summary>
+            Gets or sets the resource URI.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpBlobResourceContents.MimeType">
+            <summary>
+            Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpBlobResourceContents.Blob">
+            <summary>
+            Gets or sets base64-encoded binary content.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpReadResourceResult">
+            <summary>
+            A resources/read result.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpReadResourceResult.Contents">
+            <summary>
+            Gets or sets resource contents.
+            </summary>
+        </member>
         <member name="T:Voltaic.McpServer">
             <summary>
             MCP server using stdio transport for subprocess-based operation.
@@ -1336,7 +2301,7 @@
         <member name="P:Voltaic.McpServer.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version.
-            Default is "2025-03-26".
+            Default is <see cref="F:Voltaic.McpProtocol.LatestProtocolVersion"/>.
             </summary>
         </member>
         <member name="P:Voltaic.McpServer.ServerName">
@@ -1402,6 +2367,23 @@
             <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with input and output schema metadata using a synchronous handler.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The function that handles the tool invocation.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool from a full tool definition using a synchronous handler.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The function that handles the tool invocation.</param>
+        </member>
         <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
@@ -1415,6 +2397,23 @@
             <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using an asynchronous handler.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The async function that handles the tool invocation.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using an asynchronous handler.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The async function that handles the tool invocation.</param>
+        </member>
         <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
@@ -1426,6 +2425,80 @@
             <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using a cancellable asynchronous handler.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a static MCP resource with a synchronous read handler.
+            </summary>
+            <param name="uri">Resource URI.</param>
+            <param name="name">Resource name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterResource(Voltaic.McpResource,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a static MCP resource with a cancellable read handler.
+            </summary>
+            <param name="resource">Resource metadata.</param>
+            <param name="readHandler">Read handler that receives the requested URI.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterResourceTemplate(System.String,System.String,System.String,System.Func{System.String,Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a dynamic MCP resource template with a synchronous read handler.
+            </summary>
+            <param name="uriTemplate">URI template.</param>
+            <param name="name">Template name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler that receives the matched URI.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterResourceTemplate(Voltaic.McpResourceTemplate,System.Func{System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a dynamic MCP resource template with a cancellable read handler.
+            </summary>
+            <param name="template">Template metadata.</param>
+            <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.McpGetPromptResult})">
+            <summary>
+            Registers an MCP prompt with a synchronous handler.
+            </summary>
+            <param name="name">Prompt name.</param>
+            <param name="description">Prompt description.</param>
+            <param name="arguments">Prompt arguments.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterPrompt(Voltaic.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpGetPromptResult}})">
+            <summary>
+            Registers an MCP prompt with a cancellable handler.
+            </summary>
+            <param name="prompt">Prompt metadata.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpServer.RegisterCompletionProvider(System.String,System.String,System.String,System.Func{Voltaic.McpCompleteRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpCompleteResult}})">
+            <summary>
+            Registers a completion provider for prompt arguments or resource template variables.
+            </summary>
+            <param name="referenceType">Reference type, usually <c>ref/prompt</c> or <c>ref/resource</c>.</param>
+            <param name="referenceId">Prompt name or resource URI template. Use null to match any reference of the type.</param>
+            <param name="argumentName">Argument name. Use null to match any argument on the reference.</param>
+            <param name="handler">Completion handler.</param>
         </member>
         <member name="M:Voltaic.McpServer.RunAsync(System.Threading.CancellationToken)">
             <summary>
@@ -1466,7 +2539,7 @@
         <member name="P:Voltaic.McpTcpServer.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version.
-            Default is "2025-03-26".
+            Default is <see cref="F:Voltaic.McpProtocol.LatestProtocolVersion"/>.
             </summary>
         </member>
         <member name="P:Voltaic.McpTcpServer.ServerName">
@@ -1489,10 +2562,338 @@
             <param name="port">The port number to listen on.</param>
             <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
         </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with metadata for MCP tool discovery using a synchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with input and output schema metadata using a synchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool from a full tool definition using a synchronous handler.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP tool discovery using an asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using an asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using an asynchronous handler.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP tool discovery using a cancellable asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using a cancellable asynchronous handler.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a static MCP resource with a synchronous read handler.
+            </summary>
+            <param name="uri">Resource URI.</param>
+            <param name="name">Resource name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterResource(Voltaic.McpResource,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a static MCP resource with a cancellable read handler.
+            </summary>
+            <param name="resource">Resource metadata.</param>
+            <param name="readHandler">Read handler that receives the requested URI.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterResourceTemplate(System.String,System.String,System.String,System.Func{System.String,Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a dynamic MCP resource template with a synchronous read handler.
+            </summary>
+            <param name="uriTemplate">URI template.</param>
+            <param name="name">Template name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler that receives the matched URI.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterResourceTemplate(Voltaic.McpResourceTemplate,System.Func{System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a dynamic MCP resource template with a cancellable read handler.
+            </summary>
+            <param name="template">Template metadata.</param>
+            <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.McpGetPromptResult})">
+            <summary>
+            Registers an MCP prompt with a synchronous handler.
+            </summary>
+            <param name="name">Prompt name.</param>
+            <param name="description">Prompt description.</param>
+            <param name="arguments">Prompt arguments.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterPrompt(Voltaic.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpGetPromptResult}})">
+            <summary>
+            Registers an MCP prompt with a cancellable handler.
+            </summary>
+            <param name="prompt">Prompt metadata.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.RegisterCompletionProvider(System.String,System.String,System.String,System.Func{Voltaic.McpCompleteRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpCompleteResult}})">
+            <summary>
+            Registers a completion provider for prompt arguments or resource template variables.
+            </summary>
+            <param name="referenceType">Reference type, usually <c>ref/prompt</c> or <c>ref/resource</c>.</param>
+            <param name="referenceId">Prompt name or resource URI template. Use null to match any reference of the type.</param>
+            <param name="argumentName">Argument name. Use null to match any argument on the reference.</param>
+            <param name="handler">Completion handler.</param>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.NotifyToolsChangedAsync(System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected TCP clients that the tool list changed.
+            </summary>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.NotifyResourcesChangedAsync(System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected TCP clients that the resource list changed.
+            </summary>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.NotifyResourceUpdatedAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected TCP clients that a resource was updated.
+            </summary>
+            <param name="uri">Updated resource URI.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.NotifyPromptsChangedAsync(System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected TCP clients that the prompt list changed.
+            </summary>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.NotifyProgressAsync(System.Object,System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected TCP clients about request progress.
+            </summary>
+            <param name="progressToken">Progress token from request metadata.</param>
+            <param name="progress">Current progress value.</param>
+            <param name="total">Optional total progress value.</param>
+            <param name="message">Optional human-readable progress text.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.NotifyCancelledAsync(System.Object,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected TCP clients that a request was cancelled.
+            </summary>
+            <param name="requestId">Cancelled request ID.</param>
+            <param name="reason">Optional cancellation reason.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpTcpServer.NotifyLogMessageAsync(System.String,System.Object,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Sends an MCP log message notification to connected TCP clients.
+            </summary>
+            <param name="level">Syslog-style level.</param>
+            <param name="data">JSON-serializable log data.</param>
+            <param name="logger">Optional logger name.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
         <member name="M:Voltaic.McpTcpServer.RegisterBuiltInMethods">
             <summary>
             Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
             Note: Unlike JsonRpcServer, this does not include the 'add' method.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpToolCallResult">
+            <summary>
+            Result returned by tools/call.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpToolCallResult.Content">
+            <summary>
+            Gets or sets content blocks returned by the tool.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpToolCallResult.StructuredContent">
+            <summary>
+            Gets or sets structured content returned by the tool.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpToolCallResult.IsError">
+            <summary>
+            Gets or sets whether the tool result represents an error.
+            </summary>
+        </member>
+        <member name="M:Voltaic.McpToolCallResult.FromText(System.String)">
+            <summary>
+            Creates a text tool result.
+            </summary>
+            <param name="text">Text content.</param>
+            <returns>Tool call result.</returns>
+        </member>
+        <member name="M:Voltaic.McpToolCallResult.FromStructured(System.Object)">
+            <summary>
+            Creates a structured tool result.
+            </summary>
+            <param name="structuredContent">Structured content.</param>
+            <returns>Tool call result.</returns>
+        </member>
+        <member name="T:Voltaic.McpSessionLifecycleState">
+            <summary>
+            Connection lifecycle state used by MCP sessions.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpSessionLifecycleState.Created">
+            <summary>
+            The session object has been created but initialization has not started.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpSessionLifecycleState.Initializing">
+            <summary>
+            The initialize request has been accepted and the server is waiting for notifications/initialized.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpSessionLifecycleState.Initialized">
+            <summary>
+            The client has sent notifications/initialized and normal protocol operation may proceed.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpSessionLifecycleState.Closing">
+            <summary>
+            The session is closing.
+            </summary>
+        </member>
+        <member name="F:Voltaic.McpSessionLifecycleState.Closed">
+            <summary>
+            The session is closed.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpCancelledNotification">
+            <summary>
+            Parameters for notifications/cancelled.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCancelledNotification.RequestId">
+            <summary>
+            Gets or sets the request ID being cancelled.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpCancelledNotification.Reason">
+            <summary>
+            Gets or sets an optional cancellation reason.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpProgressNotification">
+            <summary>
+            Parameters for notifications/progress.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpProgressNotification.ProgressToken">
+            <summary>
+            Gets or sets the progress token supplied in request metadata.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpProgressNotification.Progress">
+            <summary>
+            Gets or sets the current progress value.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpProgressNotification.Total">
+            <summary>
+            Gets or sets the optional total progress value.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpProgressNotification.Message">
+            <summary>
+            Gets or sets optional human-readable progress text.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpSetLogLevelRequest">
+            <summary>
+            Parameters for logging/setLevel.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpSetLogLevelRequest.Level">
+            <summary>
+            Gets or sets the minimum log level requested by the client.
+            </summary>
+        </member>
+        <member name="T:Voltaic.McpLogMessageNotification">
+            <summary>
+            Parameters for notifications/message.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpLogMessageNotification.Level">
+            <summary>
+            Gets or sets the syslog-style log level.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpLogMessageNotification.Logger">
+            <summary>
+            Gets or sets an optional logger name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.McpLogMessageNotification.Data">
+            <summary>
+            Gets or sets JSON-serializable log data.
             </summary>
         </member>
         <member name="T:Voltaic.McpWebsocketsClient">
@@ -1655,7 +3056,7 @@
         <member name="P:Voltaic.McpWebsocketsServer.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version.
-            Default is "2025-03-26".
+            Default is <see cref="F:Voltaic.McpProtocol.LatestProtocolVersion"/>.
             </summary>
         </member>
         <member name="P:Voltaic.McpWebsocketsServer.ServerName">
@@ -1709,6 +3110,141 @@
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with metadata for MCP tool discovery using a synchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool with input and output schema metadata using a synchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+            <summary>
+            Registers a tool from a full tool definition using a synchronous handler.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP tool discovery using an asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using an asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using an asynchronous handler.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with metadata for MCP tool discovery using a cancellable asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterTool(Voltaic.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition using a cancellable asynchronous handler.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a static MCP resource with a synchronous read handler.
+            </summary>
+            <param name="uri">Resource URI.</param>
+            <param name="name">Resource name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterResource(Voltaic.McpResource,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a static MCP resource with a cancellable read handler.
+            </summary>
+            <param name="resource">Resource metadata.</param>
+            <param name="readHandler">Read handler that receives the requested URI.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterResourceTemplate(System.String,System.String,System.String,System.Func{System.String,Voltaic.McpReadResourceResult})">
+            <summary>
+            Registers a dynamic MCP resource template with a synchronous read handler.
+            </summary>
+            <param name="uriTemplate">URI template.</param>
+            <param name="name">Template name.</param>
+            <param name="mimeType">Resource MIME type.</param>
+            <param name="readHandler">Read handler that receives the matched URI.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterResourceTemplate(Voltaic.McpResourceTemplate,System.Func{System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpReadResourceResult}})">
+            <summary>
+            Registers a dynamic MCP resource template with a cancellable read handler.
+            </summary>
+            <param name="template">Template metadata.</param>
+            <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.McpGetPromptResult})">
+            <summary>
+            Registers an MCP prompt with a synchronous handler.
+            </summary>
+            <param name="name">Prompt name.</param>
+            <param name="description">Prompt description.</param>
+            <param name="arguments">Prompt arguments.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterPrompt(Voltaic.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpGetPromptResult}})">
+            <summary>
+            Registers an MCP prompt with a cancellable handler.
+            </summary>
+            <param name="prompt">Prompt metadata.</param>
+            <param name="handler">Prompt handler.</param>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.RegisterCompletionProvider(System.String,System.String,System.String,System.Func{Voltaic.McpCompleteRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.McpCompleteResult}})">
+            <summary>
+            Registers a completion provider for prompt arguments or resource template variables.
+            </summary>
+            <param name="referenceType">Reference type, usually <c>ref/prompt</c> or <c>ref/resource</c>.</param>
+            <param name="referenceId">Prompt name or resource URI template. Use null to match any reference of the type.</param>
+            <param name="argumentName">Argument name. Use null to match any argument on the reference.</param>
+            <param name="handler">Completion handler.</param>
+        </member>
         <member name="M:Voltaic.McpWebsocketsServer.StartAsync(System.Threading.CancellationToken)">
             <summary>
             Starts the WebSocket server and begins listening for client connections asynchronously.
@@ -1726,6 +3262,65 @@
             <param name="method">The name of the notification method.</param>
             <param name="parameters">The parameters to pass with the notification. Can be null.</param>
             <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.NotifyToolsChangedAsync(System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected clients that the tool list changed.
+            </summary>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.NotifyResourcesChangedAsync(System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected clients that the resource list changed.
+            </summary>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.NotifyResourceUpdatedAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected clients that a resource was updated.
+            </summary>
+            <param name="uri">Updated resource URI.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.NotifyPromptsChangedAsync(System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected clients that the prompt list changed.
+            </summary>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.NotifyProgressAsync(System.Object,System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected WebSocket clients about request progress.
+            </summary>
+            <param name="progressToken">Progress token from request metadata.</param>
+            <param name="progress">Current progress value.</param>
+            <param name="total">Optional total progress value.</param>
+            <param name="message">Optional human-readable progress text.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.NotifyCancelledAsync(System.Object,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Notifies connected WebSocket clients that a request was cancelled.
+            </summary>
+            <param name="requestId">Cancelled request ID.</param>
+            <param name="reason">Optional cancellation reason.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+        </member>
+        <member name="M:Voltaic.McpWebsocketsServer.NotifyLogMessageAsync(System.String,System.Object,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Sends an MCP log message notification to connected WebSocket clients.
+            </summary>
+            <param name="level">Syslog-style level.</param>
+            <param name="data">JSON-serializable log data.</param>
+            <param name="logger">Optional logger name.</param>
+            <param name="token">Cancellation token.</param>
             <returns>A task that represents the asynchronous operation.</returns>
         </member>
         <member name="M:Voltaic.McpWebsocketsServer.KickClient(System.String)">
@@ -1979,6 +3574,11 @@
             Gets or sets the name of the tool.
             </summary>
         </member>
+        <member name="P:Voltaic.ToolDefinition.Title">
+            <summary>
+            Gets or sets the human-readable display title of the tool.
+            </summary>
+        </member>
         <member name="P:Voltaic.ToolDefinition.Description">
             <summary>
             Gets or sets the description of what the tool does.
@@ -1987,6 +3587,26 @@
         <member name="P:Voltaic.ToolDefinition.InputSchema">
             <summary>
             Gets or sets the JSON schema for the tool's input parameters.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ToolDefinition.OutputSchema">
+            <summary>
+            Gets or sets the JSON schema for structured tool output.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ToolDefinition.Annotations">
+            <summary>
+            Gets or sets optional tool annotations for clients and hosts.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ToolDefinition.Icons">
+            <summary>
+            Gets or sets optional icons that can represent this tool in user interfaces.
+            </summary>
+        </member>
+        <member name="P:Voltaic.ToolDefinition.Meta">
+            <summary>
+            Gets or sets protocol metadata for this tool.
             </summary>
         </member>
         <member name="M:Voltaic.ToolDefinition.#ctor">

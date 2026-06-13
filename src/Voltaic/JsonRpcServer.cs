@@ -463,14 +463,18 @@
                     }
                     catch (Exception ex)
                     {
-                        response = new JsonRpcResponse
-                        {
-                            Error = new JsonRpcError
+                        JsonRpcError error = ex is McpProtocolException protocolException
+                            ? protocolException.ToJsonRpcError()
+                            : new JsonRpcError
                             {
                                 Code = -32603,
                                 Message = "Internal error",
                                 Data = ex.Message
-                            },
+                            };
+
+                        response = new JsonRpcResponse
+                        {
+                            Error = error,
                             Id = request.Id
                         };
                     }

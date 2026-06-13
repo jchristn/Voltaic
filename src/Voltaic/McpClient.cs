@@ -86,18 +86,25 @@ namespace Voltaic
             {
                 Shutdown();
 
+                string[] arguments = args ?? Array.Empty<string>();
+                ProcessStartInfo startInfo = new ProcessStartInfo
+                {
+                    FileName = executable,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                foreach (string argument in arguments)
+                {
+                    startInfo.ArgumentList.Add(argument);
+                }
+
                 _ServerProcess = new Process
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = executable,
-                        Arguments = string.Join(" ", args),
-                        RedirectStandardInput = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }
+                    StartInfo = startInfo
                 };
 
                 _ServerProcess.Start();
@@ -111,9 +118,9 @@ namespace Voltaic
                 _StderrTask = Task.Run(() => StderrLoop(_CancellationTokenSource.Token));
 
                 _IsConnected = true;
-                _Endpoint = $"{executable} {string.Join(" ", args)}";
+                _Endpoint = $"{executable} {string.Join(" ", arguments)}";
                 _ConnectedUtc = DateTime.UtcNow;
-                LogMessage($"Launched MCP server: {executable} {string.Join(" ", args)}");
+                LogMessage($"Launched MCP server: {executable} {string.Join(" ", arguments)}");
                 RaiseConnected();
 
                 return true;

@@ -78,12 +78,12 @@ namespace Voltaic
 
         /// <summary>
         /// Gets or sets the MCP protocol version.
-        /// Default is "2025-03-26".
+        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
         /// </summary>
         public string ProtocolVersion
         {
-            get => _ProtocolVersion;
-            set => _ProtocolVersion = value ?? "2025-03-26";
+            get => _Endpoint.ProtocolVersion;
+            set => _Endpoint.ProtocolVersion = value ?? McpProtocol.LatestProtocolVersion;
         }
 
         /// <summary>
@@ -92,8 +92,8 @@ namespace Voltaic
         /// </summary>
         public string ServerName
         {
-            get => _ServerName;
-            set => _ServerName = value ?? "Voltaic.Mcp.HttpServer";
+            get => _Endpoint.ServerName;
+            set => _Endpoint.ServerName = value ?? "Voltaic.Mcp.HttpServer";
         }
 
         /// <summary>
@@ -102,8 +102,8 @@ namespace Voltaic
         /// </summary>
         public string ServerVersion
         {
-            get => _ServerVersion;
-            set => _ServerVersion = value ?? "1.0.0";
+            get => _Endpoint.ServerVersion;
+            set => _Endpoint.ServerVersion = value ?? "1.0.0";
         }
 
         /// <summary>
@@ -158,8 +158,9 @@ namespace Voltaic
         private HttpListener? _Listener;
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Sessions;
+        private readonly ConcurrentDictionary<string, byte> _TerminatedSessions;
         private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
-        private readonly List<ToolDefinition> _Tools;
+        private readonly McpEndpoint _Endpoint;
         private Task? _CleanupTask;
         private int _SessionTimeoutSeconds = 300; // 5 minutes
         private int _MaxQueueSize = 100;
@@ -175,9 +176,6 @@ namespace Voltaic
         private Func<HttpListenerRequest, Task<AuthenticationResult>>? _AuthenticationHandler;
         private volatile bool _IsStopping = false;
         private bool _IsDisposed = false;
-        private string _ProtocolVersion = "2025-03-26";
-        private string _ServerName = "Voltaic.Mcp.HttpServer";
-        private string _ServerVersion = "1.0.0";
         private static readonly TimeSpan _SseHeartbeatInterval = TimeSpan.FromSeconds(30);
         private static readonly byte[] _SseConnectedPrelude = Encoding.UTF8.GetBytes(": connected\n\n");
         private static readonly byte[] _SseKeepAliveComment = Encoding.UTF8.GetBytes(": keep-alive\n\n");
@@ -203,8 +201,9 @@ namespace Voltaic
             _EventsPath = String.IsNullOrEmpty(eventsPath) ? "/events" : eventsPath;
             _McpPath = mcpPath ?? "";
             _Sessions = new ConcurrentDictionary<string, ClientConnection>();
+            _TerminatedSessions = new ConcurrentDictionary<string, byte>();
             _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
-            _Tools = new List<ToolDefinition>();
+            _Endpoint = new McpEndpoint("Voltaic.Mcp.HttpServer");
 
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
@@ -267,21 +266,33 @@ namespace Voltaic
         /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
         public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)
         {
-            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
-            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
-            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata using a synchronous handler.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+        /// <param name="handler">The function that handles the tool invocation.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, object> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition using a synchronous handler.
+        /// </summary>
+        /// <param name="definition">The tool definition.</param>
+        /// <param name="handler">The function that handles the tool invocation.</param>
+        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, object> handler)
+        {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
 
-            // Register the method handler
-            RegisterMethod(name, handler);
-
-            // Register the tool metadata
-            _Tools.Add(new ToolDefinition
-            {
-                Name = name,
-                Description = description,
-                InputSchema = inputSchema
-            });
+            _Endpoint.RegisterTool(definition, (args, _) => Task.FromResult(handler(args)));
+            RegisterMethod(definition.Name, handler);
         }
 
         /// <summary>
@@ -297,21 +308,33 @@ namespace Voltaic
         /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
         public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)
         {
-            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
-            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
-            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata using an asynchronous handler.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+        /// <param name="handler">The async function that handles the tool invocation.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition using an asynchronous handler.
+        /// </summary>
+        /// <param name="definition">The tool definition.</param>
+        /// <param name="handler">The async function that handles the tool invocation.</param>
+        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, Task<object>> handler)
+        {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
 
-            // Register the method handler
-            RegisterMethod(name, handler);
-
-            // Register the tool metadata
-            _Tools.Add(new ToolDefinition
-            {
-                Name = name,
-                Description = description,
-                InputSchema = inputSchema
-            });
+            _Endpoint.RegisterTool(definition, (args, _) => handler(args));
+            RegisterMethod(definition.Name, handler);
         }
 
         /// <summary>
@@ -326,21 +349,120 @@ namespace Voltaic
         /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
         public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)
         {
-            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
-            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
-            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+        /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition using a cancellable asynchronous handler.
+        /// </summary>
+        /// <param name="definition">The tool definition.</param>
+        /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
 
-            // Register the method handler
-            RegisterMethod(name, handler);
+            _Endpoint.RegisterTool(definition, handler);
+            RegisterMethod(definition.Name, handler);
+        }
 
-            // Register the tool metadata
-            _Tools.Add(new ToolDefinition
-            {
-                Name = name,
-                Description = description,
-                InputSchema = inputSchema
-            });
+        /// <summary>
+        /// Registers a static MCP resource with a synchronous read handler.
+        /// </summary>
+        /// <param name="uri">Resource URI.</param>
+        /// <param name="name">Resource name.</param>
+        /// <param name="mimeType">Resource MIME type.</param>
+        /// <param name="readHandler">Read handler.</param>
+        public void RegisterResource(string uri, string name, string mimeType, Func<McpReadResourceResult> readHandler)
+        {
+            if (readHandler == null) throw new ArgumentNullException(nameof(readHandler));
+            RegisterResource(CreateResource(uri, name, mimeType), (_, _) => Task.FromResult(readHandler()));
+        }
+
+        /// <summary>
+        /// Registers a static MCP resource with a cancellable read handler.
+        /// </summary>
+        /// <param name="resource">Resource metadata.</param>
+        /// <param name="readHandler">Read handler that receives the requested URI.</param>
+        public void RegisterResource(McpResource resource, Func<string, CancellationToken, Task<McpReadResourceResult>> readHandler)
+        {
+            _Endpoint.RegisterResource(resource, readHandler);
+        }
+
+        /// <summary>
+        /// Registers a dynamic MCP resource template with a synchronous read handler.
+        /// </summary>
+        /// <param name="uriTemplate">URI template.</param>
+        /// <param name="name">Template name.</param>
+        /// <param name="mimeType">Resource MIME type.</param>
+        /// <param name="readHandler">Read handler that receives the matched URI.</param>
+        public void RegisterResourceTemplate(string uriTemplate, string name, string mimeType, Func<string, McpReadResourceResult> readHandler)
+        {
+            if (readHandler == null) throw new ArgumentNullException(nameof(readHandler));
+            RegisterResourceTemplate(CreateResourceTemplate(uriTemplate, name, mimeType), (uri, _, _) => Task.FromResult(readHandler(uri)));
+        }
+
+        /// <summary>
+        /// Registers a dynamic MCP resource template with a cancellable read handler.
+        /// </summary>
+        /// <param name="template">Template metadata.</param>
+        /// <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
+        public void RegisterResourceTemplate(
+            McpResourceTemplate template,
+            Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<McpReadResourceResult>> readHandler)
+        {
+            _Endpoint.RegisterResourceTemplate(template, readHandler);
+        }
+
+        /// <summary>
+        /// Registers an MCP prompt with a synchronous handler.
+        /// </summary>
+        /// <param name="name">Prompt name.</param>
+        /// <param name="description">Prompt description.</param>
+        /// <param name="arguments">Prompt arguments.</param>
+        /// <param name="handler">Prompt handler.</param>
+        public void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<JsonElement?, McpGetPromptResult> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            RegisterPrompt(CreatePrompt(name, description, arguments), (args, _) => Task.FromResult(handler(args)));
+        }
+
+        /// <summary>
+        /// Registers an MCP prompt with a cancellable handler.
+        /// </summary>
+        /// <param name="prompt">Prompt metadata.</param>
+        /// <param name="handler">Prompt handler.</param>
+        public void RegisterPrompt(McpPrompt prompt, Func<JsonElement?, CancellationToken, Task<McpGetPromptResult>> handler)
+        {
+            _Endpoint.RegisterPrompt(prompt, handler);
+        }
+
+        /// <summary>
+        /// Registers a completion provider for prompt arguments or resource template variables.
+        /// </summary>
+        /// <param name="referenceType">Reference type, usually <c>ref/prompt</c> or <c>ref/resource</c>.</param>
+        /// <param name="referenceId">Prompt name or resource URI template. Use null to match any reference of the type.</param>
+        /// <param name="argumentName">Argument name. Use null to match any argument on the reference.</param>
+        /// <param name="handler">Completion handler.</param>
+        public void RegisterCompletionProvider(
+            string referenceType,
+            string? referenceId,
+            string? argumentName,
+            Func<McpCompleteRequest, CancellationToken, Task<McpCompleteResult>> handler)
+        {
+            _Endpoint.RegisterCompletionProvider(referenceType, referenceId, argumentName, handler);
         }
 
         /// <summary>
@@ -430,6 +552,94 @@ namespace Voltaic
             }
 
             LogMessage($"Broadcast notification: {method}");
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that the tool list changed.
+        /// </summary>
+        public void NotifyToolsChanged()
+        {
+            BroadcastNotification("notifications/tools/list_changed");
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that the resource list changed.
+        /// </summary>
+        public void NotifyResourcesChanged()
+        {
+            BroadcastNotification("notifications/resources/list_changed");
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that a resource was updated.
+        /// </summary>
+        /// <param name="uri">Updated resource URI.</param>
+        public void NotifyResourceUpdated(string uri)
+        {
+            if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
+            BroadcastNotification("notifications/resources/updated", new { uri });
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that the prompt list changed.
+        /// </summary>
+        public void NotifyPromptsChanged()
+        {
+            BroadcastNotification("notifications/prompts/list_changed");
+        }
+
+        /// <summary>
+        /// Queues a progress notification for an active HTTP session.
+        /// </summary>
+        /// <param name="sessionId">Target session ID.</param>
+        /// <param name="progressToken">Progress token from request metadata.</param>
+        /// <param name="progress">Current progress value.</param>
+        /// <param name="total">Optional total progress value.</param>
+        /// <param name="message">Optional human-readable progress text.</param>
+        /// <returns>True if the session was found and the notification was queued.</returns>
+        public bool NotifyProgress(string sessionId, object progressToken, double progress, double? total = null, string? message = null)
+        {
+            return SendNotificationToSession(sessionId, "notifications/progress", new McpProgressNotification
+            {
+                ProgressToken = progressToken,
+                Progress = progress,
+                Total = total,
+                Message = message
+            });
+        }
+
+        /// <summary>
+        /// Queues a cancellation notification for an active HTTP session.
+        /// </summary>
+        /// <param name="sessionId">Target session ID.</param>
+        /// <param name="requestId">Cancelled request ID.</param>
+        /// <param name="reason">Optional cancellation reason.</param>
+        /// <returns>True if the session was found and the notification was queued.</returns>
+        public bool NotifyCancelled(string sessionId, object requestId, string? reason = null)
+        {
+            return SendNotificationToSession(sessionId, "notifications/cancelled", new McpCancelledNotification
+            {
+                RequestId = requestId,
+                Reason = reason
+            });
+        }
+
+        /// <summary>
+        /// Queues a structured MCP log message for an active HTTP session.
+        /// </summary>
+        /// <param name="sessionId">Target session ID.</param>
+        /// <param name="level">Syslog-style level.</param>
+        /// <param name="data">JSON-serializable log data.</param>
+        /// <param name="logger">Optional logger name.</param>
+        /// <returns>True if the session was found and the notification was queued.</returns>
+        public bool NotifyLogMessage(string sessionId, string level, object? data, string? logger = null)
+        {
+            return SendNotificationToSession(sessionId, "notifications/message", new McpLogMessageNotification
+            {
+                Level = level,
+                Logger = logger,
+                Data = data
+            });
         }
 
         /// <summary>
@@ -543,6 +753,67 @@ namespace Voltaic
             }
         }
 
+        private static ToolDefinition CreateToolDefinition(string name, string description, object inputSchema, object? outputSchema)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
+            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+
+            return new ToolDefinition
+            {
+                Name = name,
+                Description = description,
+                InputSchema = inputSchema,
+                OutputSchema = outputSchema
+            };
+        }
+
+        private static void ValidateToolDefinition(ToolDefinition definition)
+        {
+            if (definition == null) throw new ArgumentNullException(nameof(definition));
+            if (String.IsNullOrEmpty(definition.Name)) throw new ArgumentException("Tool definition must include a name.", nameof(definition));
+            if (String.IsNullOrEmpty(definition.Description)) throw new ArgumentException("Tool definition must include a description.", nameof(definition));
+            if (definition.InputSchema == null) throw new ArgumentException("Tool definition must include an input schema.", nameof(definition));
+        }
+
+        private static McpResource CreateResource(string uri, string name, string mimeType)
+        {
+            if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            return new McpResource
+            {
+                Uri = uri,
+                Name = name,
+                MimeType = mimeType
+            };
+        }
+
+        private static McpResourceTemplate CreateResourceTemplate(string uriTemplate, string name, string mimeType)
+        {
+            if (String.IsNullOrEmpty(uriTemplate)) throw new ArgumentNullException(nameof(uriTemplate));
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            return new McpResourceTemplate
+            {
+                UriTemplate = uriTemplate,
+                Name = name,
+                MimeType = mimeType
+            };
+        }
+
+        private static McpPrompt CreatePrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            return new McpPrompt
+            {
+                Name = name,
+                Description = description,
+                Arguments = arguments?.ToList()
+            };
+        }
+
         /// <summary>
         /// Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
         /// This method is virtual to allow derived classes to customize the set of built-in methods.
@@ -552,102 +823,31 @@ namespace Voltaic
             // MCP Protocol Methods
             RegisterMethod("initialize", (args) =>
             {
-                // Read the client's requested protocol version from params
-                string ClientProtocolVersion = _ProtocolVersion;
-                if (args.HasValue && args.Value.TryGetProperty("protocolVersion", out JsonElement protocolVersionProp))
-                {
-                    ClientProtocolVersion = protocolVersionProp.GetString() ?? _ProtocolVersion;
-                }
-
-                // The initialize method returns server capabilities and info
-                return new
-                {
-                    protocolVersion = ClientProtocolVersion,
-                    capabilities = new
-                    {
-                        tools = new
-                        {
-                            listChanged = true
-                        }
-                    },
-                    serverInfo = new
-                    {
-                        name = _ServerName,
-                        version = _ServerVersion
-                    }
-                };
+                return _Endpoint.Initialize(args);
             });
 
             RegisterMethod("tools/list", (args) =>
             {
-                // Return all registered tools
-                List<object> toolsList = new List<object>();
-                foreach (ToolDefinition tool in _Tools)
-                {
-                    toolsList.Add(new
-                    {
-                        name = tool.Name,
-                        description = tool.Description,
-                        inputSchema = tool.InputSchema
-                    });
-                }
-
-                return new
-                {
-                    tools = toolsList
-                };
+                return _Endpoint.ListTools(args);
             });
 
-            RegisterMethod("tools/call", async (args, token) =>
-            {
-                // MCP tools/call handler - invokes a tool by name with arguments
-                if (!args.HasValue)
-                {
-                    throw new ArgumentException("tools/call requires params with 'name' and 'arguments'");
-                }
-
-                // Extract tool name from params.name
-                if (!args.Value.TryGetProperty("name", out JsonElement nameElement))
-                {
-                    throw new ArgumentException("tools/call requires 'name' parameter");
-                }
-
-                string toolName = nameElement.GetString() ?? throw new ArgumentException("Tool name cannot be null");
-
-                // Extract arguments from params.arguments
-                JsonElement? toolArguments = null;
-                if (args.Value.TryGetProperty("arguments", out JsonElement argsElement))
-                {
-                    toolArguments = argsElement;
-                }
-
-                // Look up and invoke the tool
-                if (!_Methods.ContainsKey(toolName))
-                {
-                    throw new ArgumentException($"Tool '{toolName}' not found");
-                }
-
-                object result = await _Methods[toolName](toolArguments, token).ConfigureAwait(false);
-
-                // Return result in MCP format with content array
-                return new
-                {
-                    content = new[]
-                    {
-                        new
-                        {
-                            type = "text",
-                            text = JsonSerializer.Serialize(result)
-                        }
-                    }
-                };
-            });
+            RegisterMethod("tools/call", _Endpoint.CallToolAsync);
+            RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
+            RegisterMethod("resources/templates/list", (args) => _Endpoint.ListResourceTemplates(args));
+            RegisterMethod("resources/read", _Endpoint.ReadResourceAsync);
+            RegisterMethod("resources/subscribe", (args) => _Endpoint.SubscribeResource(args));
+            RegisterMethod("resources/unsubscribe", (args) => _Endpoint.UnsubscribeResource(args));
+            RegisterMethod("prompts/list", (args) => _Endpoint.ListPrompts(args));
+            RegisterMethod("prompts/get", _Endpoint.GetPromptAsync);
+            RegisterMethod("completion/complete", _Endpoint.CompleteAsync);
+            RegisterMethod("logging/setLevel", (args) => _Endpoint.SetLogLevel(args));
+            RegisterMethod("notifications/cancelled", (args) => _Endpoint.Cancelled(args));
 
             // Handle the initialized notification (no response needed, but we should handle it)
             RegisterMethod("notifications/initialized", (args) =>
             {
                 LogMessage("Received initialized notification from client");
-                return new { }; // Return empty object, though response won't be sent for notifications
+                return _Endpoint.Initialized(args);
             });
 
             // Register built-in tools with proper MCP tool metadata
@@ -854,7 +1054,8 @@ namespace Voltaic
         /// </summary>
         private string? GetSessionId(HttpListenerContext context)
         {
-            return context.Request.Headers["Mcp-Session-Id"]
+            return context.Request.Headers[McpProtocol.SessionIdHeader]
+                ?? context.Request.Headers[McpProtocol.LegacySessionIdHeader]
                 ?? context.Request.QueryString["session"];
         }
 
@@ -863,7 +1064,7 @@ namespace Voltaic
         /// </summary>
         private void SetSessionIdHeaders(HttpListenerResponse response, string sessionId)
         {
-            response.AddHeader("Mcp-Session-Id", sessionId);
+            response.AddHeader(McpProtocol.SessionIdHeader, sessionId);
         }
 
         /// <summary>
@@ -879,8 +1080,26 @@ namespace Voltaic
 
             if (method == "POST")
             {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!RequestAccepts(context, "application/json") || !RequestAccepts(context, "text/event-stream"))
+                {
+                    await SendTextResponseAsync(context, 406, "POST /mcp requires Accept: application/json, text/event-stream", token).ConfigureAwait(false);
+                    return;
+                }
+
                 // Get or create session
                 string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+                if (_TerminatedSessions.ContainsKey(sessionId))
+                {
+                    await SendTextResponseAsync(context, 404, "Session was terminated", token).ConfigureAwait(false);
+                    return;
+                }
+
                 bool isNewSession = !_Sessions.ContainsKey(sessionId);
                 ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
                 {
@@ -903,6 +1122,15 @@ namespace Voltaic
 
                 LogMessage($"MCP request from session {sessionId}: {requestBody}");
 
+                JsonRpcRequest? incomingRequest = null;
+                try
+                {
+                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                }
+                catch (JsonException)
+                {
+                }
+
                 // Process JSON-RPC request
                 JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
 
@@ -914,6 +1142,15 @@ namespace Voltaic
                 }
 
                 SetSessionIdHeaders(context.Response, sessionId);
+
+                if (incomingRequest != null && incomingRequest.Id == null)
+                {
+                    context.Response.StatusCode = 202;
+                    context.Response.Close();
+                    LogMessage($"MCP notification accepted for session {sessionId}: {incomingRequest.Method}");
+                    return;
+                }
+
                 context.Response.ContentType = "application/json";
 
                 string responseJson = JsonSerializer.Serialize(response);
@@ -927,12 +1164,33 @@ namespace Voltaic
             }
             else if (method == "GET")
             {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!RequestAccepts(context, "text/event-stream"))
+                {
+                    await SendTextResponseAsync(context, 406, "GET /mcp requires Accept: text/event-stream", token).ConfigureAwait(false);
+                    return;
+                }
+
                 // SSE stream for server-to-client notifications
                 string? sessionId = GetSessionId(context);
-                if (String.IsNullOrEmpty(sessionId) || !_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
+                if (String.IsNullOrEmpty(sessionId))
                 {
                     context.Response.StatusCode = 400;
-                    byte[] errorBytes = Encoding.UTF8.GetBytes("Missing or invalid session ID. Send a POST to initialize first.");
+                    byte[] errorBytes = Encoding.UTF8.GetBytes("Missing session ID. Send a POST to initialize first.");
+                    await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+                    context.Response.Close();
+                    return;
+                }
+
+                if (_TerminatedSessions.ContainsKey(sessionId) || !_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
+                {
+                    context.Response.StatusCode = 404;
+                    byte[] errorBytes = Encoding.UTF8.GetBytes("Invalid or terminated session ID.");
                     await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
                     context.Response.Close();
                     return;
@@ -994,11 +1252,32 @@ namespace Voltaic
             }
             else if (method == "DELETE")
             {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
                 // Session termination
                 string? sessionId = GetSessionId(context);
+                if (String.IsNullOrEmpty(sessionId))
+                {
+                    context.Response.StatusCode = 400;
+                    context.Response.Close();
+                    return;
+                }
+
+                if (_TerminatedSessions.ContainsKey(sessionId) || !_Sessions.ContainsKey(sessionId))
+                {
+                    context.Response.StatusCode = 404;
+                    context.Response.Close();
+                    return;
+                }
+
                 if (!String.IsNullOrEmpty(sessionId))
                 {
                     RemoveSession(sessionId);
+                    _TerminatedSessions[sessionId] = 0;
                     LogMessage($"MCP session terminated: {sessionId}");
                 }
 
@@ -1021,6 +1300,54 @@ namespace Voltaic
             }
 
             context.Response.StatusCode = 204;
+            context.Response.Close();
+        }
+
+        private bool ValidateProtocolVersionHeader(HttpListenerContext context)
+        {
+            string? version = context.Request.Headers[McpProtocol.ProtocolVersionHeader];
+            if (String.IsNullOrWhiteSpace(version))
+            {
+                return true;
+            }
+
+            return McpProtocol.IsSupportedVersion(version);
+        }
+
+        private static bool RequestAccepts(HttpListenerContext context, string mediaType)
+        {
+            string? acceptHeader = context.Request.Headers["Accept"];
+            if (String.IsNullOrWhiteSpace(acceptHeader))
+            {
+                return false;
+            }
+
+            string[] parts = acceptHeader.Split(',');
+            foreach (string part in parts)
+            {
+                string value = part.Split(';')[0].Trim();
+                if (StringComparer.OrdinalIgnoreCase.Equals(value, mediaType) || value == "*/*")
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private async Task SendTextResponseAsync(HttpListenerContext context, int statusCode, string body, CancellationToken token)
+        {
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            context.Response.StatusCode = statusCode;
+            context.Response.ContentType = "text/plain";
+            byte[] errorBytes = Encoding.UTF8.GetBytes(body);
+            context.Response.ContentLength64 = errorBytes.Length;
+            await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
             context.Response.Close();
         }
 
@@ -1067,7 +1394,29 @@ namespace Voltaic
         /// </summary>
         private async Task HandlePreReadRpcRequestAsync(HttpListenerContext context, string path, string requestBody, CancellationToken token)
         {
+            bool isMcpRequest = !String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath);
+            if (isMcpRequest)
+            {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!RequestAccepts(context, "application/json") || !RequestAccepts(context, "text/event-stream"))
+                {
+                    await SendTextResponseAsync(context, 406, "POST /mcp requires Accept: application/json, text/event-stream", token).ConfigureAwait(false);
+                    return;
+                }
+            }
+
             string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+            if (isMcpRequest && _TerminatedSessions.ContainsKey(sessionId))
+            {
+                await SendTextResponseAsync(context, 404, "Session was terminated", token).ConfigureAwait(false);
+                return;
+            }
+
             bool isNewSession = !_Sessions.ContainsKey(sessionId);
             ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
             {
@@ -1086,6 +1435,18 @@ namespace Voltaic
             string logPrefix = (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath)) ? "MCP" : "RPC";
             LogMessage($"{logPrefix} request from session {sessionId}: {requestBody}");
 
+            JsonRpcRequest? incomingRequest = null;
+            if (isMcpRequest)
+            {
+                try
+                {
+                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                }
+                catch (JsonException)
+                {
+                }
+            }
+
             JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
 
             if (_EnableCors)
@@ -1095,6 +1456,15 @@ namespace Voltaic
             }
 
             SetSessionIdHeaders(context.Response, sessionId);
+
+            if (incomingRequest != null && incomingRequest.Id == null)
+            {
+                context.Response.StatusCode = 202;
+                context.Response.Close();
+                LogMessage($"{logPrefix} notification accepted for session {sessionId}: {incomingRequest.Method}");
+                return;
+            }
+
             context.Response.ContentType = "application/json";
 
             string responseJson = JsonSerializer.Serialize(response);
@@ -1322,14 +1692,18 @@ namespace Voltaic
                     }
                     catch (Exception ex)
                     {
-                        response = new JsonRpcResponse
-                        {
-                            Error = new JsonRpcError
+                        JsonRpcError error = ex is McpProtocolException protocolException
+                            ? protocolException.ToJsonRpcError()
+                            : new JsonRpcError
                             {
                                 Code = -32603,
                                 Message = "Internal error",
                                 Data = ex.Message
-                            },
+                            };
+
+                        response = new JsonRpcResponse
+                        {
+                            Error = error,
                             Id = request.Id
                         };
                     }

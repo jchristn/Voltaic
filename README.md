@@ -8,7 +8,9 @@
 
 **Modern, lightweight JSON-RPC 2.0 and MCP implementations for .NET 8.0 and .NET 10.0**
 
-Voltaic provides client and server implementations for JSON-RPC 2.0 and the Model Context Protocol (MCP). Whether you're building microservices, AI integrations, or distributed systems—Voltaic gives you the tools to communicate clearly and reliably.
+Voltaic v0.3.0 targets MCP protocol version `2025-11-25` while preserving the small API shape from earlier releases.
+
+Voltaic provides client and server implementations for JSON-RPC 2.0 and the Model Context Protocol (MCP). Whether you're building microservices, AI integrations, or distributed systems, Voltaic gives you the tools to communicate clearly and reliably.
 
 ---
 
@@ -33,14 +35,23 @@ Client and server implementations for Anthropic's Model Context Protocol, suppor
 
 **Features:**
 - **Stdio transport**: Subprocess-based MCP servers (standard MCP pattern)
+- **Streamable HTTP endpoint**: `/mcp` with `MCP-Session-Id` session headers and SSE notifications
 - **TCP transport**: Network-based MCP communication with LSP-style framing
-- **HTTP transport**: HTTP-based MCP communication with Server-Sent Events (SSE) for notifications
+- **HTTP compatibility endpoints**: `/rpc` and `/events` remain available for existing integrations
 - **WebSocket transport**: Full-duplex bidirectional communication
-- Implements JSON-RPC 2.0 protocol across all transports
+- MCP `initialize` version negotiation for `2025-11-25` and `2025-03-26`
+- Tool registration with current MCP metadata, structured content, and full `McpToolCallResult` returns
+- Tool input and structured-output schema validation for common JSON Schema object/type/required cases
+- Resource registration, resource templates, `resources/list`, `resources/templates/list`, `resources/read`, `resources/subscribe`, and `resources/unsubscribe`
+- Prompt registration, `prompts/list`, `prompts/get`, and required prompt argument validation
+- Completion providers through `completion/complete`
+- MCP logging level handling plus progress, cancellation, and log-message notification helpers
+- List-changed and resource-updated notification helpers on transports that can notify connected clients
+- JSON-RPC 2.0 protocol across all transports
 - Process lifecycle management for subprocess servers
 - Event-driven notification handling with connection lifecycle events
 - Request/response event tracking with timing information
-- Compatible with MCP server ecosystem
+- Touchstone-based console, xUnit, and NUnit test projects under `src/`
 
 ### Authentication
 
@@ -80,9 +91,9 @@ await server.StartAsync();
 ```
 
 The following endpoints always bypass authentication to allow connectivity validation without credentials:
-- **Health check** (`GET /`) — returns `{"status":"Ok"}`, useful for load balancer probes
-- **Ping** (`ping` JSON-RPC method via any RPC endpoint) — returns `"pong"`, validates application-layer connectivity
-- **CORS preflight** (`OPTIONS` requests) — returns `204` with CORS headers
+- **Health check** (`GET /`) - returns `{"status":"Ok"}`, useful for load balancer probes
+- **Ping** (`ping` JSON-RPC method via any RPC endpoint) - returns `"pong"`, validates application-layer connectivity
+- **CORS preflight** (`OPTIONS` requests) - returns `204` with CORS headers
 
 All other requests are rejected with the configured status code and error message when authentication fails.
 
@@ -232,6 +243,178 @@ server.RegisterTool("add",
 await server.RunAsync();
 ```
 
+### Build an MCP Server with Voltaic
+
+This walkthrough uses Streamable HTTP on `/mcp`, the primary HTTP MCP endpoint in Voltaic v0.3.0. The same registration style also works on stdio, TCP, and WebSocket server types where supported. The protocol flow is covered by the `McpHttp.Protocol.*` Touchstone descriptors in `src/Test.Shared`.
+
+```bash
+dotnet new console -n MyVoltaicServer
+cd MyVoltaicServer
+dotnet add package Voltaic
+```
+
+```csharp
+using System.Net;
+using System.Text.Json;
+using Voltaic;
+
+McpHttpServer server = new McpHttpServer("localhost", 8080);
+server.ServerName = "MyVoltaicServer";
+server.ServerVersion = "1.0.0";
+
+server.RegisterTool(
+    "add",
+    "Adds two numbers",
+    new
+    {
+        type = "object",
+        properties = new
+        {
+            a = new { type = "number" },
+            b = new { type = "number" }
+        },
+        required = new[] { "a", "b" }
+    },
+    (JsonElement? args) =>
+    {
+        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        return (object)(a + b);
+    });
+
+server.RegisterTool(
+    "addStructured",
+    "Adds two numbers and returns structured content",
+    new
+    {
+        type = "object",
+        properties = new
+        {
+            a = new { type = "number" },
+            b = new { type = "number" }
+        },
+        required = new[] { "a", "b" }
+    },
+    new
+    {
+        type = "object",
+        properties = new { total = new { type = "number" } },
+        required = new[] { "total" }
+    },
+    (JsonElement? args) =>
+    {
+        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        return McpToolCallResult.FromStructured(new { total = a + b });
+    });
+
+server.RegisterResource(
+    "voltaic://docs/readme",
+    "readme",
+    "text/plain",
+    () => new McpReadResourceResult
+    {
+        Contents = new List<object>
+        {
+            new McpTextResourceContents
+            {
+                Uri = "voltaic://docs/readme",
+                MimeType = "text/plain",
+                Text = "Hello from a Voltaic resource."
+            }
+        }
+    });
+
+server.RegisterResourceTemplate(
+    "voltaic://docs/{name}",
+    "doc",
+    "text/plain",
+    uri => new McpReadResourceResult
+    {
+        Contents = new List<object>
+        {
+            new McpTextResourceContents
+            {
+                Uri = uri,
+                MimeType = "text/plain",
+                Text = $"Dynamic content for {uri}"
+            }
+        }
+    });
+
+server.RegisterPrompt(
+    "summarize",
+    "Creates a summary prompt",
+    new[]
+    {
+        new McpPromptArgument
+        {
+            Name = "topic",
+            Required = true
+        }
+    },
+    args =>
+    {
+        string topic = args.HasValue && args.Value.TryGetProperty("topic", out JsonElement topicEl)
+            ? topicEl.GetString() ?? "the topic"
+            : "the topic";
+
+        return new McpGetPromptResult
+        {
+            Messages = new List<McpPromptMessage>
+            {
+                new McpPromptMessage
+                {
+                    Role = "user",
+                    Content = new McpTextContent
+                    {
+                        Text = $"Summarize {topic} in three bullets."
+                    }
+                }
+            }
+        };
+    });
+
+server.RegisterCompletionProvider(
+    "ref/prompt",
+    "summarize",
+    "topic",
+    (request, token) => Task.FromResult(new McpCompleteResult
+    {
+        Completion = new McpCompletion
+        {
+            Values = new List<string> { "Voltaic", "MCP", "JSON-RPC" }
+                .Where(value => value.StartsWith(request.Argument.Value, StringComparison.OrdinalIgnoreCase))
+                .Take(100)
+                .ToList()
+        }
+    }));
+
+server.AuthenticationHandler = request =>
+{
+    string? authorization = request.Headers["Authorization"];
+    bool authenticated = authorization == "Bearer local-dev-token";
+
+    return Task.FromResult(new AuthenticationResult
+    {
+        IsAuthenticated = authenticated,
+        Principal = authenticated ? "local-dev" : null,
+        StatusCode = authenticated ? 200 : 401,
+        ErrorMessage = authenticated ? null : "Missing or invalid bearer token"
+    });
+};
+
+await server.StartAsync();
+```
+
+Run the server:
+
+```bash
+dotnet run
+```
+
+Clients initialize against `http://localhost:8080/mcp`, then call `tools/list`, `tools/call`, `resources/list`, `resources/read`, `resources/templates/list`, `prompts/list`, `prompts/get`, and `completion/complete`. Streamable HTTP clients must send `Accept: application/json, text/event-stream` on POST requests and `Accept: text/event-stream` on GET SSE requests; `McpHttpClient` does this automatically. When resources, prompts, or utility events change at runtime, call `NotifyResourcesChanged()`, `NotifyResourceUpdated(uri)`, `NotifyPromptsChanged()`, `NotifyProgress(...)`, `NotifyCancelled(...)`, or `NotifyLogMessage(...)` on `McpHttpServer` to queue SSE notifications for active sessions.
+
 ### Quick Start: MCP Client (stdio)
 
 ```csharp
@@ -263,39 +446,25 @@ server.ClientConnected += (sender, client) =>
 server.ClientDisconnected += (sender, client) =>
     Console.WriteLine($"Client disconnected: {client.SessionId}");
 
-// Register a method (tools/call dispatches to registered methods by name)
-server.RegisterMethod("add", (JsonElement? args) =>
-{
-    double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-    double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
-    return (object)(a + b);
-});
-
-// Register tools/list so clients can discover available tools
-server.RegisterMethod("tools/list", (JsonElement? args) =>
-{
-    return new
+server.RegisterTool(
+    "add",
+    "Adds two numbers",
+    new
     {
-        tools = new[]
+        type = "object",
+        properties = new
         {
-            new
-            {
-                name = "add",
-                description = "Adds two numbers",
-                inputSchema = new
-                {
-                    type = "object",
-                    properties = new
-                    {
-                        a = new { type = "number", description = "First number" },
-                        b = new { type = "number", description = "Second number" }
-                    },
-                    required = new[] { "a", "b" }
-                }
-            }
-        }
-    };
-});
+            a = new { type = "number", description = "First number" },
+            b = new { type = "number", description = "Second number" }
+        },
+        required = new[] { "a", "b" }
+    },
+    (JsonElement? args) =>
+    {
+        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
+        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        return (object)(a + b);
+    });
 
 // Start the server
 await server.StartAsync();
@@ -493,7 +662,7 @@ Voltaic might not be the right fit if you need:
 
 - **gRPC Features**: If you need streaming, advanced load balancing, or language-agnostic service definitions, use gRPC
 - **REST Conventions**: If you need resource-oriented APIs with standard HTTP verbs, use web APIs or a REST microservice
-- **High-level Abstractions**: Voltaic is a protocol library, not a framework — you'll write your own business logic
+- **High-level Abstractions**: Voltaic is a protocol library, not a framework; you'll write your own business logic
 
 ---
 
@@ -519,10 +688,10 @@ finally
 ```
 
 **Key points:**
-- `Dispose()` is safe to call multiple times — subsequent calls are no-ops
+- `Dispose()` is safe to call multiple times; subsequent calls are no-ops
 - For servers, `Dispose()` calls `Stop()` internally, disconnecting all clients and releasing the listening port
 - For clients, `Dispose()` calls `Disconnect()` internally, cancelling pending requests
-- `Disconnect()`/`Stop()` manage connection state only — `Dispose()` releases underlying resources (sockets, listeners, cancellation tokens)
+- `Disconnect()`/`Stop()` manage connection state only; `Dispose()` releases underlying resources (sockets, listeners, cancellation tokens)
 - All classes support the `protected virtual void Dispose(bool disposing)` pattern for subclass extensibility
 
 ---
@@ -590,13 +759,19 @@ All classes and methods are available in the `Voltaic` namespace.
 - `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous MCP method
 - `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async MCP method with cancellation support
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with synchronous handler
+- `void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, object> handler)` - Register tool with output schema metadata
+- `void RegisterTool(ToolDefinition definition, Func<JsonElement?, object> handler)` - Register tool with full MCP metadata
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)` - Register tool with asynchronous handler
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register tool with async cancellable handler
+- `void RegisterResource(string uri, string name, string mimeType, Func<McpReadResourceResult> readHandler)` - Register a static resource
+- `void RegisterResourceTemplate(string uriTemplate, string name, string mimeType, Func<string, McpReadResourceResult> readHandler)` - Register a URI-template resource
+- `void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<JsonElement?, McpGetPromptResult> handler)` - Register a prompt
+- `void RegisterCompletionProvider(string referenceType, string? referenceId, string? argumentName, Func<McpCompleteRequest, CancellationToken, Task<McpCompleteResult>> handler)` - Register completions for prompt arguments or resource template variables
 - `Task RunAsync(CancellationToken token = default)` - Run the server (blocks until stdin closes)
 - `void Dispose()` - Release all resources (safe to call multiple times)
 
 *Properties:*
-- `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-03-26")
+- `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-11-25")
 - `string ServerName { get; set; }` - Server name for MCP serverInfo (default: "Voltaic.Mcp.StdioServer")
 - `string ServerVersion { get; set; }` - Server version for MCP serverInfo (default: "1.0.0")
 
@@ -604,7 +779,11 @@ All classes and methods are available in the `Voltaic` namespace.
 - `initialize` - MCP protocol initialization (returns capabilities and serverInfo)
 - `tools/list` - List registered tools
 - `tools/call` - Invoke a tool by name
-- `notifications/initialized` - Handle client init notification
+- `resources/list`, `resources/templates/list`, `resources/read`, `resources/subscribe`, `resources/unsubscribe`
+- `prompts/list`, `prompts/get`
+- `completion/complete`
+- `logging/setLevel`
+- `notifications/initialized`, `notifications/cancelled`
 - `ping`, `echo`, `getTime` - Utility tools
 
 *Events:*
@@ -628,10 +807,25 @@ All classes and methods are available in the `Voltaic` namespace.
 
 Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All JsonRpcServer APIs apply, plus:
 
+*Additional Methods:*
+- `RegisterTool(...)` overloads matching `McpServer`
+- `RegisterResource(...)`, `RegisterResourceTemplate(...)`, and `RegisterPrompt(...)`
+- `RegisterCompletionProvider(...)`
+- `Task NotifyToolsChangedAsync(CancellationToken token = default)`
+- `Task NotifyResourcesChangedAsync(CancellationToken token = default)`
+- `Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)`
+- `Task NotifyPromptsChangedAsync(CancellationToken token = default)`
+- `Task NotifyProgressAsync(object progressToken, double progress, double? total = null, string? message = null, CancellationToken token = default)`
+- `Task NotifyCancelledAsync(object requestId, string? reason = null, CancellationToken token = default)`
+- `Task NotifyLogMessageAsync(string level, object? data, string? logger = null, CancellationToken token = default)`
+
 *Additional Built-in Methods:*
 - `initialize` - MCP protocol initialization
 - `tools/list` - List registered tools
 - `tools/call` - Invoke a tool by name
+- `resources/list`, `resources/templates/list`, `resources/read`, `resources/subscribe`, `resources/unsubscribe`
+- `prompts/list`, `prompts/get`
+- `completion/complete`, `logging/setLevel`, `notifications/cancelled`
 
 **McpTcpClient (TCP-based MCP):**
 
@@ -650,8 +844,21 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
 - `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)` - Register tool with synchronous handler
+- `void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, object> handler)` - Register tool with output schema metadata
+- `void RegisterTool(ToolDefinition definition, Func<JsonElement?, object> handler)` - Register tool with full MCP metadata
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)` - Register tool with asynchronous handler
 - `void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register tool with async cancellable handler
+- `void RegisterResource(string uri, string name, string mimeType, Func<McpReadResourceResult> readHandler)` - Register a static resource
+- `void RegisterResourceTemplate(string uriTemplate, string name, string mimeType, Func<string, McpReadResourceResult> readHandler)` - Register a URI-template resource
+- `void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<JsonElement?, McpGetPromptResult> handler)` - Register a prompt
+- `void RegisterCompletionProvider(string referenceType, string? referenceId, string? argumentName, Func<McpCompleteRequest, CancellationToken, Task<McpCompleteResult>> handler)` - Register completions
+- `void NotifyToolsChanged()` - Queue `notifications/tools/list_changed` for active sessions
+- `void NotifyResourcesChanged()` - Queue `notifications/resources/list_changed` for active sessions
+- `void NotifyResourceUpdated(string uri)` - Queue `notifications/resources/updated` for active sessions
+- `void NotifyPromptsChanged()` - Queue `notifications/prompts/list_changed` for active sessions
+- `bool NotifyProgress(string sessionId, object progressToken, double progress, double? total = null, string? message = null)` - Queue `notifications/progress`
+- `bool NotifyCancelled(string sessionId, object requestId, string? reason = null)` - Queue `notifications/cancelled`
+- `bool NotifyLogMessage(string sessionId, string level, object? data, string? logger = null)` - Queue `notifications/message`
 - `Task StartAsync(CancellationToken token = default)` - Start the HTTP server
 - `bool SendNotificationToSession(string sessionId, string method, object? parameters = null)` - Send notification to specific session
 - `void BroadcastNotification(string method, object? parameters = null)` - Broadcast to all sessions
@@ -668,7 +875,7 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `int MaxQueueSize { get; set; }` - Max queued notifications per client (default: 100, min: 1)
 - `bool EnableCors { get; set; }` - Enable CORS support (default: true)
 - `Dictionary<string, string> CorsHeaders { get; set; }` - CORS headers configuration
-- `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-03-26")
+- `string ProtocolVersion { get; set; }` - MCP protocol version (default: "2025-11-25")
 - `string ServerName { get; set; }` - Server name for MCP serverInfo
 - `string ServerVersion { get; set; }` - Server version for MCP serverInfo
 
@@ -696,6 +903,7 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `string? SessionId { get; }` - Session ID assigned by server
 - `bool IsConnected { get; }` - Connection status
 - `bool IsSseConnected { get; }` - SSE connection status
+- `string ProtocolVersion { get; set; }` - MCP protocol version header sent after a session is established
 
 *Events:*
 - `event EventHandler<JsonRpcRequest> NotificationReceived` - Handle server notifications
@@ -710,6 +918,16 @@ Inherits from `JsonRpcServer` with additional MCP-specific built-in methods. All
 - `void RegisterMethod(string name, Func<JsonElement?, object> handler)` - Register a synchronous RPC method
 - `void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)` - Register an asynchronous RPC method
 - `void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)` - Register an async RPC method with cancellation support
+- `RegisterTool(...)` overloads matching `McpServer`
+- `RegisterResource(...)`, `RegisterResourceTemplate(...)`, and `RegisterPrompt(...)`
+- `RegisterCompletionProvider(...)`
+- `Task NotifyToolsChangedAsync(CancellationToken token = default)`
+- `Task NotifyResourcesChangedAsync(CancellationToken token = default)`
+- `Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)`
+- `Task NotifyPromptsChangedAsync(CancellationToken token = default)`
+- `Task NotifyProgressAsync(object progressToken, double progress, double? total = null, string? message = null, CancellationToken token = default)`
+- `Task NotifyCancelledAsync(object requestId, string? reason = null, CancellationToken token = default)`
+- `Task NotifyLogMessageAsync(string level, object? data, string? logger = null, CancellationToken token = default)`
 - `Task StartAsync(CancellationToken token = default)` - Start the WebSocket server
 - `Task BroadcastNotificationAsync(string method, object? parameters = null, CancellationToken token = default)` - Broadcast to all clients
 - `List<string> GetConnectedClients()` - Get list of connected client IDs
@@ -796,7 +1014,7 @@ server.RequestReceived += (sender, e) =>
 
 server.ResponseSent += (sender, e) =>
 {
-    string status = e.IsSuccess ? "✓" : "✗";
+    string status = e.IsSuccess ? "OK" : "ERR";
     Console.WriteLine($"[{e.SentUtc:HH:mm:ss.fff}] {status} Response to {e.Client.SessionId}");
     Console.WriteLine($"  Method: {e.Method}");
     Console.WriteLine($"  Duration: {e.Duration.TotalMilliseconds:F2}ms");
@@ -968,7 +1186,10 @@ Check out the `src/Test.*` projects for working examples:
 - **Test.McpServer** / **Test.McpClient**: MCP stdio examples
 - **Test.McpHttpServer** / **Test.McpHttpClient**: MCP HTTP with SSE examples
 - **Test.McpWebsocketsServer** / **Test.McpWebsocketsClient**: MCP WebSocket examples
-- **Test.Automated**: Comprehensive test suite showing various usage patterns
+- **Sample.McpServer**: MCP tool, structured-output, resource, template, and prompt sample
+- **Test.Shared**: Shared Touchstone descriptors and the central 253-case API/protocol matrix
+- **Test.Automated**: Touchstone console runner
+- **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
 Run examples:
 ```bash
@@ -1028,17 +1249,23 @@ dotnet build src/Voltaic.sln
 # Build the library
 dotnet build src/Voltaic/Voltaic.csproj
 
-# Run automated tests (all transports)
+# Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# Run automated tests for specific transport
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -stdio
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -tcp
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -http
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -ws
+# The shared suite currently projects 253 cases through the console, xUnit, and NUnit runners
 
-# Run automated tests for multiple transports
-dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- -tcp -http -ws
+# Export Touchstone JSON results
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json
+
+# Filter by descriptor tag
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --tag mcp
+
+# Run adapter-backed tests
+dotnet test src/Test.Xunit/Test.Xunit.csproj --framework net8.0
+dotnet test src/Test.Nunit/Test.Nunit.csproj --framework net8.0
+
+# Cross-target the console runner
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.0
 ```
 
 ---

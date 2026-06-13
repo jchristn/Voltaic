@@ -88,6 +88,63 @@ namespace Test.McpServer
                 return (object)$"value-for-{key}";
             });
 
+            server.RegisterResource(
+                "voltaic://stdio/static",
+                "stdio-static",
+                "text/plain",
+                () => new McpReadResourceResult
+                {
+                    Contents = new List<object>
+                    {
+                        new McpTextResourceContents
+                        {
+                            Uri = "voltaic://stdio/static",
+                            MimeType = "text/plain",
+                            Text = "stdio static"
+                        }
+                    }
+                });
+
+            server.RegisterResourceTemplate(
+                "voltaic://stdio/{name}",
+                "stdio-template",
+                "text/plain",
+                uri => new McpReadResourceResult
+                {
+                    Contents = new List<object>
+                    {
+                        new McpTextResourceContents
+                        {
+                            Uri = uri,
+                            MimeType = "text/plain",
+                            Text = $"dynamic:{uri}"
+                        }
+                    }
+                });
+
+            server.RegisterPrompt(
+                "stdio-prompt",
+                "Builds a simple stdio prompt",
+                new[] { new McpPromptArgument { Name = "topic", Required = true } },
+                args =>
+                {
+                    string topic = args.HasValue && args.Value.TryGetProperty("topic", out JsonElement topicElement)
+                        ? topicElement.GetString() ?? "unknown"
+                        : "unknown";
+
+                    return new McpGetPromptResult
+                    {
+                        Messages = new List<McpPromptMessage>
+                        {
+                            new McpPromptMessage
+                            {
+                                Role = "user",
+                                Content = new McpTextContent { Text = $"Stdio {topic}" }
+                            }
+                        }
+                    };
+                });
+
             // Run server (blocks until stdin closes or Ctrl+C)
             CancellationTokenSource cts = new CancellationTokenSource();
             Console.CancelKeyPress += (sender, e) =>

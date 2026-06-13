@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>0.2.0</Version>
+		<Version>0.3.0</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -18,8 +18,8 @@
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
-		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;client;server;tcp;ai;llm;model;context;protocol</PackageTags>
-		<PackageReleaseNotes>v0.2.0: fixed Streamable HTTP SSE liveness and keep-alives; breaking change: ClientConnection.DequeueAsync now throws OperationCanceledException when cancelled.</PackageReleaseNotes>
+		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;client;server;tcp;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;schema</PackageTags>
+		<PackageReleaseNotes>v0.3.0: Targets MCP 2025-11-25 with expanded tool/resource/prompt models, Streamable HTTP header handling, completions, logging utilities, resource subscriptions, schema validation, and Touchstone console/xUnit/NUnit coverage.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
