@@ -1,5 +1,6 @@
-namespace Voltaic
+namespace Voltaic.Mcp
 {
+    using Voltaic.Core;
     using System;
     using System.Collections.Concurrent;
     using System.Net.WebSockets;
@@ -7,8 +8,6 @@ namespace Voltaic
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic;
-
     /// <summary>
     /// Provides a WebSocket-based MCP (Model Context Protocol) client implementation.
     /// Supports bidirectional communication with MCP servers over WebSocket connections.

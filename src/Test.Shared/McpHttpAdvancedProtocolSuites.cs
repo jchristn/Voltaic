@@ -4,8 +4,8 @@ namespace Test.Shared
     using System.Net.Http;
     using System.Text.Json;
     using Touchstone.Core;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     public static class McpHttpAdvancedProtocolSuites
     {
         public static TestSuiteDescriptor StreamableHttpMatrix()

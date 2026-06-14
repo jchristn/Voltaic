@@ -2,8 +2,8 @@ namespace Test.Shared
 {
     using System.Text.Json;
     using Touchstone.Core;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     public static class McpTransportParitySuites
     {
         public static TestSuiteDescriptor TcpMcpParity()

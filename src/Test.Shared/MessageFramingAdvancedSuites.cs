@@ -2,8 +2,8 @@ namespace Test.Shared
 {
     using System.Text;
     using Touchstone.Core;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     public static class MessageFramingAdvancedSuites
     {
         public static TestSuiteDescriptor EdgeCases()

@@ -3,8 +3,8 @@ namespace Test.McpHttpClient
     using System;
     using System.Text.Json;
     using System.Threading.Tasks;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     class Program
     {
         static async Task Main(string[] args)

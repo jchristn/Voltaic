@@ -1,4 +1,4 @@
-﻿namespace Voltaic
+namespace Voltaic.Core
 {
     using System;
     using System.Collections.Concurrent;
@@ -463,7 +463,7 @@
                     }
                     catch (Exception ex)
                     {
-                        JsonRpcError error = ex is McpProtocolException protocolException
+                        JsonRpcError error = ex is IJsonRpcErrorProvider protocolException
                             ? protocolException.ToJsonRpcError()
                             : new JsonRpcError
                             {

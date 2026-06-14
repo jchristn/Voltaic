@@ -1,5 +1,6 @@
-namespace Voltaic
+namespace Voltaic.Mcp
 {
+    using Voltaic.Core;
     /// <summary>
     /// MCP protocol constants used by Voltaic.
     /// </summary>

@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Voltaic is a JSON-RPC 2.0 and Model Context Protocol (MCP) implementation for .NET 8.0 and .NET 10.0. The library provides TCP JSON-RPC plus MCP stdio, Streamable HTTP, TCP, and WebSocket transports. Voltaic v0.3.0 targets MCP protocol version `2025-11-25` while retaining compatibility for `2025-03-26`.
+Voltaic is a JSON-RPC 2.0, Model Context Protocol (MCP), and Agent2Agent (A2A) implementation for .NET 8.0 and .NET 10.0. The library provides TCP JSON-RPC, MCP stdio/Streamable HTTP/TCP/WebSocket transports, and dependency-light A2A JSON-RPC/HTTP+JSON/gRPC/SSE hosting. Voltaic v0.4.0 targets MCP protocol version `2025-11-25`, retains MCP compatibility for `2025-03-26`, and targets A2A protocol version `1.0`.
 
 ## Solution Structure
 
-- **Voltaic** (src/Voltaic/): Core library containing JSON-RPC 2.0 and MCP protocol implementation
+- **Voltaic** (src/Voltaic/): Core library containing JSON-RPC 2.0, MCP, and A2A protocol implementation
   - `JsonRpcRequest.cs`: Request message model
   - `JsonRpcResponse.cs`: Response message model
   - `JsonRpcError.cs`: Error object with standard JSON-RPC error codes
@@ -17,13 +17,18 @@ Voltaic is a JSON-RPC 2.0 and Model Context Protocol (MCP) implementation for .N
   - `MessageFraming.cs`: LSP-style message framing utilities (internal static class)
 - `McpEndpoint.cs`: Shared MCP dispatcher for tools, resources, prompts, completions, capabilities, schema validation, and utility methods
 - `Mcp*Models.cs`: Typed MCP protocol models for capabilities, content, resources, prompts, completions, and utilities
+- `A2A*`: A2A Agent Cards, models, JSON-RPC/HTTP+JSON/gRPC clients and servers, task store/projection, SSE helpers, protobuf wire helpers, and protocol errors
 - **Test.Shared** (src/Test.Shared/): Touchstone descriptors and public API coverage matrix
 - **Test.Automated** (src/Test.Automated/): Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 - **Sample.McpServer**: Copyable MCP sample with tools, resources, prompts, and completions
-- **Test.JsonRpc***, **Test.Mcp***: Manual and transport-specific sample/test applications
+- **Sample.A2AServer**: Copyable A2A sample with Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended card support
+- **Test.JsonRpc***, **Test.Mcp***, **Test.A2AServer**, **Test.A2AClient**: Manual and transport-specific sample/test applications
 
-Note: All core library classes use the `Voltaic` namespace.
+Namespace layout:
+- `Voltaic.Core`: JSON-RPC, TCP framing, connection, shared auth/error helpers
+- `Voltaic.Mcp`: MCP clients, servers, protocol models, and endpoint helpers
+- `Voltaic.A2A`: A2A clients, servers, protocol models, task helpers, and Agent Card discovery
 
 ## Build Commands
 
@@ -34,6 +39,8 @@ dotnet build src/Voltaic.sln
 # Build specific project
 dotnet build src/Voltaic/Voltaic.csproj
 dotnet build src/Sample.McpServer/Sample.McpServer.csproj
+dotnet build src/Sample.A2AServer/Sample.A2AServer.csproj
+dotnet build src/Test.A2AServer/Test.A2AServer.csproj
 
 # Build for release
 dotnet build src/Voltaic.sln -c Release
@@ -58,7 +65,7 @@ dotnet test src/Test.Xunit/Test.Xunit.csproj -c Release --framework net10.0
 dotnet test src/Test.Nunit/Test.Nunit.csproj -c Release --framework net8.0
 dotnet test src/Test.Nunit/Test.Nunit.csproj -c Release --framework net10.0
 
-# The shared suite currently projects 253 deterministic cases through the console, xUnit, and NUnit runners.
+# The shared suite currently projects 274 deterministic cases through the console, xUnit, and NUnit runners.
 ```
 
 ## Running Interactive Test Applications
@@ -74,6 +81,12 @@ dotnet run --project src/Test.McpHttpClient/Test.McpHttpClient.csproj -- 8080
 
 # Start the combined MCP sample server
 dotnet run --project src/Sample.McpServer/Sample.McpServer.csproj
+
+# Start the A2A sample server and manual client
+# A2A servers use the selected port for JSON-RPC/HTTP+JSON and port + 1 for gRPC.
+dotnet run --project src/Sample.A2AServer/Sample.A2AServer.csproj -- 8080
+dotnet run --project src/Test.A2AServer/Test.A2AServer.csproj -- 8080
+dotnet run --project src/Test.A2AClient/Test.A2AClient.csproj -- http://localhost:8080 "hello from A2A"
 ```
 
 ## Architecture Notes
@@ -117,7 +130,9 @@ The implementation follows JSON-RPC 2.0 specification:
 1. **ID Handling**: The client uses integer IDs but must handle them as `JsonElement` when deserializing responses. The `ProcessResponse` method (JsonRpcClient.cs:89-133) extracts the integer value from `JsonElement` for dictionary lookups.
 
 2. **Namespace Usage**: When working with the library:
-   - Use `using Voltaic;` for all types (JsonRpcRequest, JsonRpcResponse, JsonRpcError, JsonRpcServer, JsonRpcClient)
+   - Use `using Voltaic.Core;` for JSON-RPC and shared core types
+   - Use `using Voltaic.Mcp;` for MCP types
+   - Use `using Voltaic.A2A;` for A2A types
 
 3. **Connection Management**:
    - Server handles disconnections in `HandleClientAsync` finally block (JsonRpcServer.cs:137-142)
@@ -153,7 +168,7 @@ The Voltaic library is configured for NuGet package generation:
 
 Example:
 ```csharp
-namespace Voltaic
+namespace Voltaic.Core
 {
     using System;
     using System.Collections.Generic;

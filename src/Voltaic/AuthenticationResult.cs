@@ -1,9 +1,9 @@
-namespace Voltaic
+namespace Voltaic.Core
 {
     using System.Collections.Generic;
 
     /// <summary>
-    /// Represents the result of an authentication attempt performed by the <see cref="McpHttpServer.AuthenticationHandler"/>.
+    /// Represents the result of an HTTP authentication attempt.
     /// When <see cref="IsAuthenticated"/> is false, the server returns the specified <see cref="StatusCode"/> and <see cref="ErrorMessage"/>
     /// to the client without processing the request further.
     /// When <see cref="IsAuthenticated"/> is true, optional identity information such as <see cref="Principal"/> and <see cref="Claims"/>

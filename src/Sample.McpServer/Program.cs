@@ -7,8 +7,8 @@ namespace Sample.McpServer
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     class Program
     {
         private const int _HttpPort = 8100;

@@ -1,4 +1,4 @@
-namespace Voltaic
+namespace Voltaic.Core
 {
     using System;
 

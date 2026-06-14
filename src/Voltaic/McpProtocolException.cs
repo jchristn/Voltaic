@@ -1,11 +1,12 @@
-namespace Voltaic
+namespace Voltaic.Mcp
 {
+    using Voltaic.Core;
     using System;
 
     /// <summary>
     /// Represents an MCP protocol error that should be surfaced as a JSON-RPC error response.
     /// </summary>
-    public class McpProtocolException : Exception
+    public class McpProtocolException : Exception, IJsonRpcErrorProvider
     {
         /// <summary>
         /// Gets the JSON-RPC error code.

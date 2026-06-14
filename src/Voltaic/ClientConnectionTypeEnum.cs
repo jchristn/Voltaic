@@ -1,4 +1,4 @@
-namespace Voltaic
+namespace Voltaic.Core
 {
     /// <summary>
     /// Specifies the type of client connection.

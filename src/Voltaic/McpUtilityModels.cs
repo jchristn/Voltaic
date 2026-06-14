@@ -1,5 +1,6 @@
-namespace Voltaic
+namespace Voltaic.Mcp
 {
+    using Voltaic.Core;
     using System.Text.Json.Serialization;
 
     /// <summary>

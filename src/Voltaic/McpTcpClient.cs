@@ -1,5 +1,6 @@
-namespace Voltaic
+namespace Voltaic.Mcp
 {
+    using Voltaic.Core;
     /// <summary>
     /// Provides a TCP-based MCP (Model Context Protocol) client implementation for making remote procedure calls over a network.
     /// This class extends JsonRpcClient with MCP-specific semantics and branding.
