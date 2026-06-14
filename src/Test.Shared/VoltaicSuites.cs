@@ -30,6 +30,8 @@ namespace Test.Shared
                 McpStdioIntegrationSuites.StdioMcpParity(),
                 McpTransportParitySuites.TcpMcpParity(),
                 McpTransportParitySuites.WebSocketMcpParity(),
+                A2AProtocolSuites.ProtocolAndTransports(),
+                A2ACompatibilitySuites.OfficialSdkOracle(),
             };
 
             if (tags == null || tags.Count == 0)

@@ -2,6 +2,8 @@
 
 This matrix tracks the Touchstone descriptors in `src/Test.Shared`. `Covered` means the public type has direct descriptor coverage for its main success and failure paths. `Partial` means meaningful descriptors exist, but deeper integration or long-running/stress scenarios remain release work.
 
+Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. Library source files mirror that grouping under `src/Voltaic/Core`, `src/Voltaic/Mcp`, and `src/Voltaic/A2A`; `ApiSurface.Inventory.SourceLayoutMatchesPublicNamespaces` enforces that no C# source files drift back into the project root and that A2A proto definitions stay under `src/Voltaic/A2A/Protos`.
+
 | API family | Status | Descriptor suites |
 |---|---:|---|
 | `AuthenticationResult` | Covered | `ModelApi.Supporting.*`, `ModelApi.Mcp.Matrix.AuthenticationResultCustomValues` |
@@ -16,6 +18,27 @@ This matrix tracks the Touchstone descriptors in `src/Test.Shared`. `Covered` me
 | `JsonRpcResponse` | Covered | `ModelApi.JsonRpc.*`, `ModelApi.JsonRpc.Matrix.*`, transport integration suites |
 | `JsonRpcResponseEventArgs` | Covered | `ModelApi.Supporting.JsonRpcEventArgs`, `JsonRpc.Tcp.Integration.ClientAndServerEvents` |
 | `JsonRpcServer` | Covered | `PublicApi.Servers.Validation.*`, `JsonRpc.Tcp.Integration.*` |
+| `IJsonRpcErrorProvider` | Covered | `ApiSurface.Inventory.ExportedTypesAreTracked`, protocol exception mapping suites |
+| `A2AProtocol` | Covered | `A2A.Protocol.*`, `A2A.Compatibility.*` |
+| `A2AJson` | Covered | `A2A.Protocol.AgentCardSerializesV1Shape`, `A2A.Protocol.TaskStateAndRoleUseA2AWireNames`, `A2A.Compatibility.*` |
+| `A2AErrorCode` | Covered | `A2A.Protocol.*`, `A2A.Compatibility.*`, protocol error paths |
+| `A2AProtocolException` | Covered | `A2A.Protocol.*`, protocol error paths |
+| `A2ACardResolver` | Covered | `A2A.Protocol.AgentCardResolverFetchesWellKnownCard`, `ApiSurface.Inventory.DisposableTypes` |
+| `A2AClient` | Covered | `A2A.Protocol.JsonRpcSendMessageAndGetTask`, `A2A.Protocol.JsonRpcStreamingMessageUsesSse`, `A2A.Protocol.PushNotificationConfigCrud`, `A2A.Protocol.ExtendedAgentCardJsonRpcAndRest`, `A2A.Protocol.ReturnImmediatelyPersistsSubmittedTask`, `A2A.Compatibility.JsonRpcClientEnvelopeMatchesOfficialSdk` |
+| `A2AHttpJsonClient` | Covered | `A2A.Protocol.HttpJsonClientCoversRestBinding`, `A2A.Compatibility.HttpJsonClientRoutesMatchOfficialSdk`, `A2A.Compatibility.HttpJsonListTasksQueryMatchesOfficialSdk`, `A2A.Compatibility.HttpJsonClientParsesOfficialRestSse` |
+| `A2AGrpcClient` | Covered | `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.GrpcErrorMapsToA2AProtocolException`, `A2A.Protocol.GrpcPreservesRichMessagePartsAndMetadata`, `A2A.Protocol.GrpcSubscribeAndCancelTask`, `A2A.Protocol.GrpcAuthenticationBlocksRpcButAllowsAgentCard` |
+| `A2AHttpServer` | Covered | `A2A.Protocol.*`, official-style JSON-RPC and HTTP+JSON compatibility cases |
+| `A2AGrpcServer` | Covered | `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.GrpcErrorMapsToA2AProtocolException`, `A2A.Protocol.GrpcPreservesRichMessagePartsAndMetadata`, `A2A.Protocol.GrpcSubscribeAndCancelTask`, `A2A.Protocol.GrpcAuthenticationBlocksRpcButAllowsAgentCard`, sample/manual harness coverage |
+| `IA2AAgentHandler` | Covered | `A2A.Protocol.*`, sample/test handlers |
+| `A2ARequestContext` | Covered | `A2A.Protocol.*`, handler integration coverage |
+| `A2AAgentEventQueue` | Covered | `A2A.Protocol.*`, handler integration coverage |
+| `A2ATaskUpdater` | Covered | `A2A.Protocol.*`, task lifecycle and streaming coverage |
+| `IA2ATaskStore` / `InMemoryA2ATaskStore` | Covered | `A2A.Protocol.JsonRpcSendMessageAndGetTask`, `A2A.Protocol.HttpJsonClientCoversRestBinding`, list/get/task lifecycle coverage |
+| A2A Agent Card models | Covered | `A2A.Protocol.AgentCardSerializesV1Shape`, `A2A.Protocol.AgentCardResolverFetchesWellKnownCard`, extended-card cases |
+| A2A security models | Covered | `ApiSurface.Inventory.ExportedTypesAreTracked`, Agent Card serialization surface |
+| A2A message/content models | Covered | `A2A.Protocol.TaskStateAndRoleUseA2AWireNames`, send/stream/task integration cases |
+| A2A task lifecycle models | Covered | `A2A.Protocol.JsonRpcSendMessageAndGetTask`, `A2A.Protocol.JsonRpcStreamingMessageUsesSse`, `A2A.Protocol.ReturnImmediatelyPersistsSubmittedTask`, `A2A.Protocol.GrpcSubscribeAndCancelTask`, HTTP+JSON and gRPC client/server cases |
+| A2A push notification config models | Covered | `A2A.Protocol.PushNotificationConfigCrud`, `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.OfficialRestPushConfigBodyAccepted`, `A2A.Compatibility.HttpJsonClientRoutesMatchOfficialSdk` |
 | `McpClient` | Covered | `PublicApi.Clients.Validation.McpClient*`, `McpStdio.Integration.*` |
 | `McpHttpClient` | Covered | `PublicApi.Clients.Validation.McpHttpClient*`, `McpHttp.Client.Matrix.*` |
 | `McpHttpServer` | Covered | `PublicApi.Servers.Validation.McpHttpServer*`, `McpHttp.Protocol.*`, `McpHttp.Streamable.Matrix.*`, `McpHttp.Registry.Matrix.*` |
@@ -70,5 +93,6 @@ This matrix tracks the Touchstone descriptors in `src/Test.Shared`. `Covered` me
 | `McpSetLogLevelRequest` | Covered | `ApiSurface.Inventory.ExportedTypesAreTracked`, `McpHttp.Registry.Matrix.LoggingSetLevel` |
 | `McpLogMessageNotification` | Covered | `McpProtocol.Content.CompletionAndUtilitySerialization`, HTTP/TCP/WebSocket notification helper coverage |
 | Public type inventory | Covered | `ApiSurface.Inventory.*` |
+| Source layout inventory | Covered | `ApiSurface.Inventory.SourceLayoutMatchesPublicNamespaces` |
 
-Remaining high-value future work is intentionally outside the v0.3.0 package scope: full roots/sampling/elicitation request orchestration, long-running stress/soak suites, and full JSON Schema 2020-12 validation beyond Voltaic's lightweight required/type checks.
+Remaining high-value future work is intentionally outside the v0.4.0 package scope: full MCP roots/sampling/elicitation request orchestration, long-running stress/soak suites, and full JSON Schema 2020-12 validation beyond Voltaic's lightweight required/type checks.

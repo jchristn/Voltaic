@@ -4,8 +4,8 @@ namespace Test.McpServer
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     class Program
     {
         static async Task Main(string[] args)

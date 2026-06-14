@@ -3,8 +3,8 @@ namespace Test.Shared
     using System.Net;
     using System.Net.Sockets;
     using Touchstone.Core;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     public static class ClientConnectionAdvancedSuites
     {
         public static TestSuiteDescriptor ComprehensiveQueueAndLifecycle()

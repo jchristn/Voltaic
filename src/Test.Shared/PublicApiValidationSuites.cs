@@ -3,8 +3,8 @@ namespace Test.Shared
     using System.Net;
     using System.Text.Json;
     using Touchstone.Core;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     public static class PublicApiValidationSuites
     {
         public static TestSuiteDescriptor ClientApiValidation()

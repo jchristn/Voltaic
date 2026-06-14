@@ -1,0 +1,1878 @@
+namespace Voltaic.Mcp
+{
+    using Voltaic.Core;
+    using System;
+    using System.Collections.Concurrent;
+    using System.Collections.Generic;
+    using System.IO;
+    using System.Linq;
+    using System.Net;
+    using System.Text;
+    using System.Text.Json;
+    using System.Threading;
+    using System.Threading.Tasks;
+
+    /// <summary>
+    /// Provides an HTTP-based MCP (Model Context Protocol) server implementation.
+    /// Supports JSON-RPC 2.0 over HTTP POST with Server-Sent Events (SSE) for server-to-client notifications.
+    /// </summary>
+    public class McpHttpServer : IDisposable
+    {
+        /// <summary>
+        /// Gets or sets the session timeout in seconds.
+        /// Sessions that have been inactive for longer than this will be expired.
+        /// Default is 300 seconds (5 minutes). Minimum is 10 seconds.
+        /// </summary>
+        public int SessionTimeoutSeconds
+        {
+            get => _SessionTimeoutSeconds;
+            set
+            {
+                if (value < 10) throw new ArgumentOutOfRangeException(nameof(value), "Session timeout must be at least 10 seconds");
+                _SessionTimeoutSeconds = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the maximum number of notifications that can be queued per client connection.
+        /// When the limit is reached, oldest notifications are discarded.
+        /// Default is 100 notifications. Minimum is 1.
+        /// This value is applied to new client connections when they are established.
+        /// </summary>
+        public int MaxQueueSize
+        {
+            get => _MaxQueueSize;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "Max queue size must be at least 1");
+                _MaxQueueSize = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets whether CORS (Cross-Origin Resource Sharing) is enabled.
+        /// When enabled, the server will accept requests from any origin.
+        /// Default is true to support browser-based clients.
+        /// </summary>
+        public bool EnableCors
+        {
+            get => _EnableCors;
+            set => _EnableCors = value;
+        }
+
+        /// <summary>
+        /// Headers to use when CORS support is enabled.
+        /// </summary>
+        public Dictionary<string, string> CorsHeaders
+        {
+            get => _CorsHeaders;
+            set => _CorsHeaders = (value != null ? value : new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase));
+        }
+
+        /// <summary>
+        /// Gets the cancellation token source for the server.
+        /// </summary>
+        public CancellationTokenSource? TokenSource
+        {
+            get => _TokenSource;
+        }
+
+        /// <summary>
+        /// Gets or sets the MCP protocol version.
+        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
+        /// </summary>
+        public string ProtocolVersion
+        {
+            get => _Endpoint.ProtocolVersion;
+            set => _Endpoint.ProtocolVersion = value ?? McpProtocol.LatestProtocolVersion;
+        }
+
+        /// <summary>
+        /// Gets or sets the server name for MCP serverInfo.
+        /// Default is "Voltaic.Mcp.HttpServer".
+        /// </summary>
+        public string ServerName
+        {
+            get => _Endpoint.ServerName;
+            set => _Endpoint.ServerName = value ?? "Voltaic.Mcp.HttpServer";
+        }
+
+        /// <summary>
+        /// Gets or sets the server version for MCP serverInfo.
+        /// Default is "1.0.0".
+        /// </summary>
+        public string ServerVersion
+        {
+            get => _Endpoint.ServerVersion;
+            set => _Endpoint.ServerVersion = value ?? "1.0.0";
+        }
+
+        /// <summary>
+        /// Gets or sets an optional asynchronous authentication handler.
+        /// When set, incoming HTTP requests are passed through this handler before processing.
+        /// If the handler returns an <see cref="AuthenticationResult"/> with <see cref="AuthenticationResult.IsAuthenticated"/> set to false,
+        /// the server immediately returns the specified status code and error message without processing the request.
+        /// When null (the default), no authentication is performed and all requests are accepted — preserving
+        /// backward compatibility with existing deployments.
+        /// The handler receives the full <see cref="HttpListenerRequest"/> so it can inspect headers, query strings,
+        /// client certificates, or any other request property needed for authentication.
+        /// The following endpoints always bypass authentication to allow connectivity validation:
+        /// the health check endpoint (<c>/</c>) and the <c>ping</c> JSON-RPC method.
+        /// CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
+        /// </summary>
+        public Func<HttpListenerRequest, Task<AuthenticationResult>>? AuthenticationHandler
+        {
+            get => _AuthenticationHandler;
+            set => _AuthenticationHandler = value;
+        }
+
+        /// <summary>
+        /// Occurs when a log message is generated.
+        /// </summary>
+        public event EventHandler<string>? Log;
+
+        /// <summary>
+        /// Occurs when a client connects to the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientConnected;
+
+        /// <summary>
+        /// Occurs when a client disconnects from the server.
+        /// </summary>
+        public event EventHandler<ClientConnection>? ClientDisconnected;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC request is received from a client.
+        /// </summary>
+        public event EventHandler<JsonRpcRequestEventArgs>? RequestReceived;
+
+        /// <summary>
+        /// Occurs when a JSON-RPC response is sent to a client.
+        /// </summary>
+        public event EventHandler<JsonRpcResponseEventArgs>? ResponseSent;
+
+        private readonly string _Hostname;
+        private readonly int _Port;
+        private readonly string _RpcPath;
+        private readonly string _EventsPath;
+        private readonly string _McpPath;
+        private HttpListener? _Listener;
+        private CancellationTokenSource? _TokenSource;
+        private readonly ConcurrentDictionary<string, ClientConnection> _Sessions;
+        private readonly ConcurrentDictionary<string, byte> _TerminatedSessions;
+        private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
+        private readonly McpEndpoint _Endpoint;
+        private Task? _CleanupTask;
+        private int _SessionTimeoutSeconds = 300; // 5 minutes
+        private int _MaxQueueSize = 100;
+        private bool _EnableCors = true;
+        private Dictionary<string, string> _CorsHeaders = new Dictionary<string, string>
+        {
+            { "Access-Control-Allow-Origin", "*" },
+            { "Access-Control-Allow-Methods", "POST, GET, OPTIONS" },
+            { "Access-Control-Allow-Headers", "*"},
+            { "Access-Control-Expose-Headers", "Mcp-Session-Id"},
+            { "Access-Control-Max-Age", "86400" }
+        };
+        private Func<HttpListenerRequest, Task<AuthenticationResult>>? _AuthenticationHandler;
+        private volatile bool _IsStopping = false;
+        private bool _IsDisposed = false;
+        private static readonly TimeSpan _SseHeartbeatInterval = TimeSpan.FromSeconds(30);
+        private static readonly byte[] _SseConnectedPrelude = Encoding.UTF8.GetBytes(": connected\n\n");
+        private static readonly byte[] _SseKeepAliveComment = Encoding.UTF8.GetBytes(": keep-alive\n\n");
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="McpHttpServer"/> class.
+        /// </summary>
+        /// <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
+        /// <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
+        /// <param name="rpcPath">The URL path for JSON-RPC requests. Default is "/rpc".</param>
+        /// <param name="eventsPath">The URL path for Server-Sent Events connections. Default is "/events".</param>
+        /// <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getSessions.</param>
+        /// <param name="mcpPath">The URL path for the MCP Streamable HTTP endpoint. Default is "/mcp". Set to null to disable.</param>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
+        public McpHttpServer(string hostname, int port, string rpcPath = "/rpc", string eventsPath = "/events", bool includeDefaultMethods = true, string? mcpPath = "/mcp")
+        {
+            if (String.IsNullOrEmpty(hostname)) throw new ArgumentNullException(nameof(hostname));
+            if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
+
+            _Hostname = hostname;
+            _Port = port;
+            _RpcPath = String.IsNullOrEmpty(rpcPath) ? "/rpc" : rpcPath;
+            _EventsPath = String.IsNullOrEmpty(eventsPath) ? "/events" : eventsPath;
+            _McpPath = mcpPath ?? "";
+            _Sessions = new ConcurrentDictionary<string, ClientConnection>();
+            _TerminatedSessions = new ConcurrentDictionary<string, byte>();
+            _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
+            _Endpoint = new McpEndpoint("Voltaic.Mcp.HttpServer");
+
+            if (includeDefaultMethods) RegisterBuiltInMethods();
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified synchronous handler.
+        /// The handler is wrapped internally to support async invocation.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, object> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Methods[name] = (args, _) => Task.FromResult(handler(args));
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler.
+        /// Use this overload when the handler needs to perform asynchronous operations such as
+        /// database queries, HTTP calls, or file I/O.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Methods[name] = (args, _) => handler(args);
+        }
+
+        /// <summary>
+        /// Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
+        /// Use this overload when the handler needs to perform cancellable asynchronous operations.
+        /// The cancellation token provided to the handler is the same token used by the server's request processing.
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Methods[name] = handler;
+        }
+
+        /// <summary>
+        /// Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
+        /// This registers both the method handler and the tool definition for tools/list.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata using a synchronous handler.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+        /// <param name="handler">The function that handles the tool invocation.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, object> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition using a synchronous handler.
+        /// </summary>
+        /// <param name="definition">The tool definition.</param>
+        /// <param name="handler">The function that handles the tool invocation.</param>
+        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, object> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Endpoint.RegisterTool(definition, (args, _) => Task.FromResult(handler(args)));
+            RegisterMethod(definition.Name, handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
+        /// This registers both the method handler and the tool definition for tools/list.
+        /// Use this overload when the handler needs to perform asynchronous operations such as
+        /// database queries, HTTP calls, or file I/O.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata using an asynchronous handler.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+        /// <param name="handler">The async function that handles the tool invocation.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition using an asynchronous handler.
+        /// </summary>
+        /// <param name="definition">The tool definition.</param>
+        /// <param name="handler">The async function that handles the tool invocation.</param>
+        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Endpoint.RegisterTool(definition, (args, _) => handler(args));
+            RegisterMethod(definition.Name, handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
+        /// This registers both the method handler and the tool definition for tools/list.
+        /// Use this overload when the handler needs to perform cancellable asynchronous operations.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+        /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition using a cancellable asynchronous handler.
+        /// </summary>
+        /// <param name="definition">The tool definition.</param>
+        /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            _Endpoint.RegisterTool(definition, handler);
+            RegisterMethod(definition.Name, handler);
+        }
+
+        /// <summary>
+        /// Registers a static MCP resource with a synchronous read handler.
+        /// </summary>
+        /// <param name="uri">Resource URI.</param>
+        /// <param name="name">Resource name.</param>
+        /// <param name="mimeType">Resource MIME type.</param>
+        /// <param name="readHandler">Read handler.</param>
+        public void RegisterResource(string uri, string name, string mimeType, Func<McpReadResourceResult> readHandler)
+        {
+            if (readHandler == null) throw new ArgumentNullException(nameof(readHandler));
+            RegisterResource(CreateResource(uri, name, mimeType), (_, _) => Task.FromResult(readHandler()));
+        }
+
+        /// <summary>
+        /// Registers a static MCP resource with a cancellable read handler.
+        /// </summary>
+        /// <param name="resource">Resource metadata.</param>
+        /// <param name="readHandler">Read handler that receives the requested URI.</param>
+        public void RegisterResource(McpResource resource, Func<string, CancellationToken, Task<McpReadResourceResult>> readHandler)
+        {
+            _Endpoint.RegisterResource(resource, readHandler);
+        }
+
+        /// <summary>
+        /// Registers a dynamic MCP resource template with a synchronous read handler.
+        /// </summary>
+        /// <param name="uriTemplate">URI template.</param>
+        /// <param name="name">Template name.</param>
+        /// <param name="mimeType">Resource MIME type.</param>
+        /// <param name="readHandler">Read handler that receives the matched URI.</param>
+        public void RegisterResourceTemplate(string uriTemplate, string name, string mimeType, Func<string, McpReadResourceResult> readHandler)
+        {
+            if (readHandler == null) throw new ArgumentNullException(nameof(readHandler));
+            RegisterResourceTemplate(CreateResourceTemplate(uriTemplate, name, mimeType), (uri, _, _) => Task.FromResult(readHandler(uri)));
+        }
+
+        /// <summary>
+        /// Registers a dynamic MCP resource template with a cancellable read handler.
+        /// </summary>
+        /// <param name="template">Template metadata.</param>
+        /// <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
+        public void RegisterResourceTemplate(
+            McpResourceTemplate template,
+            Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<McpReadResourceResult>> readHandler)
+        {
+            _Endpoint.RegisterResourceTemplate(template, readHandler);
+        }
+
+        /// <summary>
+        /// Registers an MCP prompt with a synchronous handler.
+        /// </summary>
+        /// <param name="name">Prompt name.</param>
+        /// <param name="description">Prompt description.</param>
+        /// <param name="arguments">Prompt arguments.</param>
+        /// <param name="handler">Prompt handler.</param>
+        public void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<JsonElement?, McpGetPromptResult> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            RegisterPrompt(CreatePrompt(name, description, arguments), (args, _) => Task.FromResult(handler(args)));
+        }
+
+        /// <summary>
+        /// Registers an MCP prompt with a cancellable handler.
+        /// </summary>
+        /// <param name="prompt">Prompt metadata.</param>
+        /// <param name="handler">Prompt handler.</param>
+        public void RegisterPrompt(McpPrompt prompt, Func<JsonElement?, CancellationToken, Task<McpGetPromptResult>> handler)
+        {
+            _Endpoint.RegisterPrompt(prompt, handler);
+        }
+
+        /// <summary>
+        /// Registers a completion provider for prompt arguments or resource template variables.
+        /// </summary>
+        /// <param name="referenceType">Reference type, usually <c>ref/prompt</c> or <c>ref/resource</c>.</param>
+        /// <param name="referenceId">Prompt name or resource URI template. Use null to match any reference of the type.</param>
+        /// <param name="argumentName">Argument name. Use null to match any argument on the reference.</param>
+        /// <param name="handler">Completion handler.</param>
+        public void RegisterCompletionProvider(
+            string referenceType,
+            string? referenceId,
+            string? argumentName,
+            Func<McpCompleteRequest, CancellationToken, Task<McpCompleteResult>> handler)
+        {
+            _Endpoint.RegisterCompletionProvider(referenceType, referenceId, argumentName, handler);
+        }
+
+        /// <summary>
+        /// Starts the HTTP server and begins listening for requests asynchronously.
+        /// This method will continue running until Stop() is called or the cancellation token is triggered.
+        /// </summary>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the server is already running.</exception>
+        public async Task StartAsync(CancellationToken token = default)
+        {
+            try
+            {
+                _Listener = new HttpListener();
+                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}/");
+                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_RpcPath}/");
+                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_EventsPath}/");
+                if (!String.IsNullOrEmpty(_McpPath))
+                    _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_McpPath}/");
+                _Listener.Start();
+                _TokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+
+                // Start session cleanup task
+                _CleanupTask = Task.Run(() => CleanupSessionsLoop(_TokenSource.Token));
+
+                LogMessage($"HTTP server started on port {_Port}");
+                LogMessage($"RPC endpoint: {_RpcPath}");
+                LogMessage($"SSE endpoint: {_EventsPath}");
+                if (!String.IsNullOrEmpty(_McpPath))
+                    LogMessage($"MCP Streamable HTTP endpoint: {_McpPath}");
+
+                while (!_TokenSource.Token.IsCancellationRequested)
+                {
+                    HttpListenerContext? context = await AcceptContextAsync(_TokenSource.Token).ConfigureAwait(false);
+                    if (context != null)
+                    {
+                        _ = Task.Run(() => HandleRequestAsync(context, _TokenSource.Token));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Server error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Broadcasts a notification to a specific session.
+        /// The notification will be queued and delivered via the SSE connection if active.
+        /// </summary>
+        /// <param name="sessionId">The session ID to send the notification to.</param>
+        /// <param name="method">The name of the notification method.</param>
+        /// <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+        /// <returns>True if the notification was queued; false if the session does not exist.</returns>
+        public bool SendNotificationToSession(string sessionId, string method, object? parameters = null)
+        {
+            if (_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
+            {
+                JsonRpcRequest notification = new JsonRpcRequest
+                {
+                    Method = method,
+                    Params = parameters
+                };
+                connection.Enqueue(notification);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Broadcasts a notification to all active sessions.
+        /// Notifications are queued and delivered via SSE connections.
+        /// </summary>
+        /// <param name="method">The name of the notification method.</param>
+        /// <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+        public void BroadcastNotification(string method, object? parameters = null)
+        {
+            JsonRpcRequest notification = new JsonRpcRequest
+            {
+                Method = method,
+                Params = parameters
+            };
+
+            foreach (ClientConnection connection in _Sessions.Values)
+            {
+                connection.Enqueue(notification);
+            }
+
+            LogMessage($"Broadcast notification: {method}");
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that the tool list changed.
+        /// </summary>
+        public void NotifyToolsChanged()
+        {
+            BroadcastNotification("notifications/tools/list_changed");
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that the resource list changed.
+        /// </summary>
+        public void NotifyResourcesChanged()
+        {
+            BroadcastNotification("notifications/resources/list_changed");
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that a resource was updated.
+        /// </summary>
+        /// <param name="uri">Updated resource URI.</param>
+        public void NotifyResourceUpdated(string uri)
+        {
+            if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
+            BroadcastNotification("notifications/resources/updated", new { uri });
+        }
+
+        /// <summary>
+        /// Notifies active HTTP sessions that the prompt list changed.
+        /// </summary>
+        public void NotifyPromptsChanged()
+        {
+            BroadcastNotification("notifications/prompts/list_changed");
+        }
+
+        /// <summary>
+        /// Queues a progress notification for an active HTTP session.
+        /// </summary>
+        /// <param name="sessionId">Target session ID.</param>
+        /// <param name="progressToken">Progress token from request metadata.</param>
+        /// <param name="progress">Current progress value.</param>
+        /// <param name="total">Optional total progress value.</param>
+        /// <param name="message">Optional human-readable progress text.</param>
+        /// <returns>True if the session was found and the notification was queued.</returns>
+        public bool NotifyProgress(string sessionId, object progressToken, double progress, double? total = null, string? message = null)
+        {
+            return SendNotificationToSession(sessionId, "notifications/progress", new McpProgressNotification
+            {
+                ProgressToken = progressToken,
+                Progress = progress,
+                Total = total,
+                Message = message
+            });
+        }
+
+        /// <summary>
+        /// Queues a cancellation notification for an active HTTP session.
+        /// </summary>
+        /// <param name="sessionId">Target session ID.</param>
+        /// <param name="requestId">Cancelled request ID.</param>
+        /// <param name="reason">Optional cancellation reason.</param>
+        /// <returns>True if the session was found and the notification was queued.</returns>
+        public bool NotifyCancelled(string sessionId, object requestId, string? reason = null)
+        {
+            return SendNotificationToSession(sessionId, "notifications/cancelled", new McpCancelledNotification
+            {
+                RequestId = requestId,
+                Reason = reason
+            });
+        }
+
+        /// <summary>
+        /// Queues a structured MCP log message for an active HTTP session.
+        /// </summary>
+        /// <param name="sessionId">Target session ID.</param>
+        /// <param name="level">Syslog-style level.</param>
+        /// <param name="data">JSON-serializable log data.</param>
+        /// <param name="logger">Optional logger name.</param>
+        /// <returns>True if the session was found and the notification was queued.</returns>
+        public bool NotifyLogMessage(string sessionId, string level, object? data, string? logger = null)
+        {
+            return SendNotificationToSession(sessionId, "notifications/message", new McpLogMessageNotification
+            {
+                Level = level,
+                Logger = logger,
+                Data = data
+            });
+        }
+
+        /// <summary>
+        /// Gets a list of all active session IDs.
+        /// </summary>
+        /// <returns>A list of session IDs.</returns>
+        public List<string> GetActiveSessions()
+        {
+            return _Sessions.Keys.ToList();
+        }
+
+        /// <summary>
+        /// Gets a list of all currently connected client IDs.
+        /// </summary>
+        /// <returns>A list of client IDs.</returns>
+        public List<string> GetConnectedClients()
+        {
+            return _Sessions.Keys.ToList();
+        }
+
+        /// <summary>
+        /// Kicks a client by disconnecting them from the server.
+        /// </summary>
+        /// <param name="clientId">The ID of the client to kick.</param>
+        /// <returns>True if the client was found and kicked; otherwise, false.</returns>
+        public bool KickClient(string clientId)
+        {
+            if (_Sessions.TryRemove(clientId, out ClientConnection? connection))
+            {
+                RaiseClientDisconnected(connection);
+                connection.Dispose();
+                LogMessage($"Kicked client: {clientId}");
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Removes a session and its notification queue.
+        /// </summary>
+        /// <param name="sessionId">The session ID to remove.</param>
+        /// <returns>True if the session was found and removed; otherwise, false.</returns>
+        public bool RemoveSession(string sessionId)
+        {
+            if (_Sessions.TryRemove(sessionId, out ClientConnection? connection))
+            {
+                RaiseClientDisconnected(connection);
+                connection.Dispose();
+                LogMessage($"Removed session: {sessionId}");
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Stops the server and closes all active sessions.
+        /// </summary>
+        public void Stop()
+        {
+            if (_IsStopping) return;
+            _IsStopping = true;
+
+            _TokenSource?.Cancel();
+
+            foreach (ClientConnection connection in _Sessions.Values)
+            {
+                connection.Dispose();
+            }
+            _Sessions.Clear();
+
+            try
+            {
+                if (_Listener != null && _Listener.IsListening)
+                {
+                    _Listener.Stop();
+                }
+            }
+            catch
+            {
+                // Ignore errors during stop
+            }
+
+            LogMessage("Server stopped");
+        }
+
+        /// <summary>
+        /// Releases all resources used by the <see cref="McpHttpServer"/>.
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the unmanaged resources used by the <see cref="McpHttpServer"/> and optionally releases the managed resources.
+        /// </summary>
+        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_IsDisposed)
+            {
+                _IsDisposed = true;
+
+                if (disposing)
+                {
+                    Stop();
+                    _TokenSource?.Dispose();
+                    ((IDisposable?)_Listener)?.Dispose();
+                }
+            }
+        }
+
+        private static ToolDefinition CreateToolDefinition(string name, string description, object inputSchema, object? outputSchema)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (String.IsNullOrEmpty(description)) throw new ArgumentNullException(nameof(description));
+            if (inputSchema == null) throw new ArgumentNullException(nameof(inputSchema));
+
+            return new ToolDefinition
+            {
+                Name = name,
+                Description = description,
+                InputSchema = inputSchema,
+                OutputSchema = outputSchema
+            };
+        }
+
+        private static void ValidateToolDefinition(ToolDefinition definition)
+        {
+            if (definition == null) throw new ArgumentNullException(nameof(definition));
+            if (String.IsNullOrEmpty(definition.Name)) throw new ArgumentException("Tool definition must include a name.", nameof(definition));
+            if (String.IsNullOrEmpty(definition.Description)) throw new ArgumentException("Tool definition must include a description.", nameof(definition));
+            if (definition.InputSchema == null) throw new ArgumentException("Tool definition must include an input schema.", nameof(definition));
+        }
+
+        private static McpResource CreateResource(string uri, string name, string mimeType)
+        {
+            if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            return new McpResource
+            {
+                Uri = uri,
+                Name = name,
+                MimeType = mimeType
+            };
+        }
+
+        private static McpResourceTemplate CreateResourceTemplate(string uriTemplate, string name, string mimeType)
+        {
+            if (String.IsNullOrEmpty(uriTemplate)) throw new ArgumentNullException(nameof(uriTemplate));
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            return new McpResourceTemplate
+            {
+                UriTemplate = uriTemplate,
+                Name = name,
+                MimeType = mimeType
+            };
+        }
+
+        private static McpPrompt CreatePrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            return new McpPrompt
+            {
+                Name = name,
+                Description = description,
+                Arguments = arguments?.ToList()
+            };
+        }
+
+        /// <summary>
+        /// Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
+        /// This method is virtual to allow derived classes to customize the set of built-in methods.
+        /// </summary>
+        protected virtual void RegisterBuiltInMethods()
+        {
+            // MCP Protocol Methods
+            RegisterMethod("initialize", (args) =>
+            {
+                return _Endpoint.Initialize(args);
+            });
+
+            RegisterMethod("tools/list", (args) =>
+            {
+                return _Endpoint.ListTools(args);
+            });
+
+            RegisterMethod("tools/call", _Endpoint.CallToolAsync);
+            RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
+            RegisterMethod("resources/templates/list", (args) => _Endpoint.ListResourceTemplates(args));
+            RegisterMethod("resources/read", _Endpoint.ReadResourceAsync);
+            RegisterMethod("resources/subscribe", (args) => _Endpoint.SubscribeResource(args));
+            RegisterMethod("resources/unsubscribe", (args) => _Endpoint.UnsubscribeResource(args));
+            RegisterMethod("prompts/list", (args) => _Endpoint.ListPrompts(args));
+            RegisterMethod("prompts/get", _Endpoint.GetPromptAsync);
+            RegisterMethod("completion/complete", _Endpoint.CompleteAsync);
+            RegisterMethod("logging/setLevel", (args) => _Endpoint.SetLogLevel(args));
+            RegisterMethod("notifications/cancelled", (args) => _Endpoint.Cancelled(args));
+
+            // Handle the initialized notification (no response needed, but we should handle it)
+            RegisterMethod("notifications/initialized", (args) =>
+            {
+                LogMessage("Received initialized notification from client");
+                return _Endpoint.Initialized(args);
+            });
+
+            // Register built-in tools with proper MCP tool metadata
+            RegisterTool("ping",
+                "Returns 'pong' to verify server connectivity",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => "pong");
+
+            RegisterTool("echo",
+                "Echoes back the provided message",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        message = new
+                        {
+                            type = "string",
+                            description = "The message to echo back"
+                        }
+                    },
+                    required = new[] { "message" }
+                },
+                (args) =>
+                {
+                    if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
+                        return messageProp.GetString() ?? "empty";
+                    return "empty";
+                });
+
+            RegisterTool("getTime",
+                "Returns the current UTC time in ISO format",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+
+            RegisterTool("getSessions",
+                "Returns a list of all active session IDs",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = new string[] { }
+                },
+                (_) => GetActiveSessions());
+        }
+
+        private async Task<HttpListenerContext?> AcceptContextAsync(CancellationToken token)
+        {
+            try
+            {
+                if (_IsStopping || _Listener == null || !_Listener.IsListening)
+                {
+                    return null;
+                }
+
+                return await _Listener.GetContextAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+            catch (HttpListenerException)
+            {
+                return null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private async Task HandleRequestAsync(HttpListenerContext context, CancellationToken token)
+        {
+            try
+            {
+                string path = context.Request.Url?.AbsolutePath ?? "";
+
+                // Handle CORS preflight
+                if (context.Request.HttpMethod == "OPTIONS")
+                {
+                    HandleCorsPreflightRequest(context);
+                    return;
+                }
+
+                // Health check endpoint is always unauthenticated
+                if (path == "/")
+                {
+                    await HandleHealthCheckAsync(context, token).ConfigureAwait(false);
+                    return;
+                }
+
+                // Authenticate request if handler is configured
+                if (_AuthenticationHandler != null)
+                {
+                    // Buffer the request body so we can inspect the method for ping bypass
+                    string? requestBody = null;
+                    if (context.Request.HttpMethod == "POST" && context.Request.HasEntityBody)
+                    {
+                        using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: true))
+                        {
+                            requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+                        }
+
+                        // Allow ping requests without authentication
+                        if (!String.IsNullOrEmpty(requestBody))
+                        {
+                            try
+                            {
+                                JsonRpcRequest? rpcRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                                if (rpcRequest != null && rpcRequest.Method == "ping")
+                                {
+                                    await HandlePreAuthRpcRequestAsync(context, requestBody, token).ConfigureAwait(false);
+                                    return;
+                                }
+                            }
+                            catch (JsonException)
+                            {
+                                // Not valid JSON-RPC — fall through to auth check
+                            }
+                        }
+                    }
+
+                    AuthenticationResult authResult = await _AuthenticationHandler(context.Request).ConfigureAwait(false);
+                    if (!authResult.IsAuthenticated)
+                    {
+                        context.Response.StatusCode = authResult.StatusCode;
+                        if (_EnableCors)
+                        {
+                            foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                                context.Response.AddHeader(kvp.Key, kvp.Value);
+                        }
+
+                        if (!String.IsNullOrEmpty(authResult.ErrorMessage))
+                        {
+                            byte[] errorBytes = Encoding.UTF8.GetBytes(authResult.ErrorMessage);
+                            context.Response.ContentType = "text/plain";
+                            context.Response.ContentLength64 = errorBytes.Length;
+                            await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+                        }
+
+                        context.Response.Close();
+                        LogMessage($"Authentication failed for {path}: {authResult.ErrorMessage ?? "no details"}");
+                        return;
+                    }
+
+                    // If we already buffered the body, pass it through to avoid re-reading
+                    if (requestBody != null)
+                    {
+                        await HandlePreReadRpcRequestAsync(context, path, requestBody, token).ConfigureAwait(false);
+                        return;
+                    }
+                }
+
+                if (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath))
+                {
+                    await HandleMcpRequestAsync(context, token).ConfigureAwait(false);
+                }
+                else if (path.StartsWith(_RpcPath))
+                {
+                    await HandleRpcRequestAsync(context, token).ConfigureAwait(false);
+                }
+                else if (path.StartsWith(_EventsPath))
+                {
+                    await HandleSseRequestAsync(context, token).ConfigureAwait(false);
+                }
+                else
+                {
+                    context.Response.StatusCode = 404;
+                    context.Response.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Error handling request: {ex.Message}");
+                try
+                {
+                    context.Response.StatusCode = 500;
+                    context.Response.Close();
+                }
+                catch
+                {
+                    // Ignore errors while sending error response
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extracts the session ID from the request using the Mcp-Session-Id header
+        /// or the session query string parameter.
+        /// </summary>
+        private string? GetSessionId(HttpListenerContext context)
+        {
+            return context.Request.Headers[McpProtocol.SessionIdHeader]
+                ?? context.Request.Headers[McpProtocol.LegacySessionIdHeader]
+                ?? context.Request.QueryString["session"];
+        }
+
+        /// <summary>
+        /// Sets the Mcp-Session-Id header on the response.
+        /// </summary>
+        private void SetSessionIdHeaders(HttpListenerResponse response, string sessionId)
+        {
+            response.AddHeader(McpProtocol.SessionIdHeader, sessionId);
+        }
+
+        /// <summary>
+        /// Handles requests on the MCP Streamable HTTP endpoint (/mcp by default).
+        /// POST: JSON-RPC requests (same as /rpc, but with Mcp-Session-Id header).
+        /// GET: SSE stream for server-to-client notifications (same as /events).
+        /// DELETE: Session termination.
+        /// This provides compatibility with the MCP Streamable HTTP transport specification.
+        /// </summary>
+        private async Task HandleMcpRequestAsync(HttpListenerContext context, CancellationToken token)
+        {
+            string method = context.Request.HttpMethod;
+
+            if (method == "POST")
+            {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!RequestAccepts(context, "application/json") || !RequestAccepts(context, "text/event-stream"))
+                {
+                    await SendTextResponseAsync(context, 406, "POST /mcp requires Accept: application/json, text/event-stream", token).ConfigureAwait(false);
+                    return;
+                }
+
+                // Get or create session
+                string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+                if (_TerminatedSessions.ContainsKey(sessionId))
+                {
+                    await SendTextResponseAsync(context, 404, "Session was terminated", token).ConfigureAwait(false);
+                    return;
+                }
+
+                bool isNewSession = !_Sessions.ContainsKey(sessionId);
+                ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+                {
+                    ClientConnection newConnection = new ClientConnection(id);
+                    newConnection.MaxQueueSize = _MaxQueueSize;
+                    return newConnection;
+                });
+
+                if (isNewSession && _Sessions.ContainsKey(sessionId))
+                {
+                    RaiseClientConnected(connection);
+                }
+
+                // Read request body
+                string requestBody;
+                using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
+                {
+                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+
+                LogMessage($"MCP request from session {sessionId}: {requestBody}");
+
+                JsonRpcRequest? incomingRequest = null;
+                try
+                {
+                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                }
+                catch (JsonException)
+                {
+                }
+
+                // Process JSON-RPC request
+                JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+                // Send response
+                if (_EnableCors)
+                {
+                    foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                        context.Response.AddHeader(kvp.Key, kvp.Value);
+                }
+
+                SetSessionIdHeaders(context.Response, sessionId);
+
+                if (incomingRequest != null && incomingRequest.Id == null)
+                {
+                    context.Response.StatusCode = 202;
+                    context.Response.Close();
+                    LogMessage($"MCP notification accepted for session {sessionId}: {incomingRequest.Method}");
+                    return;
+                }
+
+                context.Response.ContentType = "application/json";
+
+                string responseJson = JsonSerializer.Serialize(response);
+                byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+
+                context.Response.ContentLength64 = buffer.Length;
+                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+                context.Response.Close();
+
+                LogMessage($"MCP response to session {sessionId}: {responseJson}");
+            }
+            else if (method == "GET")
+            {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!RequestAccepts(context, "text/event-stream"))
+                {
+                    await SendTextResponseAsync(context, 406, "GET /mcp requires Accept: text/event-stream", token).ConfigureAwait(false);
+                    return;
+                }
+
+                // SSE stream for server-to-client notifications
+                string? sessionId = GetSessionId(context);
+                if (String.IsNullOrEmpty(sessionId))
+                {
+                    context.Response.StatusCode = 400;
+                    byte[] errorBytes = Encoding.UTF8.GetBytes("Missing session ID. Send a POST to initialize first.");
+                    await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+                    context.Response.Close();
+                    return;
+                }
+
+                if (_TerminatedSessions.ContainsKey(sessionId) || !_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
+                {
+                    context.Response.StatusCode = 404;
+                    byte[] errorBytes = Encoding.UTF8.GetBytes("Invalid or terminated session ID.");
+                    await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+                    context.Response.Close();
+                    return;
+                }
+
+                // Set up SSE headers
+                if (_EnableCors)
+                {
+                    foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                        context.Response.AddHeader(kvp.Key, kvp.Value);
+                }
+
+                context.Response.ContentType = "text/event-stream";
+                context.Response.AddHeader("Cache-Control", "no-cache");
+                context.Response.AddHeader("Connection", "keep-alive");
+                context.Response.SendChunked = true;
+
+                LogMessage($"MCP SSE connection established for session {sessionId}");
+
+                try
+                {
+                    await SendSsePreludeAsync(context.Response, token).ConfigureAwait(false);
+
+                    while (!token.IsCancellationRequested)
+                    {
+                        using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                        {
+                            timeoutCts.CancelAfter(_SseHeartbeatInterval);
+
+                            try
+                            {
+                                JsonRpcRequest? notification = await connection.DequeueAsync(timeoutCts.Token).ConfigureAwait(false);
+
+                                if (notification != null)
+                                {
+                                    await SendSseNotificationAsync(context.Response, notification, token).ConfigureAwait(false);
+                                }
+                            }
+                            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                            {
+                                await SendSseKeepAliveAsync(context.Response, token).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException) when (token.IsCancellationRequested)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"MCP SSE error for session {sessionId}: {ex.Message}");
+                }
+                finally
+                {
+                    context.Response.Close();
+                    LogMessage($"MCP SSE connection closed for session {sessionId}");
+                }
+            }
+            else if (method == "DELETE")
+            {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                // Session termination
+                string? sessionId = GetSessionId(context);
+                if (String.IsNullOrEmpty(sessionId))
+                {
+                    context.Response.StatusCode = 400;
+                    context.Response.Close();
+                    return;
+                }
+
+                if (_TerminatedSessions.ContainsKey(sessionId) || !_Sessions.ContainsKey(sessionId))
+                {
+                    context.Response.StatusCode = 404;
+                    context.Response.Close();
+                    return;
+                }
+
+                if (!String.IsNullOrEmpty(sessionId))
+                {
+                    RemoveSession(sessionId);
+                    _TerminatedSessions[sessionId] = 0;
+                    LogMessage($"MCP session terminated: {sessionId}");
+                }
+
+                context.Response.StatusCode = 200;
+                context.Response.Close();
+            }
+            else
+            {
+                context.Response.StatusCode = 405;
+                context.Response.Close();
+            }
+        }
+
+        private void HandleCorsPreflightRequest(HttpListenerContext context)
+        {
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            context.Response.StatusCode = 204;
+            context.Response.Close();
+        }
+
+        private bool ValidateProtocolVersionHeader(HttpListenerContext context)
+        {
+            string? version = context.Request.Headers[McpProtocol.ProtocolVersionHeader];
+            if (String.IsNullOrWhiteSpace(version))
+            {
+                return true;
+            }
+
+            return McpProtocol.IsSupportedVersion(version);
+        }
+
+        private static bool RequestAccepts(HttpListenerContext context, string mediaType)
+        {
+            string? acceptHeader = context.Request.Headers["Accept"];
+            if (String.IsNullOrWhiteSpace(acceptHeader))
+            {
+                return false;
+            }
+
+            string[] parts = acceptHeader.Split(',');
+            foreach (string part in parts)
+            {
+                string value = part.Split(';')[0].Trim();
+                if (StringComparer.OrdinalIgnoreCase.Equals(value, mediaType) || value == "*/*")
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private async Task SendTextResponseAsync(HttpListenerContext context, int statusCode, string body, CancellationToken token)
+        {
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            context.Response.StatusCode = statusCode;
+            context.Response.ContentType = "text/plain";
+            byte[] errorBytes = Encoding.UTF8.GetBytes(body);
+            context.Response.ContentLength64 = errorBytes.Length;
+            await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+        }
+
+        /// <summary>
+        /// Handles a ping request that bypassed authentication.
+        /// The request body has already been read and parsed.
+        /// </summary>
+        private async Task HandlePreAuthRpcRequestAsync(HttpListenerContext context, string requestBody, CancellationToken token)
+        {
+            string path = context.Request.Url?.AbsolutePath ?? "";
+            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+            {
+                ClientConnection newConnection = new ClientConnection(id);
+                newConnection.MaxQueueSize = _MaxQueueSize;
+                return newConnection;
+            });
+
+
+            LogMessage($"Pre-auth ping request from session {sessionId}");
+
+            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            SetSessionIdHeaders(context.Response, sessionId);
+            context.Response.ContentType = "application/json";
+
+            string responseJson = JsonSerializer.Serialize(response);
+            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+        }
+
+        /// <summary>
+        /// Handles an RPC request where the body was already read during authentication inspection.
+        /// Routes to the appropriate handler (MCP or RPC) based on the request path.
+        /// </summary>
+        private async Task HandlePreReadRpcRequestAsync(HttpListenerContext context, string path, string requestBody, CancellationToken token)
+        {
+            bool isMcpRequest = !String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath);
+            if (isMcpRequest)
+            {
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!RequestAccepts(context, "application/json") || !RequestAccepts(context, "text/event-stream"))
+                {
+                    await SendTextResponseAsync(context, 406, "POST /mcp requires Accept: application/json, text/event-stream", token).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+            if (isMcpRequest && _TerminatedSessions.ContainsKey(sessionId))
+            {
+                await SendTextResponseAsync(context, 404, "Session was terminated", token).ConfigureAwait(false);
+                return;
+            }
+
+            bool isNewSession = !_Sessions.ContainsKey(sessionId);
+            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+            {
+                ClientConnection newConnection = new ClientConnection(id);
+                newConnection.MaxQueueSize = _MaxQueueSize;
+                return newConnection;
+            });
+
+            if (isNewSession && _Sessions.ContainsKey(sessionId))
+            {
+                RaiseClientConnected(connection);
+            }
+
+
+
+            string logPrefix = (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath)) ? "MCP" : "RPC";
+            LogMessage($"{logPrefix} request from session {sessionId}: {requestBody}");
+
+            JsonRpcRequest? incomingRequest = null;
+            if (isMcpRequest)
+            {
+                try
+                {
+                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                }
+                catch (JsonException)
+                {
+                }
+            }
+
+            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            SetSessionIdHeaders(context.Response, sessionId);
+
+            if (incomingRequest != null && incomingRequest.Id == null)
+            {
+                context.Response.StatusCode = 202;
+                context.Response.Close();
+                LogMessage($"{logPrefix} notification accepted for session {sessionId}: {incomingRequest.Method}");
+                return;
+            }
+
+            context.Response.ContentType = "application/json";
+
+            string responseJson = JsonSerializer.Serialize(response);
+            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+
+            LogMessage($"{logPrefix} response to session {sessionId}: {responseJson}");
+        }
+
+        private async Task HandleHealthCheckAsync(HttpListenerContext context, CancellationToken token)
+        {
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            context.Response.StatusCode = 200;
+
+            if (context.Request.HttpMethod == "GET")
+            {
+                context.Response.ContentType = "application/json";
+                byte[] buffer = Encoding.UTF8.GetBytes("{\"status\":\"Ok\"}");
+                context.Response.ContentLength64 = buffer.Length;
+                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            }
+
+            context.Response.Close();
+        }
+
+        private async Task HandleRpcRequestAsync(HttpListenerContext context, CancellationToken token)
+        {
+            if (context.Request.HttpMethod != "POST")
+            {
+                context.Response.StatusCode = 405;
+                context.Response.Close();
+                return;
+            }
+
+            // Get or create session
+            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
+            bool isNewSession = !_Sessions.ContainsKey(sessionId);
+            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
+            {
+                ClientConnection newConnection = new ClientConnection(id);
+                newConnection.MaxQueueSize = _MaxQueueSize;
+                return newConnection;
+            });
+
+            if (isNewSession && _Sessions.ContainsKey(sessionId))
+            {
+                RaiseClientConnected(connection);
+            }
+
+            // Read request body
+            string requestBody;
+            using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
+            {
+                requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+            }
+
+            LogMessage($"RPC request from session {sessionId}: {requestBody}");
+
+            // Process JSON-RPC request
+            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+            // Send response
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            SetSessionIdHeaders(context.Response, sessionId);
+            context.Response.ContentType = "application/json";
+
+            string responseJson = JsonSerializer.Serialize(response);
+            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+
+            LogMessage($"RPC response to session {sessionId}: {responseJson}");
+        }
+
+        private async Task HandleSseRequestAsync(HttpListenerContext context, CancellationToken token)
+        {
+            if (context.Request.HttpMethod != "GET")
+            {
+                context.Response.StatusCode = 405;
+                context.Response.Close();
+                return;
+            }
+
+            string sessionId = GetSessionId(context) ?? "";
+            if (String.IsNullOrEmpty(sessionId) || !_Sessions.TryGetValue(sessionId, out ClientConnection? connection))
+            {
+                context.Response.StatusCode = 400;
+                byte[] errorBytes = Encoding.UTF8.GetBytes("Missing or invalid session ID");
+                await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+                context.Response.Close();
+                return;
+            }
+
+            // Set up SSE headers
+            if (_EnableCors)
+            {
+                context.Response.AddHeader("Access-Control-Allow-Origin", "*");
+            }
+
+            context.Response.ContentType = "text/event-stream";
+            context.Response.AddHeader("Cache-Control", "no-cache");
+            context.Response.AddHeader("Connection", "keep-alive");
+            context.Response.SendChunked = true;
+
+            LogMessage($"SSE connection established for session {sessionId}");
+
+            try
+            {
+                await SendSsePreludeAsync(context.Response, token).ConfigureAwait(false);
+
+                // Keep connection alive and send notifications
+                while (!token.IsCancellationRequested)
+                {
+                    using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                    {
+                        timeoutCts.CancelAfter(_SseHeartbeatInterval);
+
+                        try
+                        {
+                            JsonRpcRequest? notification = await connection.DequeueAsync(timeoutCts.Token).ConfigureAwait(false);
+
+                            if (notification != null)
+                            {
+                                await SendSseNotificationAsync(context.Response, notification, token).ConfigureAwait(false);
+                            }
+                        }
+                        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                        {
+                            await SendSseKeepAliveAsync(context.Response, token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"SSE error for session {sessionId}: {ex.Message}");
+            }
+            finally
+            {
+                context.Response.Close();
+                LogMessage($"SSE connection closed for session {sessionId}");
+            }
+        }
+
+        private async Task SendSsePreludeAsync(HttpListenerResponse response, CancellationToken token)
+        {
+            await response.OutputStream.WriteAsync(_SseConnectedPrelude, 0, _SseConnectedPrelude.Length, token).ConfigureAwait(false);
+            await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        private async Task SendSseNotificationAsync(HttpListenerResponse response, JsonRpcRequest notification, CancellationToken token)
+        {
+            string json = JsonSerializer.Serialize(notification);
+            string sseMessage = $"data: {json}\n\n";
+            byte[] buffer = Encoding.UTF8.GetBytes(sseMessage);
+
+            await response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        private async Task SendSseKeepAliveAsync(HttpListenerResponse response, CancellationToken token)
+        {
+            await response.OutputStream.WriteAsync(_SseKeepAliveComment, 0, _SseKeepAliveComment.Length, token).ConfigureAwait(false);
+            await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        private async Task<JsonRpcResponse> ProcessRpcRequestAsync(ClientConnection connection, string requestString, CancellationToken token = default)
+        {
+            ServerPendingRequest? pendingRequest = null;
+
+            try
+            {
+                JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString);
+                if (request == null)
+                {
+                    JsonRpcResponse invalidResponse = new JsonRpcResponse
+                    {
+                        Error = JsonRpcError.InvalidRequest(),
+                        Id = null
+                    };
+                    RaiseResponseSent(connection, null, invalidResponse);
+                    return invalidResponse;
+                }
+
+                pendingRequest = new ServerPendingRequest(request.Id, connection, request);
+                RaiseRequestReceived(pendingRequest);
+
+                JsonRpcResponse response;
+
+                if (_Methods.ContainsKey(request.Method))
+                {
+                    try
+                    {
+                        JsonElement? paramsElement = null;
+                        if (request.Params is JsonElement jsonElement)
+                        {
+                            paramsElement = jsonElement;
+                        }
+
+                        object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
+                        response = new JsonRpcResponse
+                        {
+                            Result = result,
+                            Id = request.Id
+                        };
+                    }
+                    catch (Exception ex)
+                    {
+                        JsonRpcError error = ex is McpProtocolException protocolException
+                            ? protocolException.ToJsonRpcError()
+                            : new JsonRpcError
+                            {
+                                Code = -32603,
+                                Message = "Internal error",
+                                Data = ex.Message
+                            };
+
+                        response = new JsonRpcResponse
+                        {
+                            Error = error,
+                            Id = request.Id
+                        };
+                    }
+                }
+                else
+                {
+                    response = new JsonRpcResponse
+                    {
+                        Error = JsonRpcError.MethodNotFound(),
+                        Id = request.Id
+                    };
+                }
+
+                RaiseResponseSent(connection, pendingRequest, response);
+                return response;
+            }
+            catch (JsonException)
+            {
+                JsonRpcResponse parseErrorResponse = new JsonRpcResponse
+                {
+                    Error = JsonRpcError.ParseError(),
+                    Id = null
+                };
+                RaiseResponseSent(connection, null, parseErrorResponse);
+                return parseErrorResponse;
+            }
+        }
+
+        private async Task CleanupSessionsLoop(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(60), token).ConfigureAwait(false);
+
+                    DateTime expirationTime = DateTime.UtcNow.AddSeconds(-_SessionTimeoutSeconds);
+
+                    List<string> expiredSessions = _Sessions
+                        .Where(kvp => kvp.Value.LastActivity < expirationTime)
+                        .Select(kvp => kvp.Key)
+                        .ToList();
+
+                    foreach (string sessionId in expiredSessions)
+                    {
+                        RemoveSession(sessionId);
+                        LogMessage($"Expired session: {sessionId}");
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"Session cleanup error: {ex.Message}");
+                }
+            }
+        }
+
+        private void RaiseClientConnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientConnected != null)
+            {
+                foreach (Delegate handler in ClientConnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseClientDisconnected(ClientConnection client)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ClientDisconnected != null)
+            {
+                foreach (Delegate handler in ClientDisconnected.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<ClientConnection>)handler)(this, client);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseRequestReceived(ServerPendingRequest pendingRequest)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (RequestReceived != null)
+            {
+                JsonRpcRequestEventArgs eventArgs = new JsonRpcRequestEventArgs(pendingRequest);
+                foreach (Delegate handler in RequestReceived.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcRequestEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void RaiseResponseSent(ClientConnection connection, ServerPendingRequest? pendingRequest, JsonRpcResponse response)
+        {
+            // Invoke each handler individually to ensure exception isolation
+            if (ResponseSent != null)
+            {
+                JsonRpcResponseEventArgs eventArgs;
+                if (pendingRequest != null)
+                {
+                    eventArgs = new JsonRpcResponseEventArgs(pendingRequest, response);
+                }
+                else
+                {
+                    // Create a minimal request for error cases where we don't have a pendingRequest
+                    JsonRpcRequest dummyRequest = new JsonRpcRequest { Method = "unknown", Id = response.Id };
+                    eventArgs = new JsonRpcResponseEventArgs(connection, dummyRequest, response, DateTime.UtcNow);
+                }
+
+                foreach (Delegate handler in ResponseSent.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<JsonRpcResponseEventArgs>)handler)(this, eventArgs);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in event handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+
+        private void LogMessage(string message)
+        {
+            string formattedMessage = $"[{DateTime.UtcNow:HH:mm:ss.fffZ}] {message}";
+
+            // Invoke each handler individually to ensure exception isolation
+            if (Log != null)
+            {
+                foreach (Delegate handler in Log.GetInvocationList())
+                {
+                    try
+                    {
+                        ((EventHandler<string>)handler)(this, formattedMessage);
+                    }
+                    catch
+                    {
+                        // Swallow exceptions in log handlers to prevent cascading failures
+                    }
+                }
+            }
+        }
+    }
+}

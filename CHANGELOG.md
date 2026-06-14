@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.4.0
+- Breaking pre-1.0 namespace change: moved shared JSON-RPC/core APIs to `Voltaic.Core` and MCP APIs to `Voltaic.Mcp`
+- Added `Voltaic.A2A` for A2A v1.0 Agent Card models, task/message/artifact models, security declarations, push notification config models, and protocol errors
+- Added dependency-light `A2AClient` for JSON-RPC over HTTP with `A2A-Version: 1.0` and SSE streaming support
+- Added dependency-light `A2AHttpJsonClient` for the A2A HTTP+JSON binding without depending on ASP.NET Core or `System.Net.ServerSentEvents`
+- Added dependency-light `A2AGrpcClient` and Watson-backed `A2AGrpcServer` for A2A gRPC over HTTP/2 without ASP.NET Core
+- Added `A2ACardResolver` for `/.well-known/agent-card.json` discovery
+- Added `A2AHttpServer` on `HttpListener` with public and extended Agent Cards, JSON-RPC, HTTP+JSON REST routes, SSE streaming, task projection, in-memory task storage, live task subscriptions, CORS, optional auth, push notification config storage, and return-immediately handling
+- Added `IA2AAgentHandler`, `A2AAgentEventQueue`, `A2ATaskUpdater`, `IA2ATaskStore`, and `InMemoryA2ATaskStore` for direct-style agent implementation
+- Added official `a2a-dotnet` compatibility coverage based on inspected source commit `8fe65cfaa65a72b2d63bc9bef2e2d32fddc12a18`, including JSON-RPC method/envelope/header checks, HTTP+JSON route/body checks, official-style server request acceptance, and SSE parsing
+- Added A2A Touchstone suites covering serialization, Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, task lifecycle, push notification config CRUD, extended Agent Cards, return-immediately behavior, and compatibility oracle checks
+- Added `Sample.A2AServer`, `Test.A2AServer`, and `Test.A2AClient`
+- Reorganized library source under `src/Voltaic/Core`, `src/Voltaic/Mcp`, and `src/Voltaic/A2A`, including A2A protobuf definitions under `src/Voltaic/A2A/Protos`
+- Updated README, package metadata, API coverage documentation, and source-layout tests for the new namespace layout and A2A support
+
 ## v0.3.0
 - Updated package version and MCP default protocol version to `2025-11-25`, while retaining `2025-03-26` negotiation support
 - Added shared MCP endpoint infrastructure for tools, resources, prompts, capability reporting, pagination, and protocol validation errors

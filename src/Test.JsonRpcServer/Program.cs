@@ -1,12 +1,12 @@
-﻿namespace Test.JsonRpcServer
+namespace Test.JsonRpcServer
 {
     using System;
     using System.Net;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     class Program
     {
         static async Task Main(string[] args)

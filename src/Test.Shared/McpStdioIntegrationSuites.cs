@@ -3,8 +3,8 @@ namespace Test.Shared
     using System.Diagnostics;
     using System.Text.Json;
     using Touchstone.Core;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     public static class McpStdioIntegrationSuites
     {
         public static TestSuiteDescriptor StdioMcpParity()

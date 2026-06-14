@@ -1,8 +1,8 @@
 namespace Test.Shared
 {
     using Touchstone.Core;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     public static class ClientConnectionSuites
     {
         public static TestSuiteDescriptor QueueAndLifecycle()

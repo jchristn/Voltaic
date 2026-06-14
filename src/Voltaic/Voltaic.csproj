@@ -1,7 +1,7 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>0.3.0</Version>
+		<Version>0.4.0</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -11,15 +11,15 @@
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<Title>Voltaic</Title>
 		<Authors>jchristn</Authors>
-		<Description>Voltaic is an open source JSON-RPC 2.0 and MCP client and server.</Description>
+		<Description>Voltaic is an open source, dependency-light JSON-RPC 2.0, MCP, and A2A client/server library.</Description>
 		<Copyright>(c)2025 Joel Christner</Copyright>
 		<PackageProjectUrl>https://github.com/jchristn/Voltaic</PackageProjectUrl>
 		<PackageIcon>logo.png</PackageIcon>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
-		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;client;server;tcp;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;schema</PackageTags>
-		<PackageReleaseNotes>v0.3.0: Targets MCP 2025-11-25 with expanded tool/resource/prompt models, Streamable HTTP header handling, completions, logging utilities, resource subscriptions, schema validation, and Touchstone console/xUnit/NUnit coverage.</PackageReleaseNotes>
+		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
+		<PackageReleaseNotes>v0.4.0: Splits public APIs into Voltaic.Core, Voltaic.Mcp, and Voltaic.A2A; adds dependency-light A2A v1.0 Agent Card discovery, JSON-RPC, HTTP+JSON, and gRPC clients/servers, SSE streaming, task lifecycle, push notification config APIs, extended Agent Cards, official-SDK compatibility tests, samples, and expanded Touchstone coverage.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -27,6 +27,16 @@
 
 	<ItemGroup>
 		<Content Include="logo.ico" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Google.Protobuf" Version="3.35.1" />
+		<PackageReference Include="Grpc.Tools" Version="2.81.1" PrivateAssets="All" />
+		<PackageReference Include="Watson" Version="7.0.14" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Protobuf Include="A2A\Protos\a2a.proto" GrpcServices="None" Access="Internal" />
 	</ItemGroup>
 
 	<ItemGroup>

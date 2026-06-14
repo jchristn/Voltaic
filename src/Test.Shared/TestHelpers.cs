@@ -6,8 +6,8 @@ namespace Test.Shared
     using System.Net.WebSockets;
     using System.Text;
     using System.Text.Json;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     internal static class TestPorts
     {
         public static int GetFreePort()

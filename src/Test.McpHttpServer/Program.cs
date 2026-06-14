@@ -5,8 +5,8 @@ namespace Test.McpHttpServer
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
-    using Voltaic;
-
+    using Voltaic.Core;
+    using Voltaic.Mcp;
     class Program
     {
 #pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously

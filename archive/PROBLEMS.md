@@ -65,7 +65,7 @@ That currently does not happen reliably.
 
 #### Root cause 1: no immediate SSE prelude is sent on `/mcp` or `/events`
 
-In `src/Voltaic/McpHttpServer.cs`, both of these methods:
+In `src/Voltaic/Mcp/McpHttpServer.cs`, both of these methods:
 
 - `HandleMcpRequestAsync`
 - `HandleSseRequestAsync`
@@ -82,7 +82,7 @@ For streamable HTTP clients, this is too late.
 
 #### Root cause 2: `ClientConnection.DequeueAsync` swallows timeout cancellation
 
-In `src/Voltaic/ClientConnection.cs`, `DequeueAsync` catches `OperationCanceledException` and returns `null`.
+In `src/Voltaic/Core/ClientConnection.cs`, `DequeueAsync` catches `OperationCanceledException` and returns `null`.
 
 That breaks the intended keep-alive behavior in `McpHttpServer`.
 
@@ -213,7 +213,7 @@ This test should fail on the current implementation and pass after Fix 2 + Fix 3
 
 #### Fix 6: tighten `McpHttpClient` streamable HTTP validation
 
-`src/Voltaic/McpHttpClient.cs` has an important blind spot:
+`src/Voltaic/Mcp/McpHttpClient.cs` has an important blind spot:
 
 - `ConnectStreamableAsync` only validates the POST side of `/mcp`
 - it does not prove that the SSE stream is live

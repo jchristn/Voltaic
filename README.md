@@ -6,11 +6,11 @@
 
 [![NuGet](https://img.shields.io/nuget/v/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![Downloads](https://img.shields.io/nuget/dt/Voltaic.svg)](https://www.nuget.org/packages/Voltaic/) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md) [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4.svg)](https://dotnet.microsoft.com/)
 
-**Modern, lightweight JSON-RPC 2.0 and Model Context Protocol (MCP) implementations for .NET 8.0 and .NET 10.0**
+**Modern, lightweight JSON-RPC 2.0, Model Context Protocol (MCP), and Agent2Agent (A2A) implementations for .NET 8.0 and .NET 10.0**
 
-Voltaic gives .NET applications a small, direct way to expose and consume structured RPC APIs. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or multiple MCP transports without adopting a larger application framework.
+Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v0.3.0 targets MCP protocol version `2025-11-25` and keeps compatibility helpers for `2025-03-26`.
+Voltaic v0.4.0 targets MCP protocol version `2025-11-25` and A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 ---
 
@@ -22,6 +22,7 @@ Voltaic is a protocol library, not an application framework. It provides:
 - MCP stdio servers and clients for subprocess-hosted tools
 - MCP Streamable HTTP on `/mcp` with `MCP-Session-Id` sessions and SSE notifications
 - MCP TCP and WebSocket transports for networked or full-duplex scenarios
+- A2A Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, SSE streaming, task lifecycle, push notification config APIs, and extended Agent Cards
 - Shared request/response, notification, lifecycle, and event handling across transports
 
 You bring your business logic. Voltaic handles the protocol surface, message framing, method dispatch, session headers, and transport-specific plumbing.
@@ -35,7 +36,8 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Handle MCP `initialize`, `tools/list`, `tools/call`, `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, and utility notifications.
 - Send list-changed, resource-updated, progress, cancellation, and log-message notifications where the transport supports server-to-client notifications.
 - Host HTTP compatibility endpoints (`/rpc` and `/events`) alongside the current Streamable HTTP endpoint (`/mcp`).
-- Run the same 253-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+- Expose and consume A2A agents through dependency-light `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2AHttpServer`, and `A2AGrpcServer` classes without ASP.NET Core.
+- Run the same 274-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
 
 ## MCP Endpoint Requirements
 
@@ -67,11 +69,28 @@ Server feature endpoints are capability-driven. If your server advertises a capa
 
 Voltaic registers the protocol methods for its MCP server types when default methods are enabled. Your application registers the handlers and data behind those methods with `RegisterTool`, `RegisterResource`, `RegisterResourceTemplate`, `RegisterPrompt`, and `RegisterCompletionProvider`.
 
+## A2A Endpoint Requirements
+
+A2A support lives in the `Voltaic.A2A` namespace. It follows the A2A v1.0 JSON wire shape used by the official `a2a-dotnet` SDK while keeping Voltaic's direct, dependency-light style.
+
+- Public Agent Card discovery: `GET /.well-known/agent-card.json`.
+- Version header sent by Voltaic clients: `A2A-Version: 1.0`.
+- JSON-RPC endpoint: configurable, default `/a2a`.
+- JSON-RPC methods: `SendMessage`, `SendStreamingMessage`, `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`, push notification config CRUD, and `GetExtendedAgentCard`.
+- HTTP+JSON routes: `POST /message:send`, `POST /message:stream`, `GET /tasks/{id}`, `GET /tasks`, `POST /tasks/{id}:cancel`, `POST /tasks/{id}:subscribe`, `/tasks/{id}/pushNotificationConfigs`, and `GET /extendedAgentCard`.
+- gRPC service: `lf.a2a.v1.A2AService` over HTTP/2, with unary and server-streaming RPCs matching the A2A v1 service shape.
+- Streaming methods use SSE with `data:` events. JSON-RPC streaming sends JSON-RPC response envelopes; HTTP+JSON streaming sends direct `StreamResponse` payloads.
+
+`A2AHttpServer` is built on `HttpListener`, not ASP.NET Core. It hosts Agent Card discovery, JSON-RPC, HTTP+JSON, SSE streams, task projection, in-memory task storage, push notification configuration storage, CORS, and an optional authentication hook. Applications provide agent behavior through `IA2AAgentHandler`.
+
+`A2AGrpcServer` is built on the Watson HTTP/2 server package, not ASP.NET Core. `A2AGrpcClient` uses plain `HttpClient` with gRPC framing and protobuf messages.
+
 ## Why Use Voltaic?
 
 - **Small API surface**: Register handlers and start a transport; avoid framework-level ceremony.
 - **Current MCP coverage**: Tools, resources, prompts, completions, Streamable HTTP, sessions, and utility notifications are first-class.
-- **Transport choice**: Use stdio for local MCP servers, Streamable HTTP for MCP clients and inspectors, TCP for service-to-service RPC, or WebSockets for full-duplex web-facing systems.
+- **A2A coverage**: Agent Cards, JSON-RPC, HTTP+JSON, gRPC, task lifecycle, streaming, push config APIs, and extended Agent Cards are first-class.
+- **Transport choice**: Use stdio for local MCP servers, Streamable HTTP for MCP clients and inspectors, TCP for service-to-service RPC, WebSockets for full-duplex web-facing systems, or HTTP/SSE/gRPC for A2A agents.
 - **Plain .NET**: Works with normal C# delegates, `System.Text.Json`, `Task`, `CancellationToken`, and `IDisposable`.
 - **Testable behavior**: Protocol behavior is covered by shared Touchstone descriptors and adapter-backed test projects.
 
@@ -80,7 +99,7 @@ Voltaic registers the protocol methods for its MCP server types when default met
 Voltaic is designed for developers building:
 
 - AI assistant integrations that need to expose MCP tools, resources, prompts, or completions from .NET.
-- Services that need structured JSON-RPC calls without REST resource modeling or gRPC contracts.
+- Services that need structured JSON-RPC calls, REST-style HTTP+JSON routes, or a small gRPC binding without adopting a large hosting framework.
 - Local agents, CLIs, and desktop tools that launch MCP subprocesses over stdio.
 - Language-server-style protocols that use `Content-Length` message framing.
 - Web integrations that need Streamable HTTP, SSE notifications, or WebSocket communication.
@@ -94,6 +113,123 @@ Voltaic is designed for developers building:
 
 ```bash
 dotnet add package Voltaic
+```
+
+### A2A Server Example
+
+```csharp
+using Voltaic.A2A;
+
+string baseUrl = "http://localhost:8080";
+
+AgentCard card = new AgentCard
+{
+    Name = "Echo Agent",
+    Description = "A simple Voltaic A2A agent.",
+    Version = "1.0.0",
+    SupportedInterfaces = new List<AgentInterface>
+    {
+        new AgentInterface { Url = baseUrl + "/a2a", ProtocolBinding = "JSONRPC" },
+        new AgentInterface { Url = baseUrl, ProtocolBinding = "HTTP+JSON" },
+        new AgentInterface { Url = "http://localhost:8081", ProtocolBinding = "GRPC" }
+    },
+    Capabilities = new AgentCapabilities
+    {
+        Streaming = true,
+        PushNotifications = true,
+        StateTransitionHistory = true,
+        ExtendedAgentCard = true
+    },
+    Skills = new List<AgentSkill>
+    {
+        new AgentSkill { Id = "echo", Name = "Echo", Description = "Echoes text." }
+    },
+    DefaultInputModes = new List<string> { "text/plain" },
+    DefaultOutputModes = new List<string> { "text/plain" }
+};
+
+using A2AHttpServer server = new A2AHttpServer("localhost", 8080, card, new EchoAgent())
+{
+    ExtendedAgentCard = card
+};
+using A2AGrpcServer grpcServer = new A2AGrpcServer("localhost", 8081, card, new EchoAgent())
+{
+    ExtendedAgentCard = card
+};
+
+await server.StartAsync();
+await grpcServer.StartAsync();
+Console.WriteLine("A2A server listening on http://localhost:8080");
+Console.WriteLine("A2A gRPC listening on http://localhost:8081");
+await Task.Delay(Timeout.Infinite);
+
+sealed class EchoAgent : IA2AAgentHandler
+{
+    public async Task ExecuteAsync(A2ARequestContext context, A2AAgentEventQueue eventQueue, CancellationToken token)
+    {
+        A2ATaskUpdater updater = new A2ATaskUpdater(eventQueue, context.TaskId, context.ContextId);
+        await updater.SubmitAsync(token: token);
+        await updater.StartAsync(token: token);
+
+        string text = context.Message.Parts.FirstOrDefault()?.Text ?? string.Empty;
+        Message response = new Message
+        {
+            Role = Role.Agent,
+            MessageId = Guid.NewGuid().ToString("N"),
+            TaskId = context.TaskId,
+            ContextId = context.ContextId,
+            Parts = new List<Part> { Part.FromText("echo: " + text) }
+        };
+
+        await updater.CompleteAsync(response, token);
+    }
+}
+```
+
+### A2A Client Example
+
+```csharp
+using Voltaic.A2A;
+
+using HttpClient http = new HttpClient();
+using A2ACardResolver resolver = new A2ACardResolver(http);
+AgentCard card = await resolver.GetAgentCardAsync("http://localhost:8080");
+
+AgentInterface jsonRpc = card.SupportedInterfaces.First(item => item.ProtocolBinding == "JSONRPC");
+using A2AClient client = new A2AClient(jsonRpc.Url, http);
+
+SendMessageRequest request = new SendMessageRequest
+{
+    Message = new Message
+    {
+        Role = Role.User,
+        MessageId = Guid.NewGuid().ToString("N"),
+        Parts = new List<Part> { Part.FromText("hello") }
+    }
+};
+
+SendMessageResponse response = await client.SendMessageAsync(request);
+Console.WriteLine(response.Task?.Status.State);
+
+await foreach (StreamResponse item in client.SendStreamingMessageAsync(request))
+{
+    Console.WriteLine(item.StatusUpdate?.Status.State);
+}
+
+AgentInterface httpJson = card.SupportedInterfaces.First(item => item.ProtocolBinding == "HTTP+JSON");
+using A2AHttpJsonClient restClient = new A2AHttpJsonClient(httpJson.Url, http);
+SendMessageResponse restResponse = await restClient.SendMessageAsync(request);
+Console.WriteLine(restResponse.Task?.Id);
+
+AgentInterface? grpc = card.SupportedInterfaces.FirstOrDefault(item => item.ProtocolBinding == "GRPC");
+if (grpc != null)
+{
+    AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+    using HttpClient grpcHttp = new HttpClient(new SocketsHttpHandler { EnableMultipleHttp2Connections = true });
+    using A2AGrpcClient grpcClient = new A2AGrpcClient(grpc.Url, grpcHttp);
+    SendMessageResponse grpcResponse = await grpcClient.SendMessageAsync(request);
+    Console.WriteLine(grpcResponse.Task?.Id);
+}
 ```
 
 ### End-to-End MCP Example (Streamable HTTP)
@@ -116,7 +252,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 using McpHttpServer server = new McpHttpServer("localhost", 8080)
 {
@@ -254,7 +391,8 @@ dotnet add package Voltaic
 Replace `Program.cs`:
 
 ```csharp
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 using McpHttpClient client = new McpHttpClient();
 
@@ -357,7 +495,8 @@ The server registrations above are the handlers behind the MCP endpoints:
 ```csharp
 using System.Net;
 using System.Text.Json;
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 JsonRpcServer server = new JsonRpcServer(IPAddress.Any, 8080);
 
@@ -407,7 +546,8 @@ await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ### JSON-RPC Client (TCP)
 
 ```csharp
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 JsonRpcClient client = new JsonRpcClient();
 
@@ -516,7 +656,8 @@ server.RegisterCompletionProvider("ref/prompt", "summarize", "topic",
 
 ```csharp
 using System.Text.Json;
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpServer server = new McpServer();
 
@@ -564,7 +705,8 @@ await server.RunAsync();
 ### MCP Client (stdio)
 
 ```csharp
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpClient client = new McpClient();
 
@@ -581,7 +723,8 @@ Console.WriteLine(response.Result);
 ```csharp
 using System.Net;
 using System.Text.Json;
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpTcpServer server = new McpTcpServer(IPAddress.Any, 8080);
 
@@ -621,7 +764,8 @@ await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ### MCP Client (TCP)
 
 ```csharp
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpTcpClient client = new McpTcpClient();
 
@@ -641,7 +785,8 @@ Console.WriteLine(tools);
 
 ```csharp
 using System.Text.Json;
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpHttpServer server = new McpHttpServer("localhost", 8080);
 
@@ -688,7 +833,8 @@ Set `mcpPath: null` in the constructor if you want to disable the Streamable HTT
 ### MCP Client (HTTP)
 
 ```csharp
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpHttpClient client = new McpHttpClient();
 
@@ -706,7 +852,8 @@ Console.WriteLine(result);
 ### MCP Client (Streamable HTTP)
 
 ```csharp
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpHttpClient client = new McpHttpClient();
 
@@ -727,7 +874,8 @@ Console.WriteLine(result);
 
 ```csharp
 using System.Text.Json;
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpWebsocketsServer server = new McpWebsocketsServer("localhost", 8080);
 
@@ -767,7 +915,8 @@ await Task.Delay(Timeout.Infinite, server.TokenSource.Token);
 ### MCP Client (WebSocket)
 
 ```csharp
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpWebsocketsClient client = new McpWebsocketsClient();
 
@@ -794,7 +943,8 @@ await client.NotifyAsync("log", new { message = "Hello from WebSocket client" })
 
 ```csharp
 using System.Net;
-using Voltaic;
+using Voltaic.Core;
+using Voltaic.Mcp;
 
 McpHttpServer server = new McpHttpServer("localhost", 8080);
 
@@ -839,7 +989,7 @@ Full authorization flows, such as OAuth 2.1 from the MCP specification, remain t
 
 Voltaic might not be the right fit if you need:
 
-- **gRPC Features**: If you need streaming, advanced load balancing, or language-agnostic service definitions, use gRPC
+- **Advanced gRPC Ecosystem Features**: If you need code-first service hosting, interceptors, advanced load balancing, or broad gRPC framework integration, use a dedicated gRPC stack
 - **REST Conventions**: If you need resource-oriented APIs with standard HTTP verbs, use web APIs or a REST microservice
 - **High-level Abstractions**: Voltaic is a protocol library, not a framework; you'll write your own business logic
 
@@ -884,7 +1034,10 @@ Check out the `src/Test.*` projects for working examples:
 - **Test.McpHttpServer** / **Test.McpHttpClient**: MCP HTTP with SSE examples
 - **Test.McpWebsocketsServer** / **Test.McpWebsocketsClient**: MCP WebSocket examples
 - **Sample.McpServer**: MCP tool, structured-output, resource, template, and prompt sample
-- **Test.Shared**: Shared Touchstone descriptors and the central 253-case API/protocol matrix
+- **Sample.A2AServer**: A2A Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended-card sample
+- **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
+- **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
+- **Test.Shared**: Shared Touchstone descriptors and the central 274-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -910,6 +1063,17 @@ dotnet run --project src/Test.McpWebsocketsServer/Test.McpWebsocketsServer.cspro
 
 # MCP WebSocket Client
 dotnet run --project src/Test.McpWebsocketsClient/Test.McpWebsocketsClient.csproj -- 8080
+
+# A2A sample server
+# Starts JSON-RPC and HTTP+JSON on the selected port, and gRPC on port + 1
+dotnet run --project src/Sample.A2AServer/Sample.A2AServer.csproj -- 8080
+
+# A2A manual server
+# Starts JSON-RPC and HTTP+JSON on the selected port, and gRPC on port + 1
+dotnet run --project src/Test.A2AServer/Test.A2AServer.csproj -- 8080
+
+# A2A manual client
+dotnet run --project src/Test.A2AClient/Test.A2AClient.csproj -- http://localhost:8080 "hello from A2A"
 ```
 
 ### Connecting with MCP Inspector
@@ -949,13 +1113,15 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 253 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 274 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json
 
 # Filter by descriptor tag
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --tag mcp
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --tag a2a
+dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --tag compatibility
 
 # Run adapter-backed tests
 dotnet test src/Test.Xunit/Test.Xunit.csproj --framework net8.0
@@ -969,15 +1135,20 @@ dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.
 
 ## API Surface
 
-All public types are in the `Voltaic` namespace. The main entry points are:
+Public types are grouped by protocol namespace:
 
-- `JsonRpcServer` / `JsonRpcClient` for TCP JSON-RPC 2.0.
-- `McpServer` / `McpClient` for stdio MCP servers and subprocess clients.
-- `McpHttpServer` / `McpHttpClient` for HTTP MCP, including Streamable HTTP on `/mcp`.
-- `McpTcpServer` / `McpTcpClient` for MCP over TCP framing.
-- `McpWebsocketsServer` / `McpWebsocketsClient` for MCP over WebSockets.
+- `Voltaic.Core`: `JsonRpcServer`, `JsonRpcClient`, JSON-RPC request/response/error models, TCP framing, connection models, and shared authentication/error helpers.
+- `Voltaic.Mcp`: MCP stdio, HTTP, TCP, and WebSocket clients/servers plus MCP tools, resources, prompts, completions, capabilities, and utility models.
+- `Voltaic.A2A`: A2A Agent Cards, task/message/artifact models, `A2AClient`, `A2AHttpJsonClient`, `A2ACardResolver`, `A2AHttpServer`, task storage, event queue, updater, and protocol errors.
 
-The core server pattern is the same across transports: configure identity, register methods/tools/resources/prompts/completions, subscribe to lifecycle events if needed, then start the server. Clients connect, call JSON-RPC methods with `CallAsync`, send notifications with `NotifyAsync`, and dispose when finished.
+The library source mirrors those namespaces:
+
+- `src/Voltaic/Core`: shared JSON-RPC, framing, connection, authentication, and event types.
+- `src/Voltaic/Mcp`: MCP protocol models, endpoint infrastructure, clients, and servers.
+- `src/Voltaic/A2A`: A2A protocol models, clients, servers, task infrastructure, JSON helpers, and gRPC wire support.
+- `src/Voltaic/A2A/Protos`: the A2A protobuf contract used by the internal gRPC binding.
+
+The core server pattern is the same across protocols: configure identity, register handlers or capabilities, subscribe to lifecycle events if needed, then start the server. Clients connect, call protocol methods, stream SSE events where supported, and dispose when finished.
 
 For exact overloads and model types, use your IDE's IntelliSense, the generated XML documentation in `src/Voltaic/Voltaic.xml`, and the sample/test projects listed above. `src/Test.Shared/API_COVERAGE.md` tracks the public API areas covered by the Touchstone suite.
 
