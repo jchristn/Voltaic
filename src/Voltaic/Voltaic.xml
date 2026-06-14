@@ -96,10 +96,10 @@
             </summary>
         </member>
         <member name="T:Voltaic.A2A.Grpc.A2AReflection">
-            <summary>Holder for reflection information generated from Protos/a2a.proto</summary>
+            <summary>Holder for reflection information generated from A2A/Protos/a2a.proto</summary>
         </member>
         <member name="P:Voltaic.A2A.Grpc.A2AReflection.Descriptor">
-            <summary>File descriptor for Protos/a2a.proto</summary>
+            <summary>File descriptor for A2A/Protos/a2a.proto</summary>
         </member>
         <member name="F:Voltaic.A2A.Grpc.SendMessageConfiguration.AcceptedOutputModesFieldNumber">
             <summary>Field number for the "accepted_output_modes" field.</summary>

@@ -1,5 +1,6 @@
 namespace Test.Shared
 {
+    using System.IO;
     using System.Reflection;
     using System.Text.Json.Serialization;
     using Touchstone.Core;
@@ -228,6 +229,68 @@ namespace Test.Shared
                         AssertJsonProperty<McpLogMessageNotification>(nameof(McpLogMessageNotification.Level), "level");
                         return Task.CompletedTask;
                     }),
+
+                    Case(suiteId, "SourceLayoutMatchesPublicNamespaces", "Library source files stay grouped by Core, MCP, and A2A namespace folders", ct =>
+                    {
+                        DirectoryInfo repositoryRoot = LocateRepositoryRoot();
+                        string libraryRoot = Path.Combine(repositoryRoot.FullName, "src", "Voltaic");
+                        string[] expectedFolders = { "A2A", "Core", "Mcp" };
+
+                        foreach (string expectedFolder in expectedFolders)
+                        {
+                            TestAssert.True(
+                                Directory.Exists(Path.Combine(libraryRoot, expectedFolder)),
+                                $"Expected src/Voltaic/{expectedFolder} to exist.");
+                        }
+
+                        TestAssert.False(
+                            Directory.Exists(Path.Combine(libraryRoot, "Protos")),
+                            "A2A proto definitions should live under src/Voltaic/A2A/Protos.");
+                        TestAssert.True(
+                            File.Exists(Path.Combine(libraryRoot, "A2A", "Protos", "a2a.proto")),
+                            "A2A proto definitions should be physically grouped with the A2A implementation.");
+
+                        string[] rootSourceFiles = Directory.GetFiles(libraryRoot, "*.cs", SearchOption.TopDirectoryOnly)
+                            .Select(path => Path.GetFileName(path)!)
+                            .OrderBy(name => name, StringComparer.Ordinal)
+                            .ToArray()!;
+                        TestAssert.Equal(String.Empty, String.Join(",", rootSourceFiles), "No C# library sources should remain in src/Voltaic root.");
+
+                        string[] sourceFiles = Directory.GetFiles(libraryRoot, "*.cs", SearchOption.AllDirectories)
+                            .Where(path => !Path.GetRelativePath(libraryRoot, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Contains("bin"))
+                            .Where(path => !Path.GetRelativePath(libraryRoot, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Contains("obj"))
+                            .OrderBy(path => path, StringComparer.Ordinal)
+                            .ToArray();
+
+                        TestAssert.True(sourceFiles.Length > 0, "Expected library source files to be present.");
+
+                        foreach (string sourceFile in sourceFiles)
+                        {
+                            string relativePath = Path.GetRelativePath(libraryRoot, sourceFile);
+                            string topFolder = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
+                            TestAssert.True(
+                                expectedFolders.Contains(topFolder),
+                                $"{relativePath} should be under Core, Mcp, or A2A.");
+
+                            string? declaredNamespace = File.ReadLines(sourceFile)
+                                .Select(line => line.Trim())
+                                .FirstOrDefault(line => line.StartsWith("namespace ", StringComparison.Ordinal));
+                            TestAssert.NotNull(declaredNamespace, $"{relativePath} should declare a namespace.");
+
+                            string expectedFolder = declaredNamespace switch
+                            {
+                                string value when value.StartsWith("namespace Voltaic.Core", StringComparison.Ordinal) => "Core",
+                                string value when value.StartsWith("namespace Voltaic.Mcp", StringComparison.Ordinal) => "Mcp",
+                                string value when value.StartsWith("namespace Voltaic.A2A", StringComparison.Ordinal) => "A2A",
+                                _ => String.Empty
+                            };
+
+                            TestAssert.True(expectedFolder.Length > 0, $"{relativePath} should use a Voltaic.Core, Voltaic.Mcp, or Voltaic.A2A namespace.");
+                            TestAssert.Equal(expectedFolder, topFolder, $"{relativePath} should live under the folder matching its public namespace.");
+                        }
+
+                        return Task.CompletedTask;
+                    }),
                 });
         }
 
@@ -248,6 +311,25 @@ namespace Test.Shared
             JsonPropertyNameAttribute? attribute = property!.GetCustomAttribute<JsonPropertyNameAttribute>();
             TestAssert.NotNull(attribute, $"{typeof(T).Name}.{propertyName} should declare JsonPropertyName.");
             TestAssert.Equal(expectedWireName, attribute!.Name);
+        }
+
+        private static DirectoryInfo LocateRepositoryRoot()
+        {
+            foreach (string startPath in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+            {
+                DirectoryInfo? directory = new DirectoryInfo(startPath);
+                while (directory != null)
+                {
+                    if (File.Exists(Path.Combine(directory.FullName, "src", "Voltaic", "Voltaic.csproj")))
+                    {
+                        return directory;
+                    }
+
+                    directory = directory.Parent;
+                }
+            }
+
+            throw new InvalidOperationException("Unable to locate repository root from the current test context.");
         }
 
         private static TestCaseDescriptor Case(

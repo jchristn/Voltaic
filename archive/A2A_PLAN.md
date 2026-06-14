@@ -12,6 +12,7 @@ Status legend:
 - `[x]` Versioning: this is pre-1.0; increment the minor package version from `0.3.0` to `0.4.0`.
 - `[x]` Packaging: keep one NuGet package named `Voltaic`.
 - `[x]` Namespaces: refactor public APIs into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+- `[x]` Source layout: mirror the public API split with `src/Voltaic/Core`, `src/Voltaic/Mcp`, and `src/Voltaic/A2A`.
 - `[x]` Dependencies: keep the library dependency-light and avoid ASP.NET Core.
 - `[x]` A2A API style: use Voltaic's direct client/server style rather than framework-driven hosting.
 - `[x]` Compatibility oracle: treat the official `a2a-dotnet` SDK as the behavioral and wire-format compatibility oracle.
@@ -58,10 +59,12 @@ Status legend:
   - `ServerPendingRequest`
   - `MessageFraming`
   - `AuthenticationResult`
+- `[x]` Move JSON-RPC and transport-neutral source files under `src/Voltaic/Core`.
 - `[x]` Move all MCP-specific types to `Voltaic.Mcp`.
   - `Mcp*`
   - `ToolDefinition`
   - `McpEndpoint`
+- `[x]` Move MCP source files under `src/Voltaic/Mcp`.
 - `[x]` Add `using Voltaic.Core;` where MCP files consume JSON-RPC/core types.
 - `[x]` Update test projects and sample projects to import `Voltaic.Core` and/or `Voltaic.Mcp`.
 - `[x]` Update documentation examples to use the new namespaces.
@@ -137,6 +140,7 @@ Status legend:
   - `DeleteTaskPushNotificationConfigRequest`
 - `[x]` Add convenience constructors/factories for common text/data/file parts where they do not obscure wire shape.
 - `[x]` Ensure JSON uses web/camelCase naming, null omission, enum wire names, and official field names.
+- `[x]` Place A2A source files under `src/Voltaic/A2A`.
 
 ## Phase 4 - A2A Client
 
@@ -217,6 +221,7 @@ Status legend:
   - `Google.Protobuf` for official-compatible protobuf messages.
   - `Grpc.Tools` as a private build-time code generator.
 - `[x]` Add official-compatible A2A protobuf contract under `Voltaic.A2A.Grpc`.
+  - Source proto lives under `src/Voltaic/A2A/Protos`.
   - `A2AService` service path `lf.a2a.v1.A2AService`.
   - Unary RPCs for message, task, push config, and extended Agent Card APIs.
   - Server-streaming RPCs for message streaming and task subscription.
@@ -267,6 +272,7 @@ Status legend:
 - `[x]` Add A2A return-immediately tests.
 - `[x]` Add A2A HTTP+JSON client tests.
 - `[x]` Add namespace/API surface tests for `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+- `[x]` Add source-layout test enforcing `src/Voltaic/Core`, `src/Voltaic/Mcp`, `src/Voltaic/A2A`, and `src/Voltaic/A2A/Protos`.
 - `[x]` Ensure console Touchstone runner executes the new suites.
 - `[x]` Ensure xUnit and NUnit Touchstone runners execute the new suites.
 

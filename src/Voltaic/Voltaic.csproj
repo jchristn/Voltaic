@@ -36,7 +36,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<Protobuf Include="Protos\a2a.proto" GrpcServices="None" Access="Internal" />
+		<Protobuf Include="A2A\Protos\a2a.proto" GrpcServices="None" Access="Internal" />
 	</ItemGroup>
 
 	<ItemGroup>

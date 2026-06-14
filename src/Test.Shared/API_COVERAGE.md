@@ -2,7 +2,7 @@
 
 This matrix tracks the Touchstone descriptors in `src/Test.Shared`. `Covered` means the public type has direct descriptor coverage for its main success and failure paths. `Partial` means meaningful descriptors exist, but deeper integration or long-running/stress scenarios remain release work.
 
-Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. Library source files mirror that grouping under `src/Voltaic/Core`, `src/Voltaic/Mcp`, and `src/Voltaic/A2A`; `ApiSurface.Inventory.SourceLayoutMatchesPublicNamespaces` enforces that no C# source files drift back into the project root and that A2A proto definitions stay under `src/Voltaic/A2A/Protos`.
 
 | API family | Status | Descriptor suites |
 |---|---:|---|
@@ -93,5 +93,6 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 | `McpSetLogLevelRequest` | Covered | `ApiSurface.Inventory.ExportedTypesAreTracked`, `McpHttp.Registry.Matrix.LoggingSetLevel` |
 | `McpLogMessageNotification` | Covered | `McpProtocol.Content.CompletionAndUtilitySerialization`, HTTP/TCP/WebSocket notification helper coverage |
 | Public type inventory | Covered | `ApiSurface.Inventory.*` |
+| Source layout inventory | Covered | `ApiSurface.Inventory.SourceLayoutMatchesPublicNamespaces` |
 
 Remaining high-value future work is intentionally outside the v0.4.0 package scope: full MCP roots/sampling/elicitation request orchestration, long-running stress/soak suites, and full JSON Schema 2020-12 validation beyond Voltaic's lightweight required/type checks.

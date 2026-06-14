@@ -10,7 +10,7 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v0.4.0 targets MCP protocol version `2025-11-25` and A2A protocol version `1.0`. The public API is split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A` namespaces.
+Voltaic v0.4.0 targets MCP protocol version `2025-11-25` and A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 ---
 
@@ -1140,6 +1140,13 @@ Public types are grouped by protocol namespace:
 - `Voltaic.Core`: `JsonRpcServer`, `JsonRpcClient`, JSON-RPC request/response/error models, TCP framing, connection models, and shared authentication/error helpers.
 - `Voltaic.Mcp`: MCP stdio, HTTP, TCP, and WebSocket clients/servers plus MCP tools, resources, prompts, completions, capabilities, and utility models.
 - `Voltaic.A2A`: A2A Agent Cards, task/message/artifact models, `A2AClient`, `A2AHttpJsonClient`, `A2ACardResolver`, `A2AHttpServer`, task storage, event queue, updater, and protocol errors.
+
+The library source mirrors those namespaces:
+
+- `src/Voltaic/Core`: shared JSON-RPC, framing, connection, authentication, and event types.
+- `src/Voltaic/Mcp`: MCP protocol models, endpoint infrastructure, clients, and servers.
+- `src/Voltaic/A2A`: A2A protocol models, clients, servers, task infrastructure, JSON helpers, and gRPC wire support.
+- `src/Voltaic/A2A/Protos`: the A2A protobuf contract used by the internal gRPC binding.
 
 The core server pattern is the same across protocols: configure identity, register handlers or capabilities, subscribe to lifecycle events if needed, then start the server. Clients connect, call protocol methods, stream SSE events where supported, and dispose when finished.
 

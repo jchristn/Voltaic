@@ -12,7 +12,8 @@
 - Added official `a2a-dotnet` compatibility coverage based on inspected source commit `8fe65cfaa65a72b2d63bc9bef2e2d32fddc12a18`, including JSON-RPC method/envelope/header checks, HTTP+JSON route/body checks, official-style server request acceptance, and SSE parsing
 - Added A2A Touchstone suites covering serialization, Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, task lifecycle, push notification config CRUD, extended Agent Cards, return-immediately behavior, and compatibility oracle checks
 - Added `Sample.A2AServer`, `Test.A2AServer`, and `Test.A2AClient`
-- Updated README, package metadata, and API coverage documentation for the new namespace layout and A2A support
+- Reorganized library source under `src/Voltaic/Core`, `src/Voltaic/Mcp`, and `src/Voltaic/A2A`, including A2A protobuf definitions under `src/Voltaic/A2A/Protos`
+- Updated README, package metadata, API coverage documentation, and source-layout tests for the new namespace layout and A2A support
 
 ## v0.3.0
 - Updated package version and MCP default protocol version to `2025-11-25`, while retaining `2025-03-26` negotiation support
