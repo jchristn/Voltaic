@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.1
+- Documentation fixes; no code changes from v0.5.0
+- Corrected the README to reference the current version (v0.5.1) instead of v0.4.0
+
 ## v0.5.0
 - Added `McpHttpClient.SetRequestHeader(name, value)` so HTTP and Streamable-HTTP MCP clients can attach authentication headers — a bearer `Authorization` header or a custom API-key header (for example `X-API-Key`) — applied to every request the client sends, including the connection handshake (ping) and the SSE GET stream
 - Passing a null or empty value removes a previously set header; header names are matched case-insensitively
