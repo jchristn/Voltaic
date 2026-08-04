@@ -983,6 +983,26 @@ The following requests bypass authentication so infrastructure can validate conn
 
 Full authorization flows, such as OAuth 2.1 from the MCP specification, remain the responsibility of the application. `AuthenticationHandler` is the hook for plugging in the scheme your product already uses.
 
+### Sending authentication from the client
+
+`McpHttpClient.SetRequestHeader(name, value)` attaches a header to every request the client sends — the JSON-RPC POST requests and the SSE GET stream, including the initial connection handshake. Use it to send a bearer token or a custom API-key header to an authenticated server. Set the header before connecting so it is present on the handshake. Passing a null or empty value removes a previously set header, and header names are matched case-insensitively.
+
+```csharp
+using Voltaic.Mcp;
+
+using McpHttpClient client = new McpHttpClient();
+
+// Bearer token: Authorization: Bearer <token>
+client.SetRequestHeader("Authorization", "Bearer " + token);
+
+// Or a custom API-key header instead:
+// client.SetRequestHeader("X-API-Key", apiKey);
+
+await client.ConnectStreamableAsync("http://localhost:8080");
+```
+
+This pairs with the server-side `AuthenticationHandler` above: the client sends the credential and the handler validates it. Because the `ping` handshake bypasses server authentication, the header first takes effect on the client's first non-ping call.
+
 ---
 
 ## When NOT to Use This

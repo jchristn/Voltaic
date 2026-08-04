@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>0.4.0</Version>
+		<Version>0.5.0</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -19,7 +19,7 @@
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
-		<PackageReleaseNotes>v0.4.0: Splits public APIs into Voltaic.Core, Voltaic.Mcp, and Voltaic.A2A; adds dependency-light A2A v1.0 Agent Card discovery, JSON-RPC, HTTP+JSON, and gRPC clients/servers, SSE streaming, task lifecycle, push notification config APIs, extended Agent Cards, official-SDK compatibility tests, samples, and expanded Touchstone coverage.</PackageReleaseNotes>
+		<PackageReleaseNotes>v0.5.0: Adds McpHttpClient.SetRequestHeader(name, value) so HTTP/Streamable-HTTP MCP clients can attach authentication — a bearer Authorization header or a custom API-key header — to every request, including the connection handshake and SSE stream. Passing a null/empty value removes a header. Additive and backward compatible. Prior release — v0.4.0: Splits public APIs into Voltaic.Core, Voltaic.Mcp, and Voltaic.A2A; adds dependency-light A2A v1.0 Agent Card discovery, JSON-RPC, HTTP+JSON, and gRPC clients/servers, SSE streaming, task lifecycle, push notification config APIs, extended Agent Cards, official-SDK compatibility tests, samples, and expanded Touchstone coverage.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.0
+- Added `McpHttpClient.SetRequestHeader(name, value)` so HTTP and Streamable-HTTP MCP clients can attach authentication headers — a bearer `Authorization` header or a custom API-key header (for example `X-API-Key`) — applied to every request the client sends, including the connection handshake (ping) and the SSE GET stream
+- Passing a null or empty value removes a previously set header; header names are matched case-insensitively
+- Additive and backward compatible: clients that set no header behave exactly as before
+- Added `McpHttp.Client.Auth` Touchstone suite proving configured headers reach the server (verified through the server's `AuthenticationHandler`) and that removed or omitted headers stay off the request
+
 ## v0.4.0
 - Breaking pre-1.0 namespace change: moved shared JSON-RPC/core APIs to `Voltaic.Core` and MCP APIs to `Voltaic.Mcp`
 - Added `Voltaic.A2A` for A2A v1.0 Agent Card models, task/message/artifact models, security declarations, push notification config models, and protocol errors

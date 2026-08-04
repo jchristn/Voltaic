@@ -22,6 +22,7 @@ namespace Test.Shared
                 McpHttpAdvancedProtocolSuites.StreamableHttpMatrix(),
                 McpHttpAdvancedProtocolSuites.RegistryProtocolMatrix(),
                 McpHttpAdvancedProtocolSuites.HttpClientMatrix(),
+                McpHttpAuthSuites.RequestHeaderMatrix(),
                 MessageFramingSuites.Framing(),
                 MessageFramingAdvancedSuites.EdgeCases(),
                 ClientConnectionSuites.QueueAndLifecycle(),

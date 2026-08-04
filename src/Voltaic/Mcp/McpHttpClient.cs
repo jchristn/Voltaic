@@ -87,6 +87,7 @@ namespace Voltaic.Mcp
         public event EventHandler<ResponseReceivedEventArgs>? ResponseReceived;
 
         private HttpClient? _HttpClient;
+        private readonly Dictionary<string, string> _RequestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private string? _BaseUrl;
         private string? _RpcUrl;
         private string? _EventsUrl;
@@ -105,6 +106,34 @@ namespace Voltaic.Mcp
         public McpHttpClient()
         {
             _HttpClient = new HttpClient();
+        }
+
+        /// <summary>
+        /// Sets a default request header that is applied to every HTTP request this client sends — the
+        /// JSON-RPC POST requests and the SSE GET stream, including the initial connection handshake.
+        /// Use this to attach authentication such as an <c>Authorization: Bearer &lt;token&gt;</c> header
+        /// or a custom API-key header (for example <c>X-API-Key</c>). Passing a null or empty
+        /// <paramref name="value"/> removes any header previously set under <paramref name="name"/>.
+        /// Header names are treated case-insensitively; setting the same name again replaces the previous
+        /// value. Call this before <see cref="ConnectStreamableAsync"/> or <see cref="ConnectAsync"/> for
+        /// the header to be present on the handshake request.
+        /// </summary>
+        /// <param name="name">The header name. Must not be null or empty.</param>
+        /// <param name="value">The header value, or null or empty to remove the header.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null or empty.</exception>
+        public void SetRequestHeader(string name, string? value)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            if (String.IsNullOrEmpty(value)) _RequestHeaders.Remove(name);
+            else _RequestHeaders[name] = value!;
+
+            if (_HttpClient != null)
+            {
+                _HttpClient.DefaultRequestHeaders.Remove(name);
+                if (!String.IsNullOrEmpty(value))
+                    _HttpClient.DefaultRequestHeaders.TryAddWithoutValidation(name, value);
+            }
         }
 
         /// <summary>
