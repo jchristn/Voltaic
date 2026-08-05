@@ -108,6 +108,47 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets optional natural-language instructions returned by <c>server/discover</c>
+        /// (2026-07-28+). Null by default.
+        /// </summary>
+        public string? ServerInstructions
+        {
+            get => _Endpoint.ServerInstructions;
+            set => _Endpoint.ServerInstructions = value;
+        }
+
+        /// <summary>
+        /// Gets or sets whether the server advertises the <c>io.modelcontextprotocol/tasks</c>
+        /// extension in its capabilities (2026-07-28+). Default is false.
+        /// </summary>
+        public bool AdvertiseTasksExtension
+        {
+            get => _Endpoint.AdvertiseTasksExtension;
+            set => _Endpoint.AdvertiseTasksExtension = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the cache lifetime in milliseconds applied to <c>tools/list</c>,
+        /// <c>resources/list</c>, <c>resources/templates/list</c>, and <c>prompts/list</c> results
+        /// (2026-07-28+). Null (the default) omits caching guidance.
+        /// </summary>
+        public long? ListCacheTtlMs
+        {
+            get => _Endpoint.ListCacheTtlMs;
+            set => _Endpoint.ListCacheTtlMs = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the cache scope (for example <c>public</c> or <c>private</c>) applied to
+        /// list results (2026-07-28+). Null (the default) omits caching guidance.
+        /// </summary>
+        public string? ListCacheScope
+        {
+            get => _Endpoint.ListCacheScope;
+            set => _Endpoint.ListCacheScope = value;
+        }
+
+        /// <summary>
         /// Gets or sets an optional asynchronous authentication handler.
         /// When set, incoming HTTP requests are passed through this handler before processing.
         /// If the handler returns an <see cref="AuthenticationResult"/> with <see cref="AuthenticationResult.IsAuthenticated"/> set to false,
@@ -825,6 +866,11 @@ namespace Voltaic.Mcp
             RegisterMethod("initialize", (args) =>
             {
                 return _Endpoint.Initialize(args);
+            });
+
+            RegisterMethod("server/discover", (args) =>
+            {
+                return _Endpoint.Discover(args);
             });
 
             RegisterMethod("tools/list", (args) =>

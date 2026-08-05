@@ -263,6 +263,72 @@ namespace Test.Shared
                 });
         }
 
+        /// <summary>
+        /// End-to-end coverage of the <c>server/discover</c> RPC and cacheable list results over
+        /// the HTTP transport.
+        /// </summary>
+        /// <returns>A test suite descriptor.</returns>
+        public static TestSuiteDescriptor DiscoveryAndCaching()
+        {
+            const string suiteId = "McpVersion.Discovery";
+
+            return new TestSuiteDescriptor(
+                suiteId,
+                "MCP server/discover and cacheable results",
+                new List<TestCaseDescriptor>
+                {
+                    Case(suiteId, "DiscoverReturnsVersionsAndExtensions", "server/discover reports versions, extensions, and identity", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
+                        {
+                            server.ServerInstructions = "Weather utilities.";
+                            server.AdvertiseTasksExtension = true;
+                            server.RegisterTool("noop", "Does nothing", new { type = "object", properties = new { }, required = new string[] { } }, (_) => "ok");
+                        }).ConfigureAwait(false);
+
+                        RpcResult response = await fixture.PostMcpAsync("server/discover", new { }, "d1", null, ct).ConfigureAwait(false);
+                        using JsonDocument json = JsonDocument.Parse(response.Body);
+                        JsonElement result = json.RootElement.GetProperty("result");
+
+                        TestAssert.Equal("complete", result.GetProperty("resultType").GetString(), "Discovery uses resultType complete.");
+                        TestAssert.Equal("Weather utilities.", result.GetProperty("instructions").GetString(), "Instructions should be returned.");
+
+                        bool sawNewest = false;
+                        bool sawOldest = false;
+                        foreach (JsonElement version in result.GetProperty("supportedVersions").EnumerateArray())
+                        {
+                            if (version.GetString() == "2026-07-28") sawNewest = true;
+                            if (version.GetString() == "2024-11-05") sawOldest = true;
+                        }
+                        TestAssert.True(sawNewest, "Discovery should advertise 2026-07-28.");
+                        TestAssert.True(sawOldest, "Discovery should advertise 2024-11-05.");
+
+                        JsonElement extensions = result.GetProperty("capabilities").GetProperty("extensions");
+                        TestAssert.True(extensions.TryGetProperty("io.modelcontextprotocol/tasks", out _), "Tasks extension should be advertised.");
+
+                        JsonElement serverInfo = result.GetProperty("_meta").GetProperty("io.modelcontextprotocol/serverInfo");
+                        TestAssert.Equal("Voltaic.Test", serverInfo.GetProperty("name").GetString(), "Server identity should be present.");
+                    }),
+
+                    Case(suiteId, "ListResultsCarryCacheHints", "tools/list carries ttlMs and cacheScope when configured", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
+                        {
+                            server.ListCacheTtlMs = 60000;
+                            server.ListCacheScope = "public";
+                            server.RegisterTool("noop", "Does nothing", new { type = "object", properties = new { }, required = new string[] { } }, (_) => "ok");
+                        }).ConfigureAwait(false);
+
+                        RpcResult response = await fixture.PostMcpAsync("tools/list", new { }, "l1", null, ct).ConfigureAwait(false);
+                        using JsonDocument json = JsonDocument.Parse(response.Body);
+                        JsonElement result = json.RootElement.GetProperty("result");
+
+                        TestAssert.Equal(60000, result.GetProperty("ttlMs").GetInt64(), "List result should carry ttlMs.");
+                        TestAssert.Equal("public", result.GetProperty("cacheScope").GetString(), "List result should carry cacheScope.");
+                    }),
+                });
+        }
+
         private static McpProtocolException? ExpectProtocolException(Action action)
         {
             try

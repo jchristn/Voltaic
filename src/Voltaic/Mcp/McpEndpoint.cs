@@ -36,6 +36,18 @@ namespace Voltaic.Mcp
 
         public bool EnforceInitializationOrdering { get; set; }
 
+        public string? ServerInstructions { get; set; }
+
+        public long? ListCacheTtlMs { get; set; }
+
+        public string? ListCacheScope { get; set; }
+
+        public bool AdvertiseTasksExtension { get; set; }
+
+        public long? DiscoverCacheTtlMs { get; set; }
+
+        public string? DiscoverCacheScope { get; set; }
+
         public McpSessionLifecycleState State { get; private set; } = McpSessionLifecycleState.Created;
 
         public string MinimumLogLevel { get; private set; } = "info";
@@ -81,6 +93,29 @@ namespace Voltaic.Mcp
         {
             State = McpSessionLifecycleState.Initialized;
             return new { };
+        }
+
+        public McpDiscoverResult Discover(JsonElement? args)
+        {
+            McpServerCapabilities capabilities = BuildCapabilities();
+
+            McpDiscoverResult result = new McpDiscoverResult
+            {
+                SupportedVersions = McpProtocol.SupportedVersionStrings().ToList(),
+                Capabilities = capabilities,
+                Instructions = ServerInstructions,
+                TtlMs = DiscoverCacheTtlMs,
+                CacheScope = DiscoverCacheScope,
+                Meta = new Dictionary<string, object?>
+                {
+                    {
+                        McpProtocol.MetaServerInfoKey,
+                        new McpImplementation { Name = ServerName, Version = ServerVersion }
+                    }
+                }
+            };
+
+            return result;
         }
 
         public object Ping(JsonElement? args)
@@ -177,7 +212,9 @@ namespace Voltaic.Mcp
             return new McpListToolsResult
             {
                 Tools = page.Items,
-                NextCursor = page.NextCursor
+                NextCursor = page.NextCursor,
+                TtlMs = ListCacheTtlMs,
+                CacheScope = ListCacheScope
             };
         }
 
@@ -255,7 +292,9 @@ namespace Voltaic.Mcp
             return new McpListResourcesResult
             {
                 Resources = page.Items,
-                NextCursor = page.NextCursor
+                NextCursor = page.NextCursor,
+                TtlMs = ListCacheTtlMs,
+                CacheScope = ListCacheScope
             };
         }
 
@@ -271,7 +310,9 @@ namespace Voltaic.Mcp
             return new McpListResourceTemplatesResult
             {
                 ResourceTemplates = page.Items,
-                NextCursor = page.NextCursor
+                NextCursor = page.NextCursor,
+                TtlMs = ListCacheTtlMs,
+                CacheScope = ListCacheScope
             };
         }
 
@@ -334,7 +375,9 @@ namespace Voltaic.Mcp
             return new McpListPromptsResult
             {
                 Prompts = page.Items,
-                NextCursor = page.NextCursor
+                NextCursor = page.NextCursor,
+                TtlMs = ListCacheTtlMs,
+                CacheScope = ListCacheScope
             };
         }
 
@@ -496,7 +539,7 @@ namespace Voltaic.Mcp
             State = McpSessionLifecycleState.Closed;
         }
 
-        private object BuildCapabilities()
+        private McpServerCapabilities BuildCapabilities()
         {
             bool hasTools;
             bool hasResources;
@@ -511,7 +554,7 @@ namespace Voltaic.Mcp
                 hasCompletions = _CompletionProviders.Count > 0;
             }
 
-            return new McpServerCapabilities
+            McpServerCapabilities capabilities = new McpServerCapabilities
             {
                 Tools = hasTools ? new McpListChangedCapability { ListChanged = SupportsListChangedNotifications } : null,
                 Resources = hasResources ? new McpResourceCapability { ListChanged = SupportsListChangedNotifications, Subscribe = SupportsResourceSubscriptions } : null,
@@ -519,6 +562,16 @@ namespace Voltaic.Mcp
                 Completions = hasCompletions ? new { } : null,
                 Logging = SupportsLogging ? new { } : null
             };
+
+            if (AdvertiseTasksExtension)
+            {
+                capabilities.Extensions = new Dictionary<string, object>
+                {
+                    { McpProtocol.TasksExtensionId, new { } }
+                };
+            }
+
+            return capabilities;
         }
 
         private static void ValidateToolDefinition(ToolDefinition definition)

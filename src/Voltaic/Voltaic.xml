@@ -2548,6 +2548,31 @@
             Default is "1.0.0".
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ServerInstructions">
+            <summary>
+            Gets or sets optional natural-language instructions returned by <c>server/discover</c>
+            (2026-07-28+). Null by default.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.AdvertiseTasksExtension">
+            <summary>
+            Gets or sets whether the server advertises the <c>io.modelcontextprotocol/tasks</c>
+            extension in its capabilities (2026-07-28+). Default is false.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ListCacheTtlMs">
+            <summary>
+            Gets or sets the cache lifetime in milliseconds applied to <c>tools/list</c>,
+            <c>resources/list</c>, <c>resources/templates/list</c>, and <c>prompts/list</c> results
+            (2026-07-28+). Null (the default) omits caching guidance.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ListCacheScope">
+            <summary>
+            Gets or sets the cache scope (for example <c>public</c> or <c>private</c>) applied to
+            list results (2026-07-28+). Null (the default) omits caching guidance.
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.AuthenticationHandler">
             <summary>
             Gets or sets an optional asynchronous authentication handler.
