@@ -25,6 +25,25 @@ The wire-level details that were open in the first draft are now resolved agains
 
 ---
 
+## 0. Implementation status (branch `feature/v0.6.0`)
+
+Work is landing in committed, test-verified increments. The library builds warning-free on `net8.0` and `net10.0`, and the shared Touchstone suite is green at **310/310** through the console runner on both frameworks.
+
+Done and verified:
+
+- **P0 foundations** — version registry + era model (T-010, T-011, T-012), resolver (T-013), error factories with confirmed codes (T-014), 2025-11-25 delta recorded (T-015).
+- **P1 models** — `_meta` key constants (T-020, partial), `McpDiscoverResult` (T-021), MRTR models (T-022), cache fields (T-023), both task model sets (T-029a, T-029b), capability `extensions`. `title`/`description` already existed pre-branch. Not yet: `x-mcp-header` schema model (T-028), completion `context`/resource-link verification (T-025, T-026).
+- **P2 server** — stateless POST path (T-030), protocol-version header + `_meta` validation (T-031), `Mcp-Method`/`Mcp-Name` routing validation with Base64 decode (T-032), `server/discover` (T-034), MRTR emission on `tools/call` (T-035, emit side), 202 notifications (T-037), unknown-method 404 (T-038), cacheable list results (T-041). Not yet: `Mcp-Param-*` (T-033), `subscriptions/listen` (T-036), `Origin` 403 (T-039), SSE cancellation (T-040).
+- **P3 server** — capability `extensions` advertisement (part of T-053). Not yet: 2024-11-05 HTTP+SSE transport (T-050), 2025-06-18 batching/header enforcement (T-052), 2025-11-25 in-core tasks wiring (T-055), version-gated capability suppression (rest of T-053).
+- **P8/P9 docs + release** — version bump to 0.6.0 + release notes (T-001, T-002), CHANGELOG (T-101), README (T-100), CLAUDE.md (T-103), API coverage matrix updated; builds/tests green (T-110, T-111).
+- **Testing** — `McpVersion.Resolver`, `McpVersion.Models`, `McpVersion.Discovery`, and `McpVersion.Stateless` suites registered through all three runners (T-200, T-201, T-202).
+
+Commits: `b52bb70` (P0 + models), `c74d4bd` (version bump + docs), `7e7b8cc` (discover + cache + extensions), `947b0a5` (stateless transport), `12d370c` (MRTR emission).
+
+Deliberate deviation from T-010: `LatestProtocolVersion` stays `2025-11-25` (default handshake) and `NewestProtocolVersion` is `2026-07-28`, because the backward-compatibility requirement overrides the literal instruction to make 2026-07-28 the default.
+
+Largest remaining work: the full stateless client (P4), the tasks subsystems wired end-to-end (P5 + T-055), the 2024-11-05 and 2025-06-18 server behaviors (T-050, T-052), auth hardening (P6), samples (P7), and the per-version positive/negative test matrix in Section 7 (the resolver/model/discovery/stateless portions are done; the five per-version suites remain).
+
 ## 1. Objective
 
 Voltaic today negotiates two MCP revisions — `2025-11-25` (default) and `2025-03-26` — inside a single handshake-based, session-oriented HTTP transport. The goal of v0.6.0 is to support the full set of publicly listed MCP protocol revisions, on both the client and the server, and to add explicit positive and negative test coverage for each one.
