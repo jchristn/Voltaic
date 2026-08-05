@@ -133,6 +133,7 @@ namespace Test.Shared
                             "Voltaic.Mcp.McpListToolsResult",
                             "Voltaic.Mcp.McpLogMessageNotification",
                             "Voltaic.Mcp.McpPaginatedResult",
+                            "Voltaic.Mcp.McpParameters",
                             "Voltaic.Mcp.McpProgressNotification",
                             "Voltaic.Mcp.McpPrompt",
                             "Voltaic.Mcp.McpPromptArgument",

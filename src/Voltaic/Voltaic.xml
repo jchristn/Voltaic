@@ -3210,6 +3210,47 @@
             and must not inspect, parse, or modify it. Null when the server needs no echoed state.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpParameters">
+            <summary>
+            A dependency-light, DOM-free wrapper around JSON-RPC request parameters. It carries the raw
+            parameters JSON and exposes typed deserialization without exposing any
+            <c>System.Text.Json</c> DOM type (<c>JsonElement</c>, <c>JsonDocument</c>, <c>JsonNode</c>).
+            This replaces the previous <c>JsonElement?</c> handler parameter.
+            Instances are immutable and therefore thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpParameters.RawJson">
+            <summary>
+            Gets the raw JSON text of the parameters, or null when no parameters were supplied.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpParameters.HasValue">
+            <summary>
+            Gets a value indicating whether any parameters were supplied.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpParameters.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpParameters"/> class from raw JSON text.
+            </summary>
+            <param name="rawJson">The raw parameters JSON, or null when none were supplied.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpParameters.FromObject(System.Object)">
+            <summary>
+            Creates parameters from a CLR value by serializing it to JSON.
+            </summary>
+            <param name="value">The value to serialize, or null.</param>
+            <returns>A new <see cref="T:Voltaic.Mcp.McpParameters"/> instance.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpParameters.Deserialize``1">
+            <summary>
+            Deserializes the parameters into the specified type. Returns the type default when no
+            parameters were supplied.
+            </summary>
+            <typeparam name="T">The target type.</typeparam>
+            <returns>The deserialized value, or the type default when empty.</returns>
+            <exception cref="T:System.Text.Json.JsonException">Thrown when the raw JSON cannot be deserialized into <typeparamref name="T"/>.</exception>
+        </member>
         <member name="T:Voltaic.Mcp.McpPrompt">
             <summary>
             Describes an MCP prompt.
