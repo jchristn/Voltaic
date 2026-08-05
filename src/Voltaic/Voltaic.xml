@@ -2944,6 +2944,14 @@
             This provides compatibility with the MCP Streamable HTTP transport specification.
             </summary>
         </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Handles a POST to the MCP endpoint that resolved to the stateless (2026-07-28) era.
+            Validates the required routing headers, dispatches through the shared registry without
+            creating or echoing a session, and returns a single JSON response (or 202 for a
+            notification). An unknown method returns HTTP 404 with a JSON-RPC method-not-found error.
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.HandlePreAuthRpcRequestAsync(System.Net.HttpListenerContext,System.String,System.Threading.CancellationToken)">
             <summary>
             Handles a ping request that bypassed authentication.

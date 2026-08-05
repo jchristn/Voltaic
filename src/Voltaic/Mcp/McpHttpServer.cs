@@ -1127,19 +1127,59 @@ namespace Voltaic.Mcp
 
             if (method == "POST")
             {
-                if (!ValidateProtocolVersionHeader(context))
-                {
-                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
-                    return;
-                }
-
                 if (!RequestAccepts(context, "application/json") || !RequestAccepts(context, "text/event-stream"))
                 {
                     await SendTextResponseAsync(context, 406, "POST /mcp requires Accept: application/json, text/event-stream", token).ConfigureAwait(false);
                     return;
                 }
 
-                // Get or create session
+                // Read the request body once; both the stateless and handshake paths reuse it.
+                string requestBody;
+                using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
+                {
+                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+
+                JsonRpcRequest? incomingRequest = null;
+                try
+                {
+                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                }
+                catch (JsonException)
+                {
+                }
+
+                ExtractStatelessSignals(requestBody, out string? bodyName, out string? metaProtocolVersion);
+
+                McpResolvedVersion resolved;
+                try
+                {
+                    resolved = McpVersionResolver.Resolve(
+                        context.Request.Headers[McpProtocol.ProtocolVersionHeader],
+                        metaProtocolVersion,
+                        incomingRequest?.Method,
+                        !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.LegacySessionIdHeader]),
+                        !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.MethodHeader]) || !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.NameHeader]));
+                }
+                catch (McpProtocolException resolveError)
+                {
+                    await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, resolveError, token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (resolved.Era == McpProtocolEra.Stateless)
+                {
+                    await HandleStatelessPostAsync(context, incomingRequest, requestBody, bodyName, token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!ValidateProtocolVersionHeader(context))
+                {
+                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
+                    return;
+                }
+
+                // Get or create session (handshake era)
                 string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
                 if (_TerminatedSessions.ContainsKey(sessionId))
                 {
@@ -1160,23 +1200,7 @@ namespace Voltaic.Mcp
                     RaiseClientConnected(connection);
                 }
 
-                // Read request body
-                string requestBody;
-                using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
-                {
-                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
-                }
-
                 LogMessage($"MCP request from session {sessionId}: {requestBody}");
-
-                JsonRpcRequest? incomingRequest = null;
-                try
-                {
-                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
-                }
-                catch (JsonException)
-                {
-                }
 
                 // Process JSON-RPC request
                 JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
@@ -1336,6 +1360,199 @@ namespace Voltaic.Mcp
                 context.Response.StatusCode = 405;
                 context.Response.Close();
             }
+        }
+
+        /// <summary>
+        /// Handles a POST to the MCP endpoint that resolved to the stateless (2026-07-28) era.
+        /// Validates the required routing headers, dispatches through the shared registry without
+        /// creating or echoing a session, and returns a single JSON response (or 202 for a
+        /// notification). An unknown method returns HTTP 404 with a JSON-RPC method-not-found error.
+        /// </summary>
+        private async Task HandleStatelessPostAsync(
+            HttpListenerContext context,
+            JsonRpcRequest? incomingRequest,
+            string requestBody,
+            string? bodyName,
+            CancellationToken token)
+        {
+            string? bodyMethod = incomingRequest?.Method;
+
+            string? protocolHeader = context.Request.Headers[McpProtocol.ProtocolVersionHeader];
+            if (String.IsNullOrWhiteSpace(protocolHeader))
+            {
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id,
+                    McpProtocolException.HeaderMismatch($"Missing required {McpProtocol.ProtocolVersionHeader} header."), token).ConfigureAwait(false);
+                return;
+            }
+
+            string? methodHeader = context.Request.Headers[McpProtocol.MethodHeader];
+            if (String.IsNullOrWhiteSpace(methodHeader))
+            {
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id,
+                    McpProtocolException.HeaderMismatch($"Missing required {McpProtocol.MethodHeader} header."), token).ConfigureAwait(false);
+                return;
+            }
+
+            if (!StringComparer.Ordinal.Equals(methodHeader, bodyMethod))
+            {
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id,
+                    McpProtocolException.HeaderMismatch($"{McpProtocol.MethodHeader} header value '{methodHeader}' does not match body method '{bodyMethod}'."), token).ConfigureAwait(false);
+                return;
+            }
+
+            if (RequiresMcpName(bodyMethod))
+            {
+                string? nameHeader = DecodeMcpNameHeader(context.Request.Headers[McpProtocol.NameHeader]);
+                if (String.IsNullOrWhiteSpace(nameHeader))
+                {
+                    await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id,
+                        McpProtocolException.HeaderMismatch($"Missing required {McpProtocol.NameHeader} header for '{bodyMethod}'."), token).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!StringComparer.Ordinal.Equals(nameHeader, bodyName))
+                {
+                    await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id,
+                        McpProtocolException.HeaderMismatch($"{McpProtocol.NameHeader} header value '{nameHeader}' does not match body value '{bodyName}'."), token).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            LogMessage($"Stateless MCP request: {requestBody}");
+
+            ClientConnection connection = new ClientConnection("stateless");
+            connection.MaxQueueSize = _MaxQueueSize;
+
+            JsonRpcResponse response;
+            try
+            {
+                response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                connection.Dispose();
+            }
+
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            if (incomingRequest != null && incomingRequest.Id == null)
+            {
+                context.Response.StatusCode = 202;
+                context.Response.Close();
+                LogMessage($"Stateless MCP notification accepted: {bodyMethod}");
+                return;
+            }
+
+            int statusCode = response.Error != null && response.Error.Code == -32601 ? 404 : 200;
+            context.Response.StatusCode = statusCode;
+            context.Response.ContentType = "application/json";
+
+            string responseJson = JsonSerializer.Serialize(response);
+            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+        }
+
+        private static bool RequiresMcpName(string? method)
+        {
+            return StringComparer.Ordinal.Equals(method, "tools/call")
+                || StringComparer.Ordinal.Equals(method, "resources/read")
+                || StringComparer.Ordinal.Equals(method, "prompts/get");
+        }
+
+        private static string? DecodeMcpNameHeader(string? value)
+        {
+            if (String.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+
+            const string prefix = "=?base64?";
+            const string suffix = "?=";
+            if (value.Length >= prefix.Length + suffix.Length
+                && value.StartsWith(prefix, StringComparison.Ordinal)
+                && value.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                string encoded = value.Substring(prefix.Length, value.Length - prefix.Length - suffix.Length);
+                try
+                {
+                    return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                }
+                catch (FormatException)
+                {
+                    return value;
+                }
+            }
+
+            return value;
+        }
+
+        private static void ExtractStatelessSignals(string requestBody, out string? name, out string? protocolVersion)
+        {
+            name = null;
+            protocolVersion = null;
+            if (String.IsNullOrWhiteSpace(requestBody))
+            {
+                return;
+            }
+
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(requestBody);
+                JsonElement root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    return;
+                }
+
+                if (root.TryGetProperty("params", out JsonElement paramsElement) && paramsElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (paramsElement.TryGetProperty("name", out JsonElement nameElement) && nameElement.ValueKind == JsonValueKind.String)
+                    {
+                        name = nameElement.GetString();
+                    }
+                    else if (paramsElement.TryGetProperty("uri", out JsonElement uriElement) && uriElement.ValueKind == JsonValueKind.String)
+                    {
+                        name = uriElement.GetString();
+                    }
+
+                    if (paramsElement.TryGetProperty("_meta", out JsonElement metaElement) && metaElement.ValueKind == JsonValueKind.Object
+                        && metaElement.TryGetProperty(McpProtocol.MetaProtocolVersionKey, out JsonElement versionElement) && versionElement.ValueKind == JsonValueKind.String)
+                    {
+                        protocolVersion = versionElement.GetString();
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        private async Task WriteJsonRpcErrorAsync(HttpListenerContext context, int statusCode, object? id, McpProtocolException error, CancellationToken token)
+        {
+            if (_EnableCors)
+            {
+                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                    context.Response.AddHeader(kvp.Key, kvp.Value);
+            }
+
+            JsonRpcResponse response = new JsonRpcResponse
+            {
+                Error = error.ToJsonRpcError(),
+                Id = id
+            };
+
+            context.Response.StatusCode = statusCode;
+            context.Response.ContentType = "application/json";
+            byte[] buffer = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
         }
 
         private void HandleCorsPreflightRequest(HttpListenerContext context)

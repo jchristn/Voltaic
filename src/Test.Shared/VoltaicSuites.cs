@@ -17,6 +17,7 @@ namespace Test.Shared
                 McpVersionSuites.VersionRegistryAndResolver(),
                 McpVersionSuites.VersionModelsAndErrors(),
                 McpVersionSuites.DiscoveryAndCaching(),
+                McpStatelessTransportSuites.StatelessStreamableHttp(),
                 ApiSurfaceCoverageSuites.PublicApiInventory(),
                 McpServerApiSuites.PublicRegistrationApi(),
                 PublicApiValidationSuites.ClientApiValidation(),
