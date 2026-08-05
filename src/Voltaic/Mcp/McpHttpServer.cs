@@ -202,6 +202,7 @@ namespace Voltaic.Mcp
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Sessions;
         private readonly ConcurrentDictionary<string, byte> _TerminatedSessions;
+        private readonly ConcurrentDictionary<string, string> _SessionVersions = new ConcurrentDictionary<string, string>();
         private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
         private Task? _CleanupTask;
@@ -1202,8 +1203,49 @@ namespace Voltaic.Mcp
 
                 LogMessage($"MCP request from session {sessionId}: {requestBody}");
 
+                // JSON-RPC batching is version-gated: permitted through 2025-03-26 and removed from
+                // 2025-06-18 onward. The policy is keyed on the session's negotiated version (or the
+                // MCP-Protocol-Version header before a session is established).
+                if (IsBatchBody(requestBody))
+                {
+                    string batchVersion = ResolveHandshakeVersion(sessionId, context);
+                    McpProtocolVersionInfo? batchInfo = McpProtocol.GetVersionInfo(batchVersion);
+                    if (batchInfo == null || !batchInfo.SupportsBatching)
+                    {
+                        await WriteJsonRpcErrorAsync(context, 400, null,
+                            new McpProtocolException(-32600, $"JSON-RPC batching is not supported in protocol version '{batchVersion}'."), token).ConfigureAwait(false);
+                        return;
+                    }
+
+                    string batchResponseJson = await ProcessBatchAsync(connection, requestBody, token).ConfigureAwait(false);
+                    if (_EnableCors)
+                    {
+                        foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
+                            context.Response.AddHeader(kvp.Key, kvp.Value);
+                    }
+
+                    SetSessionIdHeaders(context.Response, sessionId);
+                    context.Response.ContentType = "application/json";
+                    byte[] batchBuffer = Encoding.UTF8.GetBytes(batchResponseJson);
+                    context.Response.ContentLength64 = batchBuffer.Length;
+                    await context.Response.OutputStream.WriteAsync(batchBuffer, 0, batchBuffer.Length, token).ConfigureAwait(false);
+                    context.Response.Close();
+                    return;
+                }
+
                 // Process JSON-RPC request
                 JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+
+                // Capture the negotiated protocol version for the session so later batching and
+                // header policy can be keyed on it.
+                if (incomingRequest != null && StringComparer.Ordinal.Equals(incomingRequest.Method, "initialize") && response.Result != null)
+                {
+                    string? negotiatedVersion = new RpcParameters(JsonSerializer.Serialize(response.Result)).GetString("protocolVersion");
+                    if (!String.IsNullOrEmpty(negotiatedVersion))
+                    {
+                        _SessionVersions[sessionId] = negotiatedVersion!;
+                    }
+                }
 
                 // Send response
                 if (_EnableCors)
@@ -1559,6 +1601,70 @@ namespace Voltaic.Mcp
             context.Response.ContentLength64 = buffer.Length;
             await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
             context.Response.Close();
+        }
+
+        private static bool IsBatchBody(string body)
+        {
+            if (String.IsNullOrEmpty(body))
+            {
+                return false;
+            }
+
+            foreach (char character in body)
+            {
+                if (Char.IsWhiteSpace(character))
+                {
+                    continue;
+                }
+
+                return character == '[';
+            }
+
+            return false;
+        }
+
+        private string ResolveHandshakeVersion(string sessionId, HttpListenerContext context)
+        {
+            if (_SessionVersions.TryGetValue(sessionId, out string? stored) && !String.IsNullOrEmpty(stored))
+            {
+                return stored;
+            }
+
+            string? header = context.Request.Headers[McpProtocol.ProtocolVersionHeader];
+            if (!String.IsNullOrWhiteSpace(header) && McpProtocol.IsSupportedVersion(header))
+            {
+                return header!;
+            }
+
+            return McpProtocol.LatestProtocolVersion;
+        }
+
+        private async Task<string> ProcessBatchAsync(ClientConnection connection, string body, CancellationToken token)
+        {
+            List<JsonRpcRequest>? requests = null;
+            try
+            {
+                requests = JsonSerializer.Deserialize<List<JsonRpcRequest>>(body);
+            }
+            catch (JsonException)
+            {
+            }
+
+            List<JsonRpcResponse> responses = new List<JsonRpcResponse>();
+            if (requests != null)
+            {
+                foreach (JsonRpcRequest request in requests)
+                {
+                    string requestJson = JsonSerializer.Serialize(request);
+                    JsonRpcResponse batchResponse = await ProcessRpcRequestAsync(connection, requestJson, token).ConfigureAwait(false);
+                    if (request.Id != null)
+                    {
+                        responses.Add(batchResponse);
+                    }
+                }
+            }
+
+            return JsonSerializer.Serialize(responses);
         }
 
         private void HandleCorsPreflightRequest(HttpListenerContext context)
