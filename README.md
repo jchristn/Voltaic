@@ -39,7 +39,7 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Send list-changed, resource-updated, progress, cancellation, and log-message notifications where the transport supports server-to-client notifications.
 - Host HTTP compatibility endpoints (`/rpc` and `/events`) alongside the current Streamable HTTP endpoint (`/mcp`).
 - Expose and consume A2A agents through dependency-light `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2AHttpServer`, and `A2AGrpcServer` classes without ASP.NET Core.
-- Run the same 274-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+- Run the same 337-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
 
 ## MCP Endpoint Requirements
 
@@ -276,14 +276,10 @@ server.RegisterTool(
         },
         required = new[] { "a", "b" }
     },
-    (JsonElement? args) =>
+    (RpcParameters? args) =>
     {
-        double a = args.HasValue && args.Value.TryGetProperty("a", out JsonElement aEl)
-            ? aEl.GetDouble()
-            : 0;
-        double b = args.HasValue && args.Value.TryGetProperty("b", out JsonElement bEl)
-            ? bEl.GetDouble()
-            : 0;
+        double a = args?.GetDouble("a") ?? 0;
+        double b = args?.GetDouble("b") ?? 0;
 
         return (object)(a + b);
     });
@@ -336,9 +332,7 @@ server.RegisterPrompt(
     },
     args =>
     {
-        string topic = args.HasValue && args.Value.TryGetProperty("topic", out JsonElement topicEl)
-            ? topicEl.GetString() ?? "the topic"
-            : "the topic";
+        string topic = args?.GetString("topic") ?? "the topic";
 
         return new McpGetPromptResult
         {
@@ -513,16 +507,14 @@ server.ResponseSent += (sender, e) =>
     Console.WriteLine($"Response: {e.Method} took {e.Duration.TotalMilliseconds}ms");
 
 // Register a synchronous method
-server.RegisterMethod("greet", (JsonElement? args) =>
+server.RegisterMethod("greet", (RpcParameters? args) =>
 {
-    string? name = args?.TryGetProperty("name", out JsonElement nameEl) == true
-        ? nameEl.GetString()
-        : "World";
+    string? name = args?.GetString("name") ?? "World";
     return $"Hello, {name}!";
 });
 
 // Register an asynchronous method (for I/O-bound work like DB queries, HTTP calls, etc.)
-server.RegisterMethod("fetchData", async (JsonElement? args) =>
+server.RegisterMethod("fetchData", async (RpcParameters? args) =>
 {
     // Async handlers avoid blocking the thread pool
     await Task.Delay(100); // Simulate async work
@@ -530,7 +522,7 @@ server.RegisterMethod("fetchData", async (JsonElement? args) =>
 });
 
 // Register an async method with cancellation support
-server.RegisterMethod("longRunningTask", async (JsonElement? args, CancellationToken token) =>
+server.RegisterMethod("longRunningTask", async (RpcParameters? args, CancellationToken token) =>
 {
     // The token is the server's connection processing token
     await Task.Delay(5000, token); // Cancels if client disconnects
@@ -588,8 +580,8 @@ server.RegisterTool(
     },
     args =>
     {
-        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        double a = args?.GetDouble("a") ?? 0;
+        double b = args?.GetDouble("b") ?? 0;
         return (object)(a + b);
     });
 
@@ -680,10 +672,10 @@ server.RegisterTool("add",
         },
         required = new[] { "a", "b" }
     },
-    (JsonElement? args) =>
+    (RpcParameters? args) =>
     {
-        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        double a = args?.GetDouble("a") ?? 0;
+        double b = args?.GetDouble("b") ?? 0;
         return (object)(a + b);
     });
 
@@ -750,10 +742,10 @@ server.RegisterTool(
         },
         required = new[] { "a", "b" }
     },
-    (JsonElement? args) =>
+    (RpcParameters? args) =>
     {
-        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        double a = args?.GetDouble("a") ?? 0;
+        double b = args?.GetDouble("b") ?? 0;
         return (object)(a + b);
     });
 
@@ -812,10 +804,10 @@ server.RegisterTool("add",
         },
         required = new[] { "a", "b" }
     },
-    (JsonElement? args) =>
+    (RpcParameters? args) =>
     {
-        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        double a = args?.GetDouble("a") ?? 0;
+        double b = args?.GetDouble("b") ?? 0;
         return (object)(a + b);
     });
 
@@ -901,10 +893,10 @@ server.RegisterTool(
         },
         required = new[] { "a", "b" }
     },
-    (JsonElement? args) =>
+    (RpcParameters? args) =>
     {
-        double a = args?.TryGetProperty("a", out JsonElement aEl) == true ? aEl.GetDouble() : 0;
-        double b = args?.TryGetProperty("b", out JsonElement bEl) == true ? bEl.GetDouble() : 0;
+        double a = args?.GetDouble("a") ?? 0;
+        double b = args?.GetDouble("b") ?? 0;
         return (object)(a + b);
     });
 
@@ -1059,7 +1051,7 @@ Check out the `src/Test.*` projects for working examples:
 - **Sample.A2AServer**: A2A Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended-card sample
 - **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
 - **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
-- **Test.Shared**: Shared Touchstone descriptors and the central 274-case API/protocol matrix
+- **Test.Shared**: Shared Touchstone descriptors and the central 337-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -1135,7 +1127,7 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 274 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 337 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json

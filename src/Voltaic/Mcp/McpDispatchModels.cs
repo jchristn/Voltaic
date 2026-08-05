@@ -16,7 +16,7 @@ namespace Voltaic.Mcp
     /// <summary>
     /// Typed view of request parameters that carry a <c>name</c> and optional <c>arguments</c>
     /// (used by <c>tools/call</c> and <c>prompts/get</c>). The arguments are captured as a CLR value
-    /// so they can be re-serialized into an <see cref="McpParameters"/> for the handler without DOM.
+    /// so they can be re-serialized into an <see cref="Voltaic.Core.RpcParameters"/> for the handler without DOM.
     /// </summary>
     internal sealed class McpNamedArgumentsParams
     {
