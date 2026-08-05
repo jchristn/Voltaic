@@ -287,27 +287,22 @@ namespace Test.Shared
                         }).ConfigureAwait(false);
 
                         RpcResult response = await fixture.PostMcpAsync("server/discover", new { }, "d1", null, ct).ConfigureAwait(false);
-                        using JsonDocument json = JsonDocument.Parse(response.Body);
-                        JsonElement result = json.RootElement.GetProperty("result");
+                        McpDiscoverResult? result = RpcResponseHelpers.ResultAs<McpDiscoverResult>(response.Body);
+                        TestAssert.NotNull(result, "Discovery result should deserialize.");
 
-                        TestAssert.Equal("complete", result.GetProperty("resultType").GetString(), "Discovery uses resultType complete.");
-                        TestAssert.Equal("Weather utilities.", result.GetProperty("instructions").GetString(), "Instructions should be returned.");
+                        TestAssert.Equal("complete", result!.ResultType, "Discovery uses resultType complete.");
+                        TestAssert.Equal("Weather utilities.", result.Instructions, "Instructions should be returned.");
+                        TestAssert.True(result.SupportedVersions.Contains("2026-07-28"), "Discovery should advertise 2026-07-28.");
+                        TestAssert.True(result.SupportedVersions.Contains("2024-11-05"), "Discovery should advertise 2024-11-05.");
 
-                        bool sawNewest = false;
-                        bool sawOldest = false;
-                        foreach (JsonElement version in result.GetProperty("supportedVersions").EnumerateArray())
-                        {
-                            if (version.GetString() == "2026-07-28") sawNewest = true;
-                            if (version.GetString() == "2024-11-05") sawOldest = true;
-                        }
-                        TestAssert.True(sawNewest, "Discovery should advertise 2026-07-28.");
-                        TestAssert.True(sawOldest, "Discovery should advertise 2024-11-05.");
+                        TestAssert.NotNull(result.Capabilities, "Capabilities should be present.");
+                        TestAssert.NotNull(result.Capabilities!.Extensions, "Extensions should be present.");
+                        TestAssert.True(result.Capabilities.Extensions!.ContainsKey("io.modelcontextprotocol/tasks"), "Tasks extension should be advertised.");
 
-                        JsonElement extensions = result.GetProperty("capabilities").GetProperty("extensions");
-                        TestAssert.True(extensions.TryGetProperty("io.modelcontextprotocol/tasks", out _), "Tasks extension should be advertised.");
-
-                        JsonElement serverInfo = result.GetProperty("_meta").GetProperty("io.modelcontextprotocol/serverInfo");
-                        TestAssert.Equal("Voltaic.Test", serverInfo.GetProperty("name").GetString(), "Server identity should be present.");
+                        TestAssert.NotNull(result.Meta, "Server _meta should be present.");
+                        McpImplementation? serverInfo = ServerInfoFrom(result.Meta!);
+                        TestAssert.NotNull(serverInfo, "Server identity should be present.");
+                        TestAssert.Equal("Voltaic.Test", serverInfo!.Name, "Server identity name should match.");
                     }),
 
                     Case(suiteId, "ListResultsCarryCacheHints", "tools/list carries ttlMs and cacheScope when configured", async ct =>
@@ -320,13 +315,22 @@ namespace Test.Shared
                         }).ConfigureAwait(false);
 
                         RpcResult response = await fixture.PostMcpAsync("tools/list", new { }, "l1", null, ct).ConfigureAwait(false);
-                        using JsonDocument json = JsonDocument.Parse(response.Body);
-                        JsonElement result = json.RootElement.GetProperty("result");
-
-                        TestAssert.Equal(60000, result.GetProperty("ttlMs").GetInt64(), "List result should carry ttlMs.");
-                        TestAssert.Equal("public", result.GetProperty("cacheScope").GetString(), "List result should carry cacheScope.");
+                        McpListToolsResult? result = RpcResponseHelpers.ResultAs<McpListToolsResult>(response.Body);
+                        TestAssert.NotNull(result, "List result should deserialize.");
+                        TestAssert.Equal(60000L, result!.TtlMs, "List result should carry ttlMs.");
+                        TestAssert.Equal("public", result.CacheScope, "List result should carry cacheScope.");
                     }),
                 });
+        }
+
+        private static McpImplementation? ServerInfoFrom(Dictionary<string, object?> meta)
+        {
+            if (!meta.TryGetValue("io.modelcontextprotocol/serverInfo", out object? value) || value == null)
+            {
+                return null;
+            }
+
+            return JsonSerializer.Deserialize<McpImplementation>(JsonSerializer.Serialize(value));
         }
 
         private static McpProtocolException? ExpectProtocolException(Action action)

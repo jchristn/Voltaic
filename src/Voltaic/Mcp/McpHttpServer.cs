@@ -9,6 +9,7 @@ namespace Voltaic.Mcp
     using System.Net;
     using System.Text;
     using System.Text.Json;
+    using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -1503,34 +1504,40 @@ namespace Voltaic.Mcp
 
             try
             {
-                using JsonDocument document = JsonDocument.Parse(requestBody);
-                JsonElement root = document.RootElement;
-                if (root.ValueKind != JsonValueKind.Object)
+                StatelessSignalEnvelope? envelope = JsonSerializer.Deserialize<StatelessSignalEnvelope>(requestBody);
+                if (envelope != null && envelope.Params != null)
                 {
-                    return;
-                }
-
-                if (root.TryGetProperty("params", out JsonElement paramsElement) && paramsElement.ValueKind == JsonValueKind.Object)
-                {
-                    if (paramsElement.TryGetProperty("name", out JsonElement nameElement) && nameElement.ValueKind == JsonValueKind.String)
-                    {
-                        name = nameElement.GetString();
-                    }
-                    else if (paramsElement.TryGetProperty("uri", out JsonElement uriElement) && uriElement.ValueKind == JsonValueKind.String)
-                    {
-                        name = uriElement.GetString();
-                    }
-
-                    if (paramsElement.TryGetProperty("_meta", out JsonElement metaElement) && metaElement.ValueKind == JsonValueKind.Object
-                        && metaElement.TryGetProperty(McpProtocol.MetaProtocolVersionKey, out JsonElement versionElement) && versionElement.ValueKind == JsonValueKind.String)
-                    {
-                        protocolVersion = versionElement.GetString();
-                    }
+                    name = !String.IsNullOrEmpty(envelope.Params.Name) ? envelope.Params.Name : envelope.Params.Uri;
+                    protocolVersion = envelope.Params.Meta?.ProtocolVersion;
                 }
             }
             catch (JsonException)
             {
             }
+        }
+
+        private sealed class StatelessSignalEnvelope
+        {
+            [JsonPropertyName("params")]
+            public StatelessSignalParams? Params { get; set; }
+        }
+
+        private sealed class StatelessSignalParams
+        {
+            [JsonPropertyName("name")]
+            public string? Name { get; set; }
+
+            [JsonPropertyName("uri")]
+            public string? Uri { get; set; }
+
+            [JsonPropertyName("_meta")]
+            public StatelessSignalMeta? Meta { get; set; }
+        }
+
+        private sealed class StatelessSignalMeta
+        {
+            [JsonPropertyName(McpProtocol.MetaProtocolVersionKey)]
+            public string? ProtocolVersion { get; set; }
         }
 
         private async Task WriteJsonRpcErrorAsync(HttpListenerContext context, int statusCode, object? id, McpProtocolException error, CancellationToken token)

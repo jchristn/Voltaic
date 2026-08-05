@@ -4,8 +4,10 @@ namespace Voltaic.Mcp
     using System;
     using System.IO;
     using System.Net.Http;
+    using System.Collections.Generic;
     using System.Text;
     using System.Text.Json;
+    using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -41,6 +43,32 @@ namespace Voltaic.Mcp
             get => _ProtocolVersion;
             set => _ProtocolVersion = String.IsNullOrWhiteSpace(value) ? McpProtocol.LatestProtocolVersion : value;
         }
+
+        /// <summary>
+        /// Gets or sets the client name reported in the <c>_meta</c> client info of stateless
+        /// (2026-07-28) requests. Default is <c>Voltaic.Mcp.HttpClient</c>.
+        /// </summary>
+        public string ClientName
+        {
+            get => _ClientName;
+            set => _ClientName = String.IsNullOrWhiteSpace(value) ? "Voltaic.Mcp.HttpClient" : value;
+        }
+
+        /// <summary>
+        /// Gets or sets the client version reported in the <c>_meta</c> client info of stateless
+        /// (2026-07-28) requests. Default is <c>1.0.0</c>.
+        /// </summary>
+        public string ClientVersion
+        {
+            get => _ClientVersion;
+            set => _ClientVersion = String.IsNullOrWhiteSpace(value) ? "1.0.0" : value;
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether the client is operating in the stateless (2026-07-28)
+        /// mode established by <see cref="ConnectStatelessAsync"/>.
+        /// </summary>
+        public bool IsStateless => _Stateless;
 
         /// <summary>
         /// Gets or sets the request timeout in milliseconds.
@@ -94,6 +122,9 @@ namespace Voltaic.Mcp
         private CancellationTokenSource? _SseTokenSource;
         private Task? _SseTask;
         private bool _IsSseConnected = false;
+        private bool _Stateless = false;
+        private string _ClientName = "Voltaic.Mcp.HttpClient";
+        private string _ClientVersion = "1.0.0";
         private string _ProtocolVersion = McpProtocol.LatestProtocolVersion;
 
         private int _RequestTimeoutMs = 30000;
@@ -404,6 +435,240 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Connects to a server using the stateless Streamable HTTP transport (2026-07-28). No session
+        /// is established; each request carries its own <c>_meta</c> and routing headers. This calls
+        /// <see cref="DiscoverAsync"/> to verify reachability and, when <paramref name="autoNegotiate"/>
+        /// is true, selects a mutually supported protocol version.
+        /// </summary>
+        /// <param name="baseUrl">The base URL of the server. Must not be null or empty.</param>
+        /// <param name="mcpPath">The MCP endpoint path. Default is <c>/mcp</c>.</param>
+        /// <param name="protocolVersion">The preferred protocol version. Default is <see cref="McpProtocol.NewestProtocolVersion"/>.</param>
+        /// <param name="autoNegotiate">When true, switches to a server-supported version if the preferred one is not offered. Default is true.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>True if discovery succeeded; otherwise false.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="baseUrl"/> is null or empty.</exception>
+        public async Task<bool> ConnectStatelessAsync(string baseUrl, string mcpPath = "/mcp", string? protocolVersion = null, bool autoNegotiate = true, CancellationToken token = default)
+        {
+            if (String.IsNullOrEmpty(baseUrl)) throw new ArgumentNullException(nameof(baseUrl));
+
+            try
+            {
+                Disconnect();
+
+                _BaseUrl = baseUrl.TrimEnd('/');
+                _RpcUrl = $"{_BaseUrl}{mcpPath}";
+                _EventsUrl = _RpcUrl;
+                _Stateless = true;
+                _ProtocolVersion = String.IsNullOrWhiteSpace(protocolVersion) ? McpProtocol.NewestProtocolVersion : protocolVersion!;
+
+                McpDiscoverResult discover = await DiscoverAsync(token).ConfigureAwait(false);
+
+                if (autoNegotiate && discover.SupportedVersions != null && discover.SupportedVersions.Count > 0
+                    && !discover.SupportedVersions.Contains(_ProtocolVersion))
+                {
+                    foreach (string candidate in discover.SupportedVersions)
+                    {
+                        if (McpProtocol.IsSupportedVersion(candidate) && McpProtocol.GetEra(candidate) == McpProtocolEra.Stateless)
+                        {
+                            _ProtocolVersion = candidate;
+                            break;
+                        }
+                    }
+                }
+
+                _ConnectedUtc = DateTime.UtcNow;
+                LogMessage($"Connected to {baseUrl} via stateless Streamable HTTP ({_ProtocolVersion})");
+                RaiseConnected();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Stateless connection failed: {ex.Message}");
+                _Stateless = false;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Calls the <c>server/discover</c> RPC and returns the parsed discovery result (2026-07-28).
+        /// </summary>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>The discovery result.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized.</exception>
+        /// <exception cref="McpProtocolException">Thrown when the server returns a JSON-RPC error.</exception>
+        public async Task<McpDiscoverResult> DiscoverAsync(CancellationToken token = default)
+        {
+            JsonRpcResponse response = await SendStatelessAsync("server/discover", null, null, token).ConfigureAwait(false);
+            if (response.Error != null)
+            {
+                throw new McpProtocolException(response.Error.Code, response.Error.Message ?? "server/discover failed.", response.Error.Data);
+            }
+
+            McpDiscoverResult? discover = DeserializeResult<McpDiscoverResult>(response.Result);
+            if (discover != null)
+            {
+                return discover;
+            }
+
+            throw new McpProtocolException(-32603, "Invalid server/discover response.");
+        }
+
+        /// <summary>
+        /// Sends a single stateless (2026-07-28) JSON-RPC request. The client injects the required
+        /// <c>_meta</c> (protocol version, client info, client capabilities) into the params and sets
+        /// the <c>MCP-Protocol-Version</c>, <c>Mcp-Method</c>, and (when supplied) <c>Mcp-Name</c>
+        /// routing headers. The raw response is returned, including error responses.
+        /// </summary>
+        /// <param name="method">The JSON-RPC method. Must not be null or empty.</param>
+        /// <param name="parameters">The request parameters as a field map, or null.</param>
+        /// <param name="name">The routing name for the <c>Mcp-Name</c> header (the tool name or resource URI), or null.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>The JSON-RPC response.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized.</exception>
+        public async Task<JsonRpcResponse> SendStatelessAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token = default)
+        {
+            if (String.IsNullOrEmpty(method)) throw new ArgumentNullException(nameof(method));
+            if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
+                throw new InvalidOperationException("Client not initialized. Call ConnectStatelessAsync first.");
+
+            Dictionary<string, object?> paramsObject = BuildStatelessParams(parameters);
+            JsonRpcRequest request = new JsonRpcRequest
+            {
+                Method = method,
+                Params = paramsObject,
+                Id = Guid.NewGuid().ToString()
+            };
+
+            DateTime sentUtc = DateTime.UtcNow;
+            string requestJson = JsonSerializer.Serialize(request);
+            LogMessage($"Sending stateless request: {requestJson}");
+            RaiseRequestSent(new RequestSentEventArgs(request));
+
+            using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                cts.CancelAfter(_RequestTimeoutMs);
+
+                using HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
+                httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+                httpRequest.Headers.Accept.ParseAdd("application/json");
+                httpRequest.Headers.Accept.ParseAdd("text/event-stream");
+                httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
+                httpRequest.Headers.Add(McpProtocol.MethodHeader, method);
+                if (!String.IsNullOrEmpty(name))
+                {
+                    httpRequest.Headers.Add(McpProtocol.NameHeader, EncodeMcpNameHeader(name!));
+                }
+
+                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
+                string responseJson = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                LogMessage($"Received stateless response ({(int)httpResponse.StatusCode}): {responseJson}");
+
+                if (String.IsNullOrEmpty(responseJson))
+                {
+                    throw new McpProtocolException(-32603, $"Empty stateless response (HTTP {(int)httpResponse.StatusCode}).");
+                }
+
+                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
+                if (response == null)
+                {
+                    throw new McpProtocolException(-32603, "Invalid stateless response from server.");
+                }
+
+                RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Sends a stateless request and deserializes the successful result into <typeparamref name="T"/>.
+        /// </summary>
+        /// <typeparam name="T">The result type.</typeparam>
+        /// <param name="method">The JSON-RPC method.</param>
+        /// <param name="parameters">The request parameters as a field map, or null.</param>
+        /// <param name="name">The routing name for the <c>Mcp-Name</c> header, or null.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>The deserialized result.</returns>
+        /// <exception cref="McpProtocolException">Thrown when the server returns a JSON-RPC error.</exception>
+        public async Task<T> CallStatelessAsync<T>(string method, IReadOnlyDictionary<string, object?>? parameters = null, string? name = null, CancellationToken token = default)
+        {
+            JsonRpcResponse response = await SendStatelessAsync(method, parameters, name, token).ConfigureAwait(false);
+            if (response.Error != null)
+            {
+                throw new McpProtocolException(response.Error.Code, response.Error.Message ?? "Stateless request failed.", response.Error.Data);
+            }
+
+            return DeserializeResult<T>(response.Result)!;
+        }
+
+        /// <summary>
+        /// Calls a tool over the stateless transport, following the Multi Round-Trip Requests (MRTR)
+        /// pattern. When the server responds with an input-required result and
+        /// <paramref name="provideInputResponses"/> is supplied, the client gathers the responses and
+        /// retries the original call — echoing the server's <c>requestState</c> — until a final result
+        /// arrives or <paramref name="maxInputRounds"/> is exhausted.
+        /// </summary>
+        /// <param name="name">The tool name. Must not be null or empty.</param>
+        /// <param name="arguments">The tool arguments, or null.</param>
+        /// <param name="provideInputResponses">Callback that returns the responses for an input-required result, or null to return the input-required result without retrying.</param>
+        /// <param name="maxInputRounds">The maximum number of input rounds to satisfy. Default is 3. Minimum meaningful value is 1.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>The final (or last) JSON-RPC response.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null or empty.</exception>
+        public async Task<JsonRpcResponse> CallToolStatelessAsync(
+            string name,
+            object? arguments = null,
+            Func<McpInputRequiredResult, IReadOnlyDictionary<string, object?>>? provideInputResponses = null,
+            int maxInputRounds = 3,
+            CancellationToken token = default)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            IReadOnlyDictionary<string, object?>? pendingResponses = null;
+            string? requestState = null;
+            int round = 0;
+
+            while (true)
+            {
+                Dictionary<string, object?> toolParams = new Dictionary<string, object?>(StringComparer.Ordinal) { { "name", name } };
+                if (arguments != null)
+                {
+                    toolParams["arguments"] = arguments;
+                }
+
+                if (pendingResponses != null)
+                {
+                    toolParams["inputResponses"] = pendingResponses;
+                }
+
+                if (requestState != null)
+                {
+                    toolParams["requestState"] = requestState;
+                }
+
+                JsonRpcResponse response = await SendStatelessAsync("tools/call", toolParams, name, token).ConfigureAwait(false);
+                if (response.Error != null)
+                {
+                    return response;
+                }
+
+                McpInputRequiredResult? inputRequired = TryParseInputRequired(response.Result);
+                if (inputRequired == null)
+                {
+                    return response;
+                }
+
+                round++;
+                if (provideInputResponses == null || round > maxInputRounds)
+                {
+                    return response;
+                }
+
+                pendingResponses = provideInputResponses(inputRequired);
+                requestState = inputRequired.RequestState;
+            }
+        }
+
+        /// <summary>
         /// Asynchronously sends a JSON-RPC notification to the server.
         /// </summary>
         /// <param name="method">The notification method.</param>
@@ -536,6 +801,83 @@ namespace Voltaic.Mcp
             {
                 _IsSseConnected = false;
             }
+        }
+
+        private Dictionary<string, object?> BuildStatelessParams(IReadOnlyDictionary<string, object?>? parameters)
+        {
+            Dictionary<string, object?> result = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (parameters != null)
+            {
+                foreach (KeyValuePair<string, object?> entry in parameters)
+                {
+                    result[entry.Key] = entry.Value;
+                }
+            }
+
+            Dictionary<string, object?> clientInfo = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                { "name", _ClientName },
+                { "version", _ClientVersion }
+            };
+
+            Dictionary<string, object?> meta = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                { McpProtocol.MetaProtocolVersionKey, _ProtocolVersion },
+                { McpProtocol.MetaClientInfoKey, clientInfo },
+                { McpProtocol.MetaClientCapabilitiesKey, new Dictionary<string, object?>(StringComparer.Ordinal) }
+            };
+
+            result["_meta"] = meta;
+            return result;
+        }
+
+        private static string EncodeMcpNameHeader(string value)
+        {
+            bool safe = value.Length > 0;
+            foreach (char character in value)
+            {
+                if (character < 0x20 || character > 0x7E)
+                {
+                    safe = false;
+                    break;
+                }
+            }
+
+            if (safe && !value.StartsWith("=?base64?", StringComparison.Ordinal))
+            {
+                return value;
+            }
+
+            string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+            return $"=?base64?{encoded}?=";
+        }
+
+        private static T? DeserializeResult<T>(object? result)
+        {
+            if (result == null)
+            {
+                return default;
+            }
+
+            string raw = JsonSerializer.Serialize(result);
+            return JsonSerializer.Deserialize<T>(raw);
+        }
+
+        private static McpInputRequiredResult? TryParseInputRequired(object? result)
+        {
+            if (result == null)
+            {
+                return null;
+            }
+
+            string raw = JsonSerializer.Serialize(result);
+            ResultTypeProbe? probe = JsonSerializer.Deserialize<ResultTypeProbe>(raw);
+            if (probe != null && StringComparer.Ordinal.Equals(probe.ResultType, "input_required"))
+            {
+                return JsonSerializer.Deserialize<McpInputRequiredResult>(raw);
+            }
+
+            return null;
         }
 
         private HttpRequestMessage CreatePostRequest(string requestJson)
@@ -692,6 +1034,12 @@ namespace Voltaic.Mcp
                     }
                 }
             }
+        }
+
+        private sealed class ResultTypeProbe
+        {
+            [JsonPropertyName("resultType")]
+            public string? ResultType { get; set; }
         }
     }
 }

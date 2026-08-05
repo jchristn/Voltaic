@@ -2345,6 +2345,24 @@
             Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.ClientName">
+            <summary>
+            Gets or sets the client name reported in the <c>_meta</c> client info of stateless
+            (2026-07-28) requests. Default is <c>Voltaic.Mcp.HttpClient</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.ClientVersion">
+            <summary>
+            Gets or sets the client version reported in the <c>_meta</c> client info of stateless
+            (2026-07-28) requests. Default is <c>1.0.0</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.IsStateless">
+            <summary>
+            Gets a value indicating whether the client is operating in the stateless (2026-07-28)
+            mode established by <see cref="M:Voltaic.Mcp.McpHttpClient.ConnectStatelessAsync(System.String,System.String,System.String,System.Boolean,System.Threading.CancellationToken)"/>.
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.RequestTimeoutMs">
             <summary>
             Gets or sets the request timeout in milliseconds.
@@ -2464,6 +2482,72 @@
             <returns>A task that represents the asynchronous operation. The task result contains the JSON-RPC response.</returns>
             <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
             <exception cref="T:System.Exception">Thrown when the HTTP response body cannot be parsed as JSON-RPC.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.ConnectStatelessAsync(System.String,System.String,System.String,System.Boolean,System.Threading.CancellationToken)">
+            <summary>
+            Connects to a server using the stateless Streamable HTTP transport (2026-07-28). No session
+            is established; each request carries its own <c>_meta</c> and routing headers. This calls
+            <see cref="M:Voltaic.Mcp.McpHttpClient.DiscoverAsync(System.Threading.CancellationToken)"/> to verify reachability and, when <paramref name="autoNegotiate"/>
+            is true, selects a mutually supported protocol version.
+            </summary>
+            <param name="baseUrl">The base URL of the server. Must not be null or empty.</param>
+            <param name="mcpPath">The MCP endpoint path. Default is <c>/mcp</c>.</param>
+            <param name="protocolVersion">The preferred protocol version. Default is <see cref="F:Voltaic.Mcp.McpProtocol.NewestProtocolVersion"/>.</param>
+            <param name="autoNegotiate">When true, switches to a server-supported version if the preferred one is not offered. Default is true.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>True if discovery succeeded; otherwise false.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="baseUrl"/> is null or empty.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.DiscoverAsync(System.Threading.CancellationToken)">
+            <summary>
+            Calls the <c>server/discover</c> RPC and returns the parsed discovery result (2026-07-28).
+            </summary>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>The discovery result.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
+            <exception cref="T:Voltaic.Mcp.McpProtocolException">Thrown when the server returns a JSON-RPC error.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.SendStatelessAsync(System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.Object},System.String,System.Threading.CancellationToken)">
+            <summary>
+            Sends a single stateless (2026-07-28) JSON-RPC request. The client injects the required
+            <c>_meta</c> (protocol version, client info, client capabilities) into the params and sets
+            the <c>MCP-Protocol-Version</c>, <c>Mcp-Method</c>, and (when supplied) <c>Mcp-Name</c>
+            routing headers. The raw response is returned, including error responses.
+            </summary>
+            <param name="method">The JSON-RPC method. Must not be null or empty.</param>
+            <param name="parameters">The request parameters as a field map, or null.</param>
+            <param name="name">The routing name for the <c>Mcp-Name</c> header (the tool name or resource URI), or null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>The JSON-RPC response.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.CallStatelessAsync``1(System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.Object},System.String,System.Threading.CancellationToken)">
+            <summary>
+            Sends a stateless request and deserializes the successful result into <typeparamref name="T"/>.
+            </summary>
+            <typeparam name="T">The result type.</typeparam>
+            <param name="method">The JSON-RPC method.</param>
+            <param name="parameters">The request parameters as a field map, or null.</param>
+            <param name="name">The routing name for the <c>Mcp-Name</c> header, or null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>The deserialized result.</returns>
+            <exception cref="T:Voltaic.Mcp.McpProtocolException">Thrown when the server returns a JSON-RPC error.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.CallToolStatelessAsync(System.String,System.Object,System.Func{Voltaic.Mcp.McpInputRequiredResult,System.Collections.Generic.IReadOnlyDictionary{System.String,System.Object}},System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Calls a tool over the stateless transport, following the Multi Round-Trip Requests (MRTR)
+            pattern. When the server responds with an input-required result and
+            <paramref name="provideInputResponses"/> is supplied, the client gathers the responses and
+            retries the original call — echoing the server's <c>requestState</c> — until a final result
+            arrives or <paramref name="maxInputRounds"/> is exhausted.
+            </summary>
+            <param name="name">The tool name. Must not be null or empty.</param>
+            <param name="arguments">The tool arguments, or null.</param>
+            <param name="provideInputResponses">Callback that returns the responses for an input-required result, or null to return the input-required result without retrying.</param>
+            <param name="maxInputRounds">The maximum number of input rounds to satisfy. Default is 3. Minimum meaningful value is 1.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>The final (or last) JSON-RPC response.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="name"/> is null or empty.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpClient.NotifyAsync(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
             <summary>
