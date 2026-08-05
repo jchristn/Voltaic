@@ -13,30 +13,30 @@ namespace Test.Shared
 
             cases.Add(Case(suiteId, "RequestSupportsStringId", "JsonRpcRequest preserves string ids", ct =>
             {
-                JsonElement json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "x", Id = "abc" });
-                TestAssert.Equal("abc", json.GetProperty("id").GetString());
+                JsonProbe json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "x", Id = "abc" });
+                TestAssert.Equal("abc", json.Get("id").String());
                 return Task.CompletedTask;
             }));
 
             cases.Add(Case(suiteId, "RequestSupportsNumberId", "JsonRpcRequest preserves numeric ids", ct =>
             {
-                JsonElement json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "x", Id = 123 });
-                TestAssert.Equal(123, json.GetProperty("id").GetInt32());
+                JsonProbe json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "x", Id = 123 });
+                TestAssert.Equal(123, json.Get("id").Int());
                 return Task.CompletedTask;
             }));
 
             cases.Add(Case(suiteId, "RequestSupportsArrayParams", "JsonRpcRequest serializes array params", ct =>
             {
-                JsonElement json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "sum", Params = new[] { 1, 2, 3 }, Id = 1 });
-                TestAssert.Equal(JsonValueKind.Array, json.GetProperty("params").ValueKind);
-                TestAssert.Equal(3, json.GetProperty("params").GetArrayLength());
+                JsonProbe json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "sum", Params = new[] { 1, 2, 3 }, Id = 1 });
+                TestAssert.True(json.Get("params").IsArray, "value is a JSON array");
+                TestAssert.Equal(3, json.Get("params").Length);
                 return Task.CompletedTask;
             }));
 
             cases.Add(Case(suiteId, "RequestSupportsPrimitiveParams", "JsonRpcRequest serializes primitive params", ct =>
             {
-                JsonElement json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "set", Params = true, Id = 1 });
-                TestAssert.True(json.GetProperty("params").GetBoolean(), "Boolean params should serialize.");
+                JsonProbe json = TestJson.SerializeToElement(new JsonRpcRequest { Method = "set", Params = true, Id = 1 });
+                TestAssert.True(json.Get("params").Bool(), "Boolean params should serialize.");
                 return Task.CompletedTask;
             }));
 
@@ -56,13 +56,13 @@ namespace Test.Shared
                 return Task.CompletedTask;
             }));
 
-            cases.Add(Case(suiteId, "ResponseDeserializesObjectResult", "JsonRpcResponse deserializes object result as JsonElement", ct =>
+            cases.Add(Case(suiteId, "ResponseDeserializesObjectResult", "JsonRpcResponse deserializes object result as JsonProbe", ct =>
             {
                 JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(
                     "{\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true},\"id\":\"r1\"}");
                 TestAssert.NotNull(response, "Response should deserialize.");
-                JsonElement result = (JsonElement)response!.Result!;
-                TestAssert.True(result.GetProperty("ok").GetBoolean(), "Object result should be readable.");
+                JsonProbe result = JsonProbe.From(response!.Result!);
+                TestAssert.True(result.Get("ok").Bool(), "Object result should be readable.");
                 return Task.CompletedTask;
             }));
 
@@ -84,8 +84,8 @@ namespace Test.Shared
 
                 JsonRpcError? roundTrip = JsonSerializer.Deserialize<JsonRpcError>(TestJson.Serialize(error));
                 TestAssert.NotNull(roundTrip, "Error should deserialize.");
-                JsonElement data = (JsonElement)roundTrip!.Data!;
-                TestAssert.Equal("bad", data.GetProperty("detail").GetString());
+                JsonProbe data = JsonProbe.From(roundTrip!.Data!);
+                TestAssert.Equal("bad", data.Get("detail").String());
                 return Task.CompletedTask;
             }));
 
@@ -149,23 +149,23 @@ namespace Test.Shared
 
                 Case(suiteId, "IconAllFields", "McpIcon serializes all optional fields", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpIcon
+                    JsonProbe json = TestJson.SerializeToElement(new McpIcon
                     {
                         Src = "icon.png",
                         MimeType = "image/png",
                         Sizes = new List<string> { "16x16", "32x32" },
                         Theme = "dark"
                     });
-                    TestAssert.Equal("icon.png", json.GetProperty("src").GetString());
-                    TestAssert.Equal("image/png", json.GetProperty("mimeType").GetString());
-                    TestAssert.Equal(2, json.GetProperty("sizes").GetArrayLength());
-                    TestAssert.Equal("dark", json.GetProperty("theme").GetString());
+                    TestAssert.Equal("icon.png", json.Get("src").String());
+                    TestAssert.Equal("image/png", json.Get("mimeType").String());
+                    TestAssert.Equal(2, json.Get("sizes").Length);
+                    TestAssert.Equal("dark", json.Get("theme").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "AnnotationsAllHints", "McpAnnotations serializes every hint", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpAnnotations
+                    JsonProbe json = TestJson.SerializeToElement(new McpAnnotations
                     {
                         Title = "Read",
                         ReadOnlyHint = true,
@@ -173,52 +173,52 @@ namespace Test.Shared
                         IdempotentHint = true,
                         OpenWorldHint = false
                     });
-                    TestAssert.Equal("Read", json.GetProperty("title").GetString());
-                    TestAssert.True(json.GetProperty("readOnlyHint").GetBoolean(), "Read-only hint should serialize.");
-                    TestAssert.False(json.GetProperty("destructiveHint").GetBoolean(), "Destructive hint should serialize false.");
-                    TestAssert.True(json.GetProperty("idempotentHint").GetBoolean(), "Idempotent hint should serialize.");
-                    TestAssert.False(json.GetProperty("openWorldHint").GetBoolean(), "Open-world hint should serialize false.");
+                    TestAssert.Equal("Read", json.Get("title").String());
+                    TestAssert.True(json.Get("readOnlyHint").Bool(), "Read-only hint should serialize.");
+                    TestAssert.False(json.Get("destructiveHint").Bool(), "Destructive hint should serialize false.");
+                    TestAssert.True(json.Get("idempotentHint").Bool(), "Idempotent hint should serialize.");
+                    TestAssert.False(json.Get("openWorldHint").Bool(), "Open-world hint should serialize false.");
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ResultMeta", "McpResult serializes protocol metadata", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpResult { Meta = new Dictionary<string, object?> { ["trace"] = "abc" } });
-                    TestAssert.Equal("abc", json.GetProperty("_meta").GetProperty("trace").GetString());
+                    JsonProbe json = TestJson.SerializeToElement(new McpResult { Meta = new Dictionary<string, object?> { ["trace"] = "abc" } });
+                    TestAssert.Equal("abc", json.Get("_meta").Get("trace").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "PaginatedResultNextCursor", "McpPaginatedResult serializes nextCursor and metadata", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpPaginatedResult
+                    JsonProbe json = TestJson.SerializeToElement(new McpPaginatedResult
                     {
                         NextCursor = "100",
                         Meta = new Dictionary<string, object?> { ["count"] = 100 }
                     });
-                    TestAssert.Equal("100", json.GetProperty("nextCursor").GetString());
-                    TestAssert.Equal(100, json.GetProperty("_meta").GetProperty("count").GetInt32());
+                    TestAssert.Equal("100", json.Get("nextCursor").String());
+                    TestAssert.Equal(100, json.Get("_meta").Get("count").Int());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ClientCapabilitiesAllFields", "McpClientCapabilities serializes all advertised capability fields", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpClientCapabilities
+                    JsonProbe json = TestJson.SerializeToElement(new McpClientCapabilities
                     {
                         Experimental = new Dictionary<string, object> { ["x"] = true },
                         Roots = new McpListChangedCapability { ListChanged = true },
                         Sampling = new { supported = true },
                         Elicitation = new { supported = false }
                     });
-                    TestAssert.True(json.GetProperty("experimental").GetProperty("x").GetBoolean(), "Experimental capability should serialize.");
-                    TestAssert.True(json.GetProperty("roots").GetProperty("listChanged").GetBoolean(), "Roots should serialize.");
-                    TestAssert.True(json.GetProperty("sampling").GetProperty("supported").GetBoolean(), "Sampling should serialize.");
-                    TestAssert.False(json.GetProperty("elicitation").GetProperty("supported").GetBoolean(), "Elicitation should serialize false.");
+                    TestAssert.True(json.Get("experimental").Get("x").Bool(), "Experimental capability should serialize.");
+                    TestAssert.True(json.Get("roots").Get("listChanged").Bool(), "Roots should serialize.");
+                    TestAssert.True(json.Get("sampling").Get("supported").Bool(), "Sampling should serialize.");
+                    TestAssert.False(json.Get("elicitation").Get("supported").Bool(), "Elicitation should serialize false.");
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ServerCapabilitiesAllFields", "McpServerCapabilities serializes all capability fields", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpServerCapabilities
+                    JsonProbe json = TestJson.SerializeToElement(new McpServerCapabilities
                     {
                         Experimental = new Dictionary<string, object> { ["draft"] = "yes" },
                         Logging = new { },
@@ -227,54 +227,54 @@ namespace Test.Shared
                         Resources = new McpResourceCapability { ListChanged = true, Subscribe = true },
                         Tools = new McpListChangedCapability { ListChanged = false }
                     });
-                    TestAssert.Equal("yes", json.GetProperty("experimental").GetProperty("draft").GetString());
-                    TestAssert.Equal(JsonValueKind.Object, json.GetProperty("logging").ValueKind);
-                    TestAssert.Equal(JsonValueKind.Object, json.GetProperty("completions").ValueKind);
-                    TestAssert.True(json.GetProperty("prompts").GetProperty("listChanged").GetBoolean(), "Prompts should serialize.");
-                    TestAssert.True(json.GetProperty("resources").GetProperty("subscribe").GetBoolean(), "Resource subscribe should serialize.");
-                    TestAssert.False(json.GetProperty("tools").GetProperty("listChanged").GetBoolean(), "False listChanged should serialize.");
+                    TestAssert.Equal("yes", json.Get("experimental").Get("draft").String());
+                    TestAssert.True(json.Get("logging").IsObject, "value is a JSON object");
+                    TestAssert.True(json.Get("completions").IsObject, "value is a JSON object");
+                    TestAssert.True(json.Get("prompts").Get("listChanged").Bool(), "Prompts should serialize.");
+                    TestAssert.True(json.Get("resources").Get("subscribe").Bool(), "Resource subscribe should serialize.");
+                    TestAssert.False(json.Get("tools").Get("listChanged").Bool(), "False listChanged should serialize.");
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "TextContentMetaAndAnnotations", "McpTextContent serializes metadata and annotations", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpTextContent
+                    JsonProbe json = TestJson.SerializeToElement(new McpTextContent
                     {
                         Text = "hello",
                         Annotations = new McpAnnotations { Title = "Greeting" },
                         Meta = new Dictionary<string, object?> { ["lang"] = "en" }
                     });
-                    TestAssert.Equal("text", json.GetProperty("type").GetString());
-                    TestAssert.Equal("Greeting", json.GetProperty("annotations").GetProperty("title").GetString());
-                    TestAssert.Equal("en", json.GetProperty("_meta").GetProperty("lang").GetString());
+                    TestAssert.Equal("text", json.Get("type").String());
+                    TestAssert.Equal("Greeting", json.Get("annotations").Get("title").String());
+                    TestAssert.Equal("en", json.Get("_meta").Get("lang").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ImageContentAnnotations", "McpImageContent serializes annotations", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpImageContent
+                    JsonProbe json = TestJson.SerializeToElement(new McpImageContent
                     {
                         Data = "AA==",
                         MimeType = "image/png",
                         Annotations = new McpAnnotations { Title = "Image" }
                     });
-                    TestAssert.Equal("image", json.GetProperty("type").GetString());
-                    TestAssert.Equal("AA==", json.GetProperty("data").GetString());
-                    TestAssert.Equal("Image", json.GetProperty("annotations").GetProperty("title").GetString());
+                    TestAssert.Equal("image", json.Get("type").String());
+                    TestAssert.Equal("AA==", json.Get("data").String());
+                    TestAssert.Equal("Image", json.Get("annotations").Get("title").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "AudioContentDefaults", "McpAudioContent has the audio discriminator", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpAudioContent { Data = "AA==", MimeType = "audio/wav" });
-                    TestAssert.Equal("audio", json.GetProperty("type").GetString());
-                    TestAssert.Equal("audio/wav", json.GetProperty("mimeType").GetString());
+                    JsonProbe json = TestJson.SerializeToElement(new McpAudioContent { Data = "AA==", MimeType = "audio/wav" });
+                    TestAssert.Equal("audio", json.Get("type").String());
+                    TestAssert.Equal("audio/wav", json.Get("mimeType").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ResourceFullMetadata", "McpResource serializes full metadata", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpResource
+                    JsonProbe json = TestJson.SerializeToElement(new McpResource
                     {
                         Uri = "voltaic://r",
                         Name = "r",
@@ -285,10 +285,10 @@ namespace Test.Shared
                         Annotations = new McpAnnotations { ReadOnlyHint = true },
                         Icons = new List<McpIcon> { new McpIcon { Src = "icon.png" } }
                     });
-                    TestAssert.Equal("voltaic://r", json.GetProperty("uri").GetString());
-                    TestAssert.Equal(42L, json.GetProperty("size").GetInt64());
-                    TestAssert.True(json.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean(), "Annotations should serialize.");
-                    TestAssert.Equal("icon.png", json.GetProperty("icons")[0].GetProperty("src").GetString());
+                    TestAssert.Equal("voltaic://r", json.Get("uri").String());
+                    TestAssert.Equal(42L, json.Get("size").Long());
+                    TestAssert.True(json.Get("annotations").Get("readOnlyHint").Bool(), "Annotations should serialize.");
+                    TestAssert.Equal("icon.png", json.Get("icons")[0].Get("src").String());
                     return Task.CompletedTask;
                 }),
 
@@ -304,7 +304,7 @@ namespace Test.Shared
 
                 Case(suiteId, "ResourceTemplateFullMetadata", "McpResourceTemplate serializes full metadata", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpResourceTemplate
+                    JsonProbe json = TestJson.SerializeToElement(new McpResourceTemplate
                     {
                         UriTemplate = "voltaic://docs/{name}",
                         Name = "doc",
@@ -312,8 +312,8 @@ namespace Test.Shared
                         Description = "Dynamic doc",
                         MimeType = "text/plain"
                     });
-                    TestAssert.Equal("voltaic://docs/{name}", json.GetProperty("uriTemplate").GetString());
-                    TestAssert.Equal("Doc", json.GetProperty("title").GetString());
+                    TestAssert.Equal("voltaic://docs/{name}", json.Get("uriTemplate").String());
+                    TestAssert.Equal("Doc", json.Get("title").String());
                     return Task.CompletedTask;
                 }),
 
@@ -327,14 +327,14 @@ namespace Test.Shared
 
                 Case(suiteId, "BlobResourceContents", "McpBlobResourceContents serializes base64 blobs", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpBlobResourceContents
+                    JsonProbe json = TestJson.SerializeToElement(new McpBlobResourceContents
                     {
                         Uri = "voltaic://blob",
                         MimeType = "application/octet-stream",
                         Blob = "AAE="
                     });
-                    TestAssert.Equal("AAE=", json.GetProperty("blob").GetString());
-                    TestAssert.Equal("application/octet-stream", json.GetProperty("mimeType").GetString());
+                    TestAssert.Equal("AAE=", json.Get("blob").String());
+                    TestAssert.Equal("application/octet-stream", json.Get("mimeType").String());
                     return Task.CompletedTask;
                 }),
 
@@ -348,8 +348,8 @@ namespace Test.Shared
 
                 Case(suiteId, "PromptArgumentRequiredFalse", "McpPromptArgument serializes required=false", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpPromptArgument { Name = "topic", Required = false });
-                    TestAssert.False(json.GetProperty("required").GetBoolean(), "Required false should be preserved.");
+                    JsonProbe json = TestJson.SerializeToElement(new McpPromptArgument { Name = "topic", Required = false });
+                    TestAssert.False(json.Get("required").Bool(), "Required false should be preserved.");
                     return Task.CompletedTask;
                 }),
 
@@ -369,15 +369,15 @@ namespace Test.Shared
 
                 Case(suiteId, "PromptMessageDefaults", "McpPromptMessage defaults to user text content", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpPromptMessage());
-                    TestAssert.Equal("user", json.GetProperty("role").GetString());
-                    TestAssert.Equal("text", json.GetProperty("content").GetProperty("type").GetString());
+                    JsonProbe json = TestJson.SerializeToElement(new McpPromptMessage());
+                    TestAssert.Equal("user", json.Get("role").String());
+                    TestAssert.Equal("text", json.Get("content").Get("type").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "GetPromptResultMetadata", "McpGetPromptResult serializes messages and metadata", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpGetPromptResult
+                    JsonProbe json = TestJson.SerializeToElement(new McpGetPromptResult
                     {
                         Description = "desc",
                         Meta = new Dictionary<string, object?> { ["source"] = "test" },
@@ -386,55 +386,55 @@ namespace Test.Shared
                             new McpPromptMessage { Role = "assistant", Content = new McpTextContent { Text = "ready" } }
                         }
                     });
-                    TestAssert.Equal("desc", json.GetProperty("description").GetString());
-                    TestAssert.Equal("test", json.GetProperty("_meta").GetProperty("source").GetString());
-                    TestAssert.Equal("assistant", json.GetProperty("messages")[0].GetProperty("role").GetString());
+                    TestAssert.Equal("desc", json.Get("description").String());
+                    TestAssert.Equal("test", json.Get("_meta").Get("source").String());
+                    TestAssert.Equal("assistant", json.Get("messages")[0].Get("role").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ListToolsResult", "McpListToolsResult serializes tools and cursor", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpListToolsResult
+                    JsonProbe json = TestJson.SerializeToElement(new McpListToolsResult
                     {
                         NextCursor = "2",
                         Tools = new List<ToolDefinition> { new ToolDefinition { Name = "t", Description = "d" } }
                     });
-                    TestAssert.Equal("2", json.GetProperty("nextCursor").GetString());
-                    TestAssert.Equal("t", json.GetProperty("tools")[0].GetProperty("name").GetString());
+                    TestAssert.Equal("2", json.Get("nextCursor").String());
+                    TestAssert.Equal("t", json.Get("tools")[0].Get("name").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ListResourcesResult", "McpListResourcesResult serializes resources and cursor", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpListResourcesResult
+                    JsonProbe json = TestJson.SerializeToElement(new McpListResourcesResult
                     {
                         NextCursor = "2",
                         Resources = new List<McpResource> { new McpResource { Uri = "voltaic://r", Name = "r" } }
                     });
-                    TestAssert.Equal("voltaic://r", json.GetProperty("resources")[0].GetProperty("uri").GetString());
+                    TestAssert.Equal("voltaic://r", json.Get("resources")[0].Get("uri").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ListResourceTemplatesResult", "McpListResourceTemplatesResult serializes templates", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpListResourceTemplatesResult
+                    JsonProbe json = TestJson.SerializeToElement(new McpListResourceTemplatesResult
                     {
                         ResourceTemplates = new List<McpResourceTemplate>
                         {
                             new McpResourceTemplate { UriTemplate = "voltaic://{id}", Name = "r" }
                         }
                     });
-                    TestAssert.Equal("voltaic://{id}", json.GetProperty("resourceTemplates")[0].GetProperty("uriTemplate").GetString());
+                    TestAssert.Equal("voltaic://{id}", json.Get("resourceTemplates")[0].Get("uriTemplate").String());
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ListPromptsResult", "McpListPromptsResult serializes prompts", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpListPromptsResult
+                    JsonProbe json = TestJson.SerializeToElement(new McpListPromptsResult
                     {
                         Prompts = new List<McpPrompt> { new McpPrompt { Name = "p" } }
                     });
-                    TestAssert.Equal("p", json.GetProperty("prompts")[0].GetProperty("name").GetString());
+                    TestAssert.Equal("p", json.Get("prompts")[0].Get("name").String());
                     return Task.CompletedTask;
                 }),
 
@@ -452,20 +452,20 @@ namespace Test.Shared
                 Case(suiteId, "ToolCallResultFromTextNull", "McpToolCallResult.FromText converts null to empty text", ct =>
                 {
                     McpToolCallResult result = McpToolCallResult.FromText(null);
-                    JsonElement json = TestJson.SerializeToElement(result);
-                    TestAssert.Equal(String.Empty, json.GetProperty("content")[0].GetProperty("text").GetString());
-                    TestAssert.False(json.TryGetProperty("structuredContent", out _), "Structured content should be omitted.");
+                    JsonProbe json = TestJson.SerializeToElement(result);
+                    TestAssert.Equal(String.Empty, json.Get("content")[0].Get("text").String());
+                    TestAssert.False(json.Has("structuredContent"), "Structured content should be omitted.");
                     return Task.CompletedTask;
                 }),
 
                 Case(suiteId, "ToolCallResultErrorFlag", "McpToolCallResult serializes isError", ct =>
                 {
-                    JsonElement json = TestJson.SerializeToElement(new McpToolCallResult
+                    JsonProbe json = TestJson.SerializeToElement(new McpToolCallResult
                     {
                         IsError = true,
                         Content = new List<object> { new McpTextContent { Text = "failed" } }
                     });
-                    TestAssert.True(json.GetProperty("isError").GetBoolean(), "isError should serialize.");
+                    TestAssert.True(json.Get("isError").Bool(), "isError should serialize.");
                     return Task.CompletedTask;
                 }),
 
@@ -476,8 +476,8 @@ namespace Test.Shared
                     TestAssert.Equal(-32602, exception.Code);
                     TestAssert.Equal(-32602, error.Code);
                     TestAssert.Equal("bad", error.Message);
-                    JsonElement data = TestJson.SerializeToElement(error.Data!);
-                    TestAssert.Equal("name", data.GetProperty("field").GetString());
+                    JsonProbe data = TestJson.SerializeToElement(error.Data!);
+                    TestAssert.Equal("name", data.Get("field").String());
                     return Task.CompletedTask;
                 }),
 

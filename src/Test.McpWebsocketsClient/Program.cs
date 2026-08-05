@@ -109,7 +109,7 @@ namespace Test.McpWebsocketsClient
                             {
                                 try
                                 {
-                                    callParams = JsonSerializer.Deserialize<JsonElement>(callParts[1]);
+                                    callParams = JsonSerializer.Deserialize<object?>(callParts[1]);
                                 }
                                 catch
                                 {
@@ -150,7 +150,7 @@ namespace Test.McpWebsocketsClient
                             {
                                 try
                                 {
-                                    notifyParams = JsonSerializer.Deserialize<JsonElement>(notifyParts[1]);
+                                    notifyParams = JsonSerializer.Deserialize<object?>(notifyParts[1]);
                                 }
                                 catch
                                 {

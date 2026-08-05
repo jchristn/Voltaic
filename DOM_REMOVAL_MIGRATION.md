@@ -30,14 +30,27 @@ Delegate change (public, breaking): `Func<JsonElement?, …>` → `Func<RpcParam
   `Test.JsonRpcServer`.
 - `var` and tuples: zero across the codebase.
 
-## Remaining
+## A2A (done)
 
-- A2A production: `A2AModels.cs`, `A2AHttpServer.cs`, `A2AGrpcWire.cs`, `A2AClient.cs` (~28 hits).
-- A2A test suites: `A2AProtocolSuites.cs`, `A2ACompatibilitySuites.cs` (still compile; convert with
-  A2A production).
-- Doc-comment mentions of `JsonElement` in `RpcParameters.cs` / `McpJsonValueKind.cs` (explanatory,
-  not usage).
+- Production: `A2AModels` (`object?` / `Dictionary<string, object?>`), `A2AGrpcWire` (Struct<->JSON via
+  `Utf8JsonReader`), `A2AHttpServer`, `A2AClient` — all converted; the library round-trips arbitrary
+  JSON (including caller-supplied deserialized values) through `JsonSerializer`.
+
+## Tests + demo apps (done)
+
+- Added `JsonProbe` (Test.Shared) — a `Utf8JsonReader`-based navigable JSON view for assertions
+  (`Get`/`[i]`/`String`/`Int`/`Long`/`Double`/`Bool`/`Has`/`TryGet`/`EnumerateArray`/`IsObject`/`IsArray`/`From`).
+- Converted every result-inspection site across the Test.Shared suites and the demo client apps
+  (`Test.McpClient`, `Test.McpHttpClient`, `Test.JsonRpcClient`, `Test.McpWebsocketsClient`).
+
+## Status: complete
+
+A `grep` for `JsonElement`/`JsonDocument`/`JsonNode`/`JsonObject`/`JsonArray` across all of `src` returns
+**zero** matches. No bare `JsonValueKind`. `var` and tuples are zero. The only remaining JSON reader
+types are the streaming `Utf8JsonReader`/`JsonTokenType` (not DOM) and the project's own
+`McpJsonValueKind`/`JsonValueInfo`/`JsonProbe`/`RpcParameters` helpers. Full solution builds
+warning-free on net8.0 and net10.0; console suite 313/313 on both.
 
 ## Release
 
-Staying on `v0.6.0` (pre-1.0 ALPHA); no version bump. CHANGELOG note to be added when A2A lands.
+Staying on `v0.6.0` (pre-1.0 ALPHA); no version bump.

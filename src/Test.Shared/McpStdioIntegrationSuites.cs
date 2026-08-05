@@ -74,33 +74,33 @@ namespace Test.Shared
                         using McpClient client = new McpClient();
                         await LaunchTestServerAsync(client, ct).ConfigureAwait(false);
 
-                        JsonElement initialize = await client.CallAsync<JsonElement>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
-                        JsonElement tools = await client.CallAsync<JsonElement>("tools/list", new { }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
-                        JsonElement toolCall = await client.CallAsync<JsonElement>("tools/call", new { name = "ping", arguments = new { } }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
-                        JsonElement staticResource = await client.CallAsync<JsonElement>("resources/read", new { uri = "voltaic://stdio/static" }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
-                        JsonElement dynamicResource = await client.CallAsync<JsonElement>("resources/read", new { uri = "voltaic://stdio/dynamic" }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
-                        JsonElement prompt = await client.CallAsync<JsonElement>("prompts/get", new { name = "stdio-prompt", arguments = new { topic = "Voltaic" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe tools = JsonProbe.From(await client.CallAsync<object?>("tools/list", new { }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe toolCall = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "ping", arguments = new { } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe staticResource = JsonProbe.From(await client.CallAsync<object?>("resources/read", new { uri = "voltaic://stdio/static" }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe dynamicResource = JsonProbe.From(await client.CallAsync<object?>("resources/read", new { uri = "voltaic://stdio/dynamic" }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe prompt = JsonProbe.From(await client.CallAsync<object?>("prompts/get", new { name = "stdio-prompt", arguments = new { topic = "Voltaic" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
 
-                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, initialize.GetProperty("protocolVersion").GetString());
-                        TestAssert.Equal("Voltaic.Mcp.StdioServer", initialize.GetProperty("serverInfo").GetProperty("name").GetString());
-                        TestAssert.True(initialize.GetProperty("capabilities").TryGetProperty("tools", out _), "Tools capability should be advertised.");
-                        TestAssert.True(initialize.GetProperty("capabilities").TryGetProperty("resources", out _), "Resources capability should be advertised.");
-                        TestAssert.True(initialize.GetProperty("capabilities").TryGetProperty("prompts", out _), "Prompts capability should be advertised.");
+                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, initialize.Get("protocolVersion").String());
+                        TestAssert.Equal("Voltaic.Mcp.StdioServer", initialize.Get("serverInfo").Get("name").String());
+                        TestAssert.True(initialize.Get("capabilities").Has("tools"), "Tools capability should be advertised.");
+                        TestAssert.True(initialize.Get("capabilities").Has("resources"), "Resources capability should be advertised.");
+                        TestAssert.True(initialize.Get("capabilities").Has("prompts"), "Prompts capability should be advertised.");
 
-                        string[] toolNames = tools.GetProperty("tools")
+                        string[] toolNames = tools.Get("tools")
                             .EnumerateArray()
-                            .Select(tool => tool.GetProperty("name").GetString() ?? String.Empty)
+                            .Select(tool => tool.Get("name").String() ?? String.Empty)
                             .ToArray();
                         TestAssert.True(toolNames.Contains("ping"), "tools/list should include built-in ping.");
                         TestAssert.True(toolNames.Contains("echo"), "tools/list should include built-in echo.");
                         TestAssert.True(toolNames.Contains("add"), "tools/list should include test-server add.");
                         TestAssert.True(toolNames.Contains("multiply"), "tools/list should include test-server multiply.");
 
-                        TestAssert.Equal("text", toolCall.GetProperty("content")[0].GetProperty("type").GetString());
-                        TestAssert.True(toolCall.GetProperty("content")[0].GetProperty("text").GetString()?.Contains("pong", StringComparison.Ordinal) == true, "tools/call ping should return pong content.");
-                        TestAssert.Equal("stdio static", staticResource.GetProperty("contents")[0].GetProperty("text").GetString());
-                        TestAssert.Equal("dynamic:voltaic://stdio/dynamic", dynamicResource.GetProperty("contents")[0].GetProperty("text").GetString());
-                        TestAssert.Equal("Stdio Voltaic", prompt.GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString());
+                        TestAssert.Equal("text", toolCall.Get("content")[0].Get("type").String());
+                        TestAssert.True(toolCall.Get("content")[0].Get("text").String()?.Contains("pong", StringComparison.Ordinal) == true, "tools/call ping should return pong content.");
+                        TestAssert.Equal("stdio static", staticResource.Get("contents")[0].Get("text").String());
+                        TestAssert.Equal("dynamic:voltaic://stdio/dynamic", dynamicResource.Get("contents")[0].Get("text").String());
+                        TestAssert.Equal("Stdio Voltaic", prompt.Get("messages")[0].Get("content").Get("text").String());
 
                         client.Shutdown();
                     }),
@@ -149,7 +149,7 @@ namespace Test.Shared
                         await LaunchTestServerAsync(client, ct).ConfigureAwait(false);
 
                         Exception missingMethod = await CaptureExceptionAsync(() => client.CallAsync<string>("unknownMethod", timeoutMs: 15000, token: ct)).ConfigureAwait(false);
-                        Exception invalidToolParams = await CaptureExceptionAsync(() => client.CallAsync<JsonElement>("tools/call", new { }, timeoutMs: 15000, token: ct)).ConfigureAwait(false);
+                        Exception invalidToolParams = await CaptureExceptionAsync(() => client.CallAsync<object?>("tools/call", new { }, timeoutMs: 15000, token: ct)).ConfigureAwait(false);
 
                         TestAssert.True(missingMethod.Message.Contains("RPC Error -32601", StringComparison.Ordinal), "Unknown methods should map to method-not-found.");
                         TestAssert.True(invalidToolParams.Message.Contains("RPC Error -32602", StringComparison.Ordinal), "Invalid MCP tool params should map to invalid-params.");

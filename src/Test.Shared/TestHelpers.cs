@@ -22,21 +22,19 @@ namespace Test.Shared
 
     internal static class TestJson
     {
-        public static JsonElement SerializeToElement(object value)
+        public static JsonProbe SerializeToElement(object value)
         {
-            return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(value));
+            return JsonProbe.From(value);
         }
 
-        public static JsonElement ParseRoot(string json)
+        public static JsonProbe ParseRoot(string json)
         {
-            using JsonDocument document = JsonDocument.Parse(json);
-            return document.RootElement.Clone();
+            return JsonProbe.Parse(json);
         }
 
         public static bool ContainsProperty(object value, string propertyName)
         {
-            JsonElement element = SerializeToElement(value);
-            return element.TryGetProperty(propertyName, out _);
+            return SerializeToElement(value).Has(propertyName);
         }
 
         public static string Serialize(object value)
@@ -183,11 +181,11 @@ namespace Test.Shared
 
     internal sealed record RpcResult(HttpStatusCode StatusCode, string Body, string? SessionId, string? ContentType)
     {
-        public JsonElement Root => TestJson.ParseRoot(Body);
+        public JsonProbe Root => TestJson.ParseRoot(Body);
 
-        public JsonElement Result => Root.GetProperty("result");
+        public JsonProbe Result => Root.Get("result");
 
-        public JsonElement Error => Root.GetProperty("error");
+        public JsonProbe Error => Root.Get("error");
     }
 
     internal sealed class TcpJsonRpcFixture : IAsyncDisposable

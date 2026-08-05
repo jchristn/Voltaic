@@ -54,9 +54,9 @@ namespace Test.Shared
                         }, includeDefaultMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        JsonElement result = await client.CallAsync<JsonElement>("async", token: ct).ConfigureAwait(false);
+                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("async", token: ct).ConfigureAwait(false));
 
-                        TestAssert.True(result.GetProperty("ok").GetBoolean(), "Async method result should be returned.");
+                        TestAssert.True(result.Get("ok").Bool(), "Async method result should be returned.");
                     }),
 
                     Case(suiteId, "CancellationAwareMethodRegistration", "JsonRpcServer passes cancellation tokens to token-aware methods", async ct =>
@@ -67,12 +67,12 @@ namespace Test.Shared
                         }, includeDefaultMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        JsonElement result = await client.CallAsync<JsonElement>("token", token: ct).ConfigureAwait(false);
+                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("token", token: ct).ConfigureAwait(false));
 
-                        TestAssert.True(result.GetProperty("canBeCanceled").GetBoolean(), "Server token should be cancellable.");
+                        TestAssert.True(result.Get("canBeCanceled").Bool(), "Server token should be cancellable.");
                     }),
 
-                    Case(suiteId, "ObjectOverloadReturnsJsonElement", "JsonRpcClient object overload returns JSON content", async ct =>
+                    Case(suiteId, "ObjectOverloadReturnsJsonContent", "JsonRpcClient object overload returns JSON content", async ct =>
                     {
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
@@ -82,8 +82,8 @@ namespace Test.Shared
 
                         object? result = await client.CallAsync("object", token: ct).ConfigureAwait(false);
 
-                        TestAssert.True(result is JsonElement, "Object overload should deserialize object results as JsonElement.");
-                        TestAssert.Equal(42, ((JsonElement)result!).GetProperty("answer").GetInt32());
+                        TestAssert.NotNull(result, "Object overload should return a JSON result.");
+                        TestAssert.Equal(42, JsonProbe.From(result!).Get("answer").Int());
                     }),
 
                     Case(suiteId, "NullResultReturnsDefault", "JsonRpcClient returns default when result is null", async ct =>
@@ -210,8 +210,8 @@ namespace Test.Shared
                         JsonRpcRequest received = await WaitForTaskAsync(notification.Task, ct).ConfigureAwait(false);
 
                         TestAssert.Equal("server/event", received.Method);
-                        JsonElement parameters = (JsonElement)received.Params!;
-                        TestAssert.Equal(9, parameters.GetProperty("value").GetInt32());
+                        JsonProbe parameters = JsonProbe.From(received.Params!);
+                        TestAssert.Equal(9, parameters.Get("value").Int());
                     }),
 
                     Case(suiteId, "KickClient", "JsonRpcServer KickClient removes a connected client", async ct =>

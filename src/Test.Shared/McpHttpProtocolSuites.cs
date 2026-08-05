@@ -29,13 +29,13 @@ namespace Test.Shared
                             clientInfo = new { name = "test-client", version = "1.0.0" }
                         }, 1, null, ct).ConfigureAwait(false);
 
-                        using JsonDocument json = JsonDocument.Parse(response.Body);
-                        JsonElement result = json.RootElement.GetProperty("result");
-                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, result.GetProperty("protocolVersion").GetString());
-                        TestAssert.Equal("Voltaic.Test", result.GetProperty("serverInfo").GetProperty("name").GetString());
-                        TestAssert.True(result.GetProperty("capabilities").TryGetProperty("tools", out _), "Tools capability should be advertised.");
-                        TestAssert.True(result.GetProperty("capabilities").TryGetProperty("resources", out _), "Resources capability should be advertised.");
-                        TestAssert.True(result.GetProperty("capabilities").TryGetProperty("prompts", out _), "Prompts capability should be advertised.");
+                        JsonProbe json = JsonProbe.Parse(response.Body);
+                        JsonProbe result = json.Get("result");
+                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, result.Get("protocolVersion").String());
+                        TestAssert.Equal("Voltaic.Test", result.Get("serverInfo").Get("name").String());
+                        TestAssert.True(result.Get("capabilities").Has("tools"), "Tools capability should be advertised.");
+                        TestAssert.True(result.Get("capabilities").Has("resources"), "Resources capability should be advertised.");
+                        TestAssert.True(result.Get("capabilities").Has("prompts"), "Prompts capability should be advertised.");
                         TestAssert.False(String.IsNullOrEmpty(response.SessionId), "Response should include session id.");
                     }),
 
@@ -48,10 +48,10 @@ namespace Test.Shared
                             protocolVersion = "1900-01-01"
                         }, 2, null, ct).ConfigureAwait(false);
 
-                        using JsonDocument json = JsonDocument.Parse(response.Body);
-                        JsonElement error = json.RootElement.GetProperty("error");
-                        TestAssert.Equal(-32602, error.GetProperty("code").GetInt32());
-                        TestAssert.True(error.GetProperty("message").GetString()!.Contains("Unsupported MCP protocol version"), "Error should describe unsupported version.");
+                        JsonProbe json = JsonProbe.Parse(response.Body);
+                        JsonProbe error = json.Get("error");
+                        TestAssert.Equal(-32602, error.Get("code").Int());
+                        TestAssert.True(error.Get("message").String()!.Contains("Unsupported MCP protocol version"), "Error should describe unsupported version.");
                     }),
 
                     Case(suiteId, "ToolsListAndCall", "tools/list and tools/call expose registered metadata and structured results", async ct =>
@@ -59,9 +59,9 @@ namespace Test.Shared
                         await using HttpServerFixture fixture = await HttpServerFixture.StartAsync(ct).ConfigureAwait(false);
 
                         RpcResult listResponse = await fixture.PostRpcAsync("tools/list", new { }, 3, null, ct).ConfigureAwait(false);
-                        using JsonDocument listJson = JsonDocument.Parse(listResponse.Body);
-                        JsonElement tools = listJson.RootElement.GetProperty("result").GetProperty("tools");
-                        TestAssert.True(tools.EnumerateArray().Any(tool => tool.GetProperty("name").GetString() == "sum"), "Registered tool should be listed.");
+                        JsonProbe listJson = JsonProbe.Parse(listResponse.Body);
+                        JsonProbe tools = listJson.Get("result").Get("tools");
+                        TestAssert.True(tools.EnumerateArray().Any(tool => tool.Get("name").String() == "sum"), "Registered tool should be listed.");
 
                         RpcResult callResponse = await fixture.PostRpcAsync("tools/call", new
                         {
@@ -69,10 +69,10 @@ namespace Test.Shared
                             arguments = new { a = 2, b = 3 }
                         }, 4, listResponse.SessionId, ct).ConfigureAwait(false);
 
-                        using JsonDocument callJson = JsonDocument.Parse(callResponse.Body);
-                        JsonElement result = callJson.RootElement.GetProperty("result");
-                        TestAssert.Equal(5, result.GetProperty("structuredContent").GetProperty("total").GetInt32());
-                        TestAssert.Equal("text", result.GetProperty("content")[0].GetProperty("type").GetString());
+                        JsonProbe callJson = JsonProbe.Parse(callResponse.Body);
+                        JsonProbe result = callJson.Get("result");
+                        TestAssert.Equal(5, result.Get("structuredContent").Get("total").Int());
+                        TestAssert.Equal("text", result.Get("content")[0].Get("type").String());
                     }),
 
                     Case(suiteId, "ResourcesListReadAndTemplates", "resources/list, resources/read, and templates read static and dynamic resources", async ct =>
@@ -80,27 +80,27 @@ namespace Test.Shared
                         await using HttpServerFixture fixture = await HttpServerFixture.StartAsync(ct).ConfigureAwait(false);
 
                         RpcResult listResponse = await fixture.PostRpcAsync("resources/list", new { }, 5, null, ct).ConfigureAwait(false);
-                        using JsonDocument listJson = JsonDocument.Parse(listResponse.Body);
-                        JsonElement resources = listJson.RootElement.GetProperty("result").GetProperty("resources");
-                        TestAssert.True(resources.EnumerateArray().Any(resource => resource.GetProperty("uri").GetString() == "voltaic://docs/readme"), "Static resource should be listed.");
+                        JsonProbe listJson = JsonProbe.Parse(listResponse.Body);
+                        JsonProbe resources = listJson.Get("result").Get("resources");
+                        TestAssert.True(resources.EnumerateArray().Any(resource => resource.Get("uri").String() == "voltaic://docs/readme"), "Static resource should be listed.");
 
                         RpcResult staticReadResponse = await fixture.PostRpcAsync("resources/read", new
                         {
                             uri = "voltaic://docs/readme"
                         }, 6, listResponse.SessionId, ct).ConfigureAwait(false);
-                        using JsonDocument staticReadJson = JsonDocument.Parse(staticReadResponse.Body);
-                        TestAssert.Equal("readme contents", staticReadJson.RootElement.GetProperty("result").GetProperty("contents")[0].GetProperty("text").GetString());
+                        JsonProbe staticReadJson = JsonProbe.Parse(staticReadResponse.Body);
+                        TestAssert.Equal("readme contents", staticReadJson.Get("result").Get("contents")[0].Get("text").String());
 
                         RpcResult templatesResponse = await fixture.PostRpcAsync("resources/templates/list", new { }, 7, listResponse.SessionId, ct).ConfigureAwait(false);
-                        using JsonDocument templatesJson = JsonDocument.Parse(templatesResponse.Body);
-                        TestAssert.Equal("voltaic://docs/{name}", templatesJson.RootElement.GetProperty("result").GetProperty("resourceTemplates")[0].GetProperty("uriTemplate").GetString());
+                        JsonProbe templatesJson = JsonProbe.Parse(templatesResponse.Body);
+                        TestAssert.Equal("voltaic://docs/{name}", templatesJson.Get("result").Get("resourceTemplates")[0].Get("uriTemplate").String());
 
                         RpcResult dynamicReadResponse = await fixture.PostRpcAsync("resources/read", new
                         {
                             uri = "voltaic://docs/intro"
                         }, 8, listResponse.SessionId, ct).ConfigureAwait(false);
-                        using JsonDocument dynamicReadJson = JsonDocument.Parse(dynamicReadResponse.Body);
-                        TestAssert.Equal("dynamic:voltaic://docs/intro", dynamicReadJson.RootElement.GetProperty("result").GetProperty("contents")[0].GetProperty("text").GetString());
+                        JsonProbe dynamicReadJson = JsonProbe.Parse(dynamicReadResponse.Body);
+                        TestAssert.Equal("dynamic:voltaic://docs/intro", dynamicReadJson.Get("result").Get("contents")[0].Get("text").String());
                     }),
 
                     Case(suiteId, "PromptsListGetAndArgumentValidation", "prompts/list and prompts/get handle required arguments and errors", async ct =>
@@ -108,25 +108,25 @@ namespace Test.Shared
                         await using HttpServerFixture fixture = await HttpServerFixture.StartAsync(ct).ConfigureAwait(false);
 
                         RpcResult listResponse = await fixture.PostRpcAsync("prompts/list", new { }, 9, null, ct).ConfigureAwait(false);
-                        using JsonDocument listJson = JsonDocument.Parse(listResponse.Body);
-                        JsonElement prompts = listJson.RootElement.GetProperty("result").GetProperty("prompts");
-                        TestAssert.True(prompts.EnumerateArray().Any(prompt => prompt.GetProperty("name").GetString() == "summarize"), "Prompt should be listed.");
+                        JsonProbe listJson = JsonProbe.Parse(listResponse.Body);
+                        JsonProbe prompts = listJson.Get("result").Get("prompts");
+                        TestAssert.True(prompts.EnumerateArray().Any(prompt => prompt.Get("name").String() == "summarize"), "Prompt should be listed.");
 
                         RpcResult missingArgResponse = await fixture.PostRpcAsync("prompts/get", new
                         {
                             name = "summarize",
                             arguments = new { }
                         }, 10, listResponse.SessionId, ct).ConfigureAwait(false);
-                        using JsonDocument missingArgJson = JsonDocument.Parse(missingArgResponse.Body);
-                        TestAssert.Equal(-32602, missingArgJson.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+                        JsonProbe missingArgJson = JsonProbe.Parse(missingArgResponse.Body);
+                        TestAssert.Equal(-32602, missingArgJson.Get("error").Get("code").Int());
 
                         RpcResult promptResponse = await fixture.PostRpcAsync("prompts/get", new
                         {
                             name = "summarize",
                             arguments = new { topic = "Voltaic" }
                         }, 11, listResponse.SessionId, ct).ConfigureAwait(false);
-                        using JsonDocument promptJson = JsonDocument.Parse(promptResponse.Body);
-                        TestAssert.Equal("user", promptJson.RootElement.GetProperty("result").GetProperty("messages")[0].GetProperty("role").GetString());
+                        JsonProbe promptJson = JsonProbe.Parse(promptResponse.Body);
+                        TestAssert.Equal("user", promptJson.Get("result").Get("messages")[0].Get("role").String());
                     }),
                 });
         }

@@ -57,12 +57,11 @@ namespace Test.Shared
                         TestAssert.Equal("http://localhost/a2a", recorded.Url);
                         TestAssert.Equal(A2AProtocol.ProtocolVersion, recorded.Headers[A2AProtocol.VersionHeader]);
 
-                        using JsonDocument document = JsonDocument.Parse(recorded.Body);
-                        JsonElement root = document.RootElement;
-                        TestAssert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
-                        TestAssert.Equal(A2AProtocol.SendMessage, root.GetProperty("method").GetString());
-                        TestAssert.Equal("ROLE_USER", root.GetProperty("params").GetProperty("message").GetProperty("role").GetString());
-                        TestAssert.Equal("hello", root.GetProperty("params").GetProperty("message").GetProperty("parts")[0].GetProperty("text").GetString());
+                        JsonProbe root = JsonProbe.Parse(recorded.Body);
+                        TestAssert.Equal("2.0", root.Get("jsonrpc").String());
+                        TestAssert.Equal(A2AProtocol.SendMessage, root.Get("method").String());
+                        TestAssert.Equal("ROLE_USER", root.Get("params").Get("message").Get("role").String());
+                        TestAssert.Equal("hello", root.Get("params").Get("message").Get("parts")[0].Get("text").String());
                     }),
 
                     Case(suiteId, "HttpJsonClientRoutesMatchOfficialSdk", "Voltaic HTTP+JSON client emits official SDK REST route and body shape", async ct =>
@@ -100,11 +99,10 @@ namespace Test.Shared
                         TestAssert.Equal("http://localhost/tasks/task-1/pushNotificationConfigs", recorded.Url);
                         TestAssert.Equal(A2AProtocol.ProtocolVersion, recorded.Headers[A2AProtocol.VersionHeader]);
 
-                        using JsonDocument document = JsonDocument.Parse(recorded.Body);
-                        JsonElement root = document.RootElement;
-                        TestAssert.Equal("cfg-1", root.GetProperty("id").GetString());
-                        TestAssert.Equal("https://example.com/webhook", root.GetProperty("url").GetString());
-                        TestAssert.False(root.TryGetProperty("config", out _), "HTTP+JSON request body should be the push config, not the JSON-RPC wrapper.");
+                        JsonProbe root = JsonProbe.Parse(recorded.Body);
+                        TestAssert.Equal("cfg-1", root.Get("id").String());
+                        TestAssert.Equal("https://example.com/webhook", root.Get("url").String());
+                        TestAssert.False(root.Has("config"), "HTTP+JSON request body should be the push config, not the JSON-RPC wrapper.");
                     }),
 
                     Case(suiteId, "HttpJsonListTasksQueryMatchesOfficialSdk", "Voltaic HTTP+JSON client emits A2A wire names in ListTasks query strings", async ct =>

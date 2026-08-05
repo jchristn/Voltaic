@@ -40,8 +40,8 @@ namespace Test.Shared
                         JsonRpcRequest? roundTrip = JsonSerializer.Deserialize<JsonRpcRequest>(JsonSerializer.Serialize(request));
                         TestAssert.NotNull(roundTrip, "Request should deserialize.");
                         TestAssert.Equal("echo", roundTrip!.Method);
-                        TestAssert.Equal(7, ((JsonElement)roundTrip.Id!).GetInt32());
-                        TestAssert.Equal("hello", ((JsonElement)roundTrip.Params!).GetProperty("message").GetString());
+                        TestAssert.Equal(7, (JsonProbe.From(roundTrip.Id!)).Int());
+                        TestAssert.Equal("hello", (JsonProbe.From(roundTrip.Params!)).Get("message").String());
                         return Task.CompletedTask;
                     }),
 

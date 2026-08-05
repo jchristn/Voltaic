@@ -20,12 +20,12 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct, ConfigureMcpTcpServer).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        JsonElement result = await client.CallAsync<JsonElement>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, token: ct).ConfigureAwait(false);
+                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, token: ct).ConfigureAwait(false));
 
-                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, result.GetProperty("protocolVersion").GetString());
-                        TestAssert.True(result.GetProperty("capabilities").TryGetProperty("tools", out _), "Tools capability should be present.");
-                        TestAssert.True(result.GetProperty("capabilities").TryGetProperty("resources", out _), "Resources capability should be present.");
-                        TestAssert.True(result.GetProperty("capabilities").TryGetProperty("prompts", out _), "Prompts capability should be present.");
+                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, result.Get("protocolVersion").String());
+                        TestAssert.True(result.Get("capabilities").Has("tools"), "Tools capability should be present.");
+                        TestAssert.True(result.Get("capabilities").Has("resources"), "Resources capability should be present.");
+                        TestAssert.True(result.Get("capabilities").Has("prompts"), "Prompts capability should be present.");
                     }),
 
                     Case(suiteId, "ToolsListAndCall", "McpTcpServer supports tools/list and tools/call", async ct =>
@@ -33,11 +33,11 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct, ConfigureMcpTcpServer).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        JsonElement list = await client.CallAsync<JsonElement>("tools/list", new { }, token: ct).ConfigureAwait(false);
-                        JsonElement call = await client.CallAsync<JsonElement>("tools/call", new { name = "multiply", arguments = new { a = 6, b = 7 } }, token: ct).ConfigureAwait(false);
+                        JsonProbe list = JsonProbe.From(await client.CallAsync<object?>("tools/list", new { }, token: ct).ConfigureAwait(false));
+                        JsonProbe call = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "multiply", arguments = new { a = 6, b = 7 } }, token: ct).ConfigureAwait(false));
 
-                        TestAssert.True(list.GetProperty("tools").EnumerateArray().Any(tool => tool.GetProperty("name").GetString() == "multiply"), "Registered tool should be listed.");
-                        TestAssert.Equal(42, call.GetProperty("structuredContent").GetProperty("product").GetInt32());
+                        TestAssert.True(list.Get("tools").EnumerateArray().Any(tool => tool.Get("name").String() == "multiply"), "Registered tool should be listed.");
+                        TestAssert.Equal(42, call.Get("structuredContent").Get("product").Int());
                     }),
 
                     Case(suiteId, "ResourcesRead", "McpTcpServer supports resources/read and templates", async ct =>
@@ -45,11 +45,11 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct, ConfigureMcpTcpServer).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        JsonElement staticResource = await client.CallAsync<JsonElement>("resources/read", new { uri = "voltaic://tcp/static" }, token: ct).ConfigureAwait(false);
-                        JsonElement dynamicResource = await client.CallAsync<JsonElement>("resources/read", new { uri = "voltaic://tcp/dynamic" }, token: ct).ConfigureAwait(false);
+                        JsonProbe staticResource = JsonProbe.From(await client.CallAsync<object?>("resources/read", new { uri = "voltaic://tcp/static" }, token: ct).ConfigureAwait(false));
+                        JsonProbe dynamicResource = JsonProbe.From(await client.CallAsync<object?>("resources/read", new { uri = "voltaic://tcp/dynamic" }, token: ct).ConfigureAwait(false));
 
-                        TestAssert.Equal("tcp static", staticResource.GetProperty("contents")[0].GetProperty("text").GetString());
-                        TestAssert.Equal("dynamic:voltaic://tcp/dynamic", dynamicResource.GetProperty("contents")[0].GetProperty("text").GetString());
+                        TestAssert.Equal("tcp static", staticResource.Get("contents")[0].Get("text").String());
+                        TestAssert.Equal("dynamic:voltaic://tcp/dynamic", dynamicResource.Get("contents")[0].Get("text").String());
                     }),
 
                     Case(suiteId, "PromptsGet", "McpTcpServer supports prompts/get", async ct =>
@@ -57,10 +57,10 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct, ConfigureMcpTcpServer).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        JsonElement prompt = await client.CallAsync<JsonElement>("prompts/get", new { name = "tcp-prompt", arguments = new { topic = "Voltaic" } }, token: ct).ConfigureAwait(false);
-                        Exception missingArg = await CaptureExceptionAsync(() => client.CallAsync<JsonElement>("prompts/get", new { name = "tcp-prompt", arguments = new { } }, token: ct)).ConfigureAwait(false);
+                        JsonProbe prompt = JsonProbe.From(await client.CallAsync<object?>("prompts/get", new { name = "tcp-prompt", arguments = new { topic = "Voltaic" } }, token: ct).ConfigureAwait(false));
+                        Exception missingArg = await CaptureExceptionAsync(() => client.CallAsync<object?>("prompts/get", new { name = "tcp-prompt", arguments = new { } }, token: ct)).ConfigureAwait(false);
 
-                        TestAssert.Equal("TCP Voltaic", prompt.GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString());
+                        TestAssert.Equal("TCP Voltaic", prompt.Get("messages")[0].Get("content").Get("text").String());
                         TestAssert.True(missingArg.Message.Contains("RPC Error -32602"), "Missing required prompt arg should map to invalid params.");
                     }),
 
@@ -113,11 +113,11 @@ namespace Test.Shared
                         await using WebSocketMcpFixture fixture = await WebSocketMcpFixture.StartAsync(ct, ConfigureMcpWebSocketServer).ConfigureAwait(false);
                         using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        JsonElement initialize = await client.CallAsync<JsonElement>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, token: ct).ConfigureAwait(false);
-                        JsonElement call = await client.CallAsync<JsonElement>("tools/call", new { name = "ws-echo", arguments = new { message = "hello" } }, token: ct).ConfigureAwait(false);
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, token: ct).ConfigureAwait(false));
+                        JsonProbe call = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "ws-echo", arguments = new { message = "hello" } }, token: ct).ConfigureAwait(false));
 
-                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, initialize.GetProperty("protocolVersion").GetString());
-                        TestAssert.Equal("hello", call.GetProperty("structuredContent").GetProperty("message").GetString());
+                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, initialize.Get("protocolVersion").String());
+                        TestAssert.Equal("hello", call.Get("structuredContent").Get("message").String());
                     }),
 
                     Case(suiteId, "BroadcastNotification", "McpWebsocketsServer broadcasts notifications to clients", async ct =>

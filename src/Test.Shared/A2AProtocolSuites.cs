@@ -23,13 +23,12 @@ namespace Test.Shared
                     {
                         AgentCard card = CreateCard("http://localhost/a2a");
                         string json = JsonSerializer.Serialize(card, A2AJson.DefaultOptions);
-                        using JsonDocument document = JsonDocument.Parse(json);
-                        JsonElement root = document.RootElement;
+                        JsonProbe root = JsonProbe.Parse(json);
 
-                        TestAssert.Equal("Voltaic Test Agent", root.GetProperty("name").GetString());
-                        TestAssert.Equal("1.0", root.GetProperty("supportedInterfaces")[0].GetProperty("protocolVersion").GetString());
-                        TestAssert.Equal("JSONRPC", root.GetProperty("supportedInterfaces")[0].GetProperty("protocolBinding").GetString());
-                        TestAssert.True(root.GetProperty("capabilities").GetProperty("streaming").GetBoolean(), "Streaming should serialize.");
+                        TestAssert.Equal("Voltaic Test Agent", root.Get("name").String());
+                        TestAssert.Equal("1.0", root.Get("supportedInterfaces")[0].Get("protocolVersion").String());
+                        TestAssert.Equal("JSONRPC", root.Get("supportedInterfaces")[0].Get("protocolBinding").String());
+                        TestAssert.True(root.Get("capabilities").Get("streaming").Bool(), "Streaming should serialize.");
                         return Task.CompletedTask;
                     }),
 
@@ -43,9 +42,9 @@ namespace Test.Shared
                         };
                         TaskStatus status = new TaskStatus { State = TaskState.Completed, Message = message };
                         string json = JsonSerializer.Serialize(status, A2AJson.DefaultOptions);
-                        using JsonDocument document = JsonDocument.Parse(json);
-                        TestAssert.Equal("TASK_STATE_COMPLETED", document.RootElement.GetProperty("state").GetString());
-                        TestAssert.Equal("ROLE_AGENT", document.RootElement.GetProperty("message").GetProperty("role").GetString());
+                        JsonProbe document = JsonProbe.Parse(json);
+                        TestAssert.Equal("TASK_STATE_COMPLETED", document.Get("state").String());
+                        TestAssert.Equal("ROLE_AGENT", document.Get("message").Get("role").String());
                         return Task.CompletedTask;
                     }),
 

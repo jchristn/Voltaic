@@ -151,7 +151,7 @@ namespace Test.Shared
                         RpcResult response = await fixture.PostRpcAsync("ping", null, 1, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.Equal("pong", response.Result.GetString());
+                        TestAssert.Equal("pong", response.Result.String());
                         TestAssert.False(String.IsNullOrEmpty(response.SessionId), "Legacy endpoint should still create sessions.");
                     }),
 
@@ -194,7 +194,7 @@ namespace Test.Shared
                         RpcResult response = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.Equal("pong", response.Result.GetString());
+                        TestAssert.Equal("pong", response.Result.String());
                     }),
 
                     Case(suiteId, "PingBypassesAuthFailure", "Ping bypasses authentication for connectivity checks", async ct =>
@@ -212,7 +212,7 @@ namespace Test.Shared
                         RpcResult response = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.Equal("pong", response.Result.GetString());
+                        TestAssert.Equal("pong", response.Result.String());
                     }),
 
                     Case(suiteId, "RawSseReceivesQueuedNotification", "GET /mcp streams queued notifications over SSE", async ct =>
@@ -237,9 +237,9 @@ namespace Test.Shared
                         bool queued = fixture.Server.SendNotificationToSession(session.SessionId!, "notifications/test", new { value = 7 });
                         TestAssert.True(queued, "Notification should be queued.");
                         string data = await ReadUntilDataAsync(reader, timeout.Token).ConfigureAwait(false);
-                        JsonElement notification = TestJson.ParseRoot(data);
-                        TestAssert.Equal("notifications/test", notification.GetProperty("method").GetString());
-                        TestAssert.Equal(7, notification.GetProperty("params").GetProperty("value").GetInt32());
+                        JsonProbe notification = TestJson.ParseRoot(data);
+                        TestAssert.Equal("notifications/test", notification.Get("method").String());
+                        TestAssert.Equal(7, notification.Get("params").Get("value").Int());
                     }),
                 });
         }
@@ -258,12 +258,12 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, 1, null, ct).ConfigureAwait(false);
 
-                        JsonElement capabilities = response.Result.GetProperty("capabilities");
-                        TestAssert.True(capabilities.TryGetProperty("tools", out _), "Tools capability should be advertised.");
-                        TestAssert.True(capabilities.TryGetProperty("resources", out _), "Resources capability should be advertised.");
-                        TestAssert.True(capabilities.TryGetProperty("prompts", out _), "Prompts capability should be advertised.");
-                        TestAssert.True(capabilities.TryGetProperty("completions", out _), "Completions capability should be advertised when providers are registered.");
-                        TestAssert.True(capabilities.TryGetProperty("logging", out _), "Logging capability should be advertised.");
+                        JsonProbe capabilities = response.Result.Get("capabilities");
+                        TestAssert.True(capabilities.Has("tools"), "Tools capability should be advertised.");
+                        TestAssert.True(capabilities.Has("resources"), "Resources capability should be advertised.");
+                        TestAssert.True(capabilities.Has("prompts"), "Prompts capability should be advertised.");
+                        TestAssert.True(capabilities.Has("completions"), "Completions capability should be advertised when providers are registered.");
+                        TestAssert.True(capabilities.Has("logging"), "Logging capability should be advertised.");
                     }),
 
                     Case(suiteId, "ToolsListMetadata", "tools/list exposes full tool metadata", async ct =>
@@ -271,23 +271,23 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/list", new { }, 1, null, ct).ConfigureAwait(false);
 
-                        JsonElement tool = response.Result.GetProperty("tools").EnumerateArray().First(t => t.GetProperty("name").GetString() == "structured");
-                        TestAssert.Equal("Structured", tool.GetProperty("title").GetString());
-                        TestAssert.True(tool.TryGetProperty("outputSchema", out _), "Output schema should be present.");
-                        TestAssert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean(), "Annotation should be present.");
-                        TestAssert.Equal("test", tool.GetProperty("_meta").GetProperty("source").GetString());
+                        JsonProbe tool = response.Result.Get("tools").EnumerateArray().First(t => t.Get("name").String() == "structured");
+                        TestAssert.Equal("Structured", tool.Get("title").String());
+                        TestAssert.True(tool.Has("outputSchema"), "Output schema should be present.");
+                        TestAssert.True(tool.Get("annotations").Get("readOnlyHint").Bool(), "Annotation should be present.");
+                        TestAssert.Equal("test", tool.Get("_meta").Get("source").String());
                     }),
 
                     Case(suiteId, "ToolsListPagination", "tools/list paginates large registries", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, RegisterManyTools).ConfigureAwait(false);
                         RpcResult first = await fixture.PostMcpAsync("tools/list", new { }, 1, null, ct).ConfigureAwait(false);
-                        RpcResult second = await fixture.PostMcpAsync("tools/list", new { cursor = first.Result.GetProperty("nextCursor").GetString() }, 2, first.SessionId, ct).ConfigureAwait(false);
+                        RpcResult second = await fixture.PostMcpAsync("tools/list", new { cursor = first.Result.Get("nextCursor").String() }, 2, first.SessionId, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(100, first.Result.GetProperty("tools").GetArrayLength());
-                        TestAssert.Equal("100", first.Result.GetProperty("nextCursor").GetString());
-                        TestAssert.True(second.Result.GetProperty("tools").GetArrayLength() > 0, "Second page should contain remaining tools.");
-                        TestAssert.False(second.Result.TryGetProperty("nextCursor", out _), "Final page should omit nextCursor.");
+                        TestAssert.Equal(100, first.Result.Get("tools").Length);
+                        TestAssert.Equal("100", first.Result.Get("nextCursor").String());
+                        TestAssert.True(second.Result.Get("tools").Length > 0, "Second page should contain remaining tools.");
+                        TestAssert.False(second.Result.Has("nextCursor"), "Final page should omit nextCursor.");
                     }),
 
                     Case(suiteId, "InvalidCursor", "List endpoints reject invalid cursors", async ct =>
@@ -295,8 +295,8 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/list", new { cursor = "not-a-number" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
-                        TestAssert.True(response.Error.GetProperty("message").GetString()!.Contains("Invalid cursor"), "Error should mention cursor.");
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
+                        TestAssert.True(response.Error.Get("message").String()!.Contains("Invalid cursor"), "Error should mention cursor.");
                     }),
 
                     Case(suiteId, "ToolsCallStructured", "tools/call returns structured tool results", async ct =>
@@ -304,8 +304,8 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "structured", arguments = new { a = 4, b = 6 } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(10, response.Result.GetProperty("structuredContent").GetProperty("total").GetInt32());
-                        TestAssert.Equal("text", response.Result.GetProperty("content")[0].GetProperty("type").GetString());
+                        TestAssert.Equal(10, response.Result.Get("structuredContent").Get("total").Int());
+                        TestAssert.Equal("text", response.Result.Get("content")[0].Get("type").String());
                     }),
 
                     Case(suiteId, "ToolsCallInputSchemaValidation", "tools/call validates required input schema fields", async ct =>
@@ -313,8 +313,8 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "requires-input", arguments = new { } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
-                        TestAssert.True(response.Error.GetProperty("message").GetString()!.Contains("missing required property"), "Error should identify schema validation.");
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
+                        TestAssert.True(response.Error.Get("message").String()!.Contains("missing required property"), "Error should identify schema validation.");
                     }),
 
                     Case(suiteId, "ToolsCallOutputSchemaValidation", "tools/call validates structured output schema", async ct =>
@@ -322,8 +322,8 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "bad-output", arguments = new { } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
-                        TestAssert.True(response.Error.GetProperty("message").GetString()!.Contains("structured output"), "Error should identify output validation.");
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
+                        TestAssert.True(response.Error.Get("message").String()!.Contains("structured output"), "Error should identify output validation.");
                     }),
 
                     Case(suiteId, "ToolsCallPlainReturnConverted", "plain tool return values are converted to text content", async ct =>
@@ -331,7 +331,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "plain" }, 1, null, ct).ConfigureAwait(false);
 
-                        string text = response.Result.GetProperty("content")[0].GetProperty("text").GetString()!;
+                        string text = response.Result.Get("content")[0].Get("text").String()!;
                         TestAssert.True(text.Contains("plain"), "Plain return value should be serialized into text content.");
                     }),
 
@@ -340,10 +340,10 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "full-result" }, 1, null, ct).ConfigureAwait(false);
 
-                        JsonElement content = response.Result.GetProperty("content");
-                        TestAssert.Equal("text", content[0].GetProperty("type").GetString());
-                        TestAssert.Equal("image", content[1].GetProperty("type").GetString());
-                        TestAssert.True(response.Result.GetProperty("isError").GetBoolean(), "isError should be preserved.");
+                        JsonProbe content = response.Result.Get("content");
+                        TestAssert.Equal("text", content[0].Get("type").String());
+                        TestAssert.Equal("image", content[1].Get("type").String());
+                        TestAssert.True(response.Result.Get("isError").Bool(), "isError should be preserved.");
                     }),
 
                     Case(suiteId, "ToolsCallMissingParams", "tools/call rejects missing params", async ct =>
@@ -351,7 +351,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", null, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "ToolsCallMissingName", "tools/call rejects params without a name", async ct =>
@@ -359,7 +359,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { arguments = new { } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "ToolsCallEmptyName", "tools/call rejects empty names", async ct =>
@@ -367,7 +367,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "ToolsCallUnknown", "tools/call rejects unknown tools", async ct =>
@@ -375,8 +375,8 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "missing" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
-                        TestAssert.True(response.Error.GetProperty("message").GetString()!.Contains("was not found"), "Error should mention missing tool.");
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
+                        TestAssert.True(response.Error.Get("message").String()!.Contains("was not found"), "Error should mention missing tool.");
                     }),
 
                     Case(suiteId, "ToolsCallHandlerException", "tool handler exceptions map to internal errors", async ct =>
@@ -384,7 +384,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "explode-tool" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32603, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32603, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "DuplicateToolRegistrationReplacesExisting", "registering a tool with the same name replaces the previous definition", async ct =>
@@ -396,11 +396,11 @@ namespace Test.Shared
                         }).ConfigureAwait(false);
 
                         RpcResult list = await fixture.PostMcpAsync("tools/list", new { }, 1, null, ct).ConfigureAwait(false);
-                        int count = list.Result.GetProperty("tools").EnumerateArray().Count(tool => tool.GetProperty("name").GetString() == "dup");
+                        int count = list.Result.Get("tools").EnumerateArray().Count(tool => tool.Get("name").String() == "dup");
                         RpcResult call = await fixture.PostMcpAsync("tools/call", new { name = "dup" }, 2, list.SessionId, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(1, count);
-                        TestAssert.Equal("new", call.Result.GetProperty("content")[0].GetProperty("text").GetString());
+                        TestAssert.Equal("new", call.Result.Get("content")[0].Get("text").String());
                     }),
 
                     Case(suiteId, "ResourcesReadStatic", "resources/read returns static resources", async ct =>
@@ -408,7 +408,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { uri = "voltaic://static" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal("static contents", response.Result.GetProperty("contents")[0].GetProperty("text").GetString());
+                        TestAssert.Equal("static contents", response.Result.Get("contents")[0].Get("text").String());
                     }),
 
                     Case(suiteId, "ResourcesReadTemplateDecodedVariable", "resource templates decode URI variables", async ct =>
@@ -416,7 +416,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { uri = "voltaic://encoded/hello%20world" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal("hello world", response.Result.GetProperty("contents")[0].GetProperty("text").GetString());
+                        TestAssert.Equal("hello world", response.Result.Get("contents")[0].Get("text").String());
                     }),
 
                     Case(suiteId, "ResourcesStaticPrecedence", "static resources take precedence over matching templates", async ct =>
@@ -424,27 +424,27 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { uri = "voltaic://docs/special" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal("special static", response.Result.GetProperty("contents")[0].GetProperty("text").GetString());
+                        TestAssert.Equal("special static", response.Result.Get("contents")[0].Get("text").String());
                     }),
 
                     Case(suiteId, "ResourcesListPagination", "resources/list paginates large registries", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, RegisterManyResources).ConfigureAwait(false);
                         RpcResult first = await fixture.PostMcpAsync("resources/list", new { }, 1, null, ct).ConfigureAwait(false);
-                        RpcResult second = await fixture.PostMcpAsync("resources/list", new { cursor = first.Result.GetProperty("nextCursor").GetString() }, 2, first.SessionId, ct).ConfigureAwait(false);
+                        RpcResult second = await fixture.PostMcpAsync("resources/list", new { cursor = first.Result.Get("nextCursor").String() }, 2, first.SessionId, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(100, first.Result.GetProperty("resources").GetArrayLength());
-                        TestAssert.True(second.Result.GetProperty("resources").GetArrayLength() > 0, "Second page should contain remaining resources.");
+                        TestAssert.Equal(100, first.Result.Get("resources").Length);
+                        TestAssert.True(second.Result.Get("resources").Length > 0, "Second page should contain remaining resources.");
                     }),
 
                     Case(suiteId, "ResourceTemplatesPagination", "resources/templates/list paginates large registries", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, RegisterManyTemplates).ConfigureAwait(false);
                         RpcResult first = await fixture.PostMcpAsync("resources/templates/list", new { }, 1, null, ct).ConfigureAwait(false);
-                        RpcResult second = await fixture.PostMcpAsync("resources/templates/list", new { cursor = first.Result.GetProperty("nextCursor").GetString() }, 2, first.SessionId, ct).ConfigureAwait(false);
+                        RpcResult second = await fixture.PostMcpAsync("resources/templates/list", new { cursor = first.Result.Get("nextCursor").String() }, 2, first.SessionId, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(100, first.Result.GetProperty("resourceTemplates").GetArrayLength());
-                        TestAssert.True(second.Result.GetProperty("resourceTemplates").GetArrayLength() > 0, "Second page should contain remaining templates.");
+                        TestAssert.Equal(100, first.Result.Get("resourceTemplates").Length);
+                        TestAssert.True(second.Result.Get("resourceTemplates").Length > 0, "Second page should contain remaining templates.");
                     }),
 
                     Case(suiteId, "ResourcesReadMissingUri", "resources/read rejects missing uri", async ct =>
@@ -452,7 +452,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "ResourcesReadEmptyUri", "resources/read rejects empty uri", async ct =>
@@ -460,7 +460,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { uri = "" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "ResourcesReadUnknown", "resources/read rejects unknown resources", async ct =>
@@ -468,7 +468,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { uri = "voltaic://missing" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "ResourceHandlerException", "resource handler exceptions map to internal errors", async ct =>
@@ -476,7 +476,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { uri = "voltaic://explode" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32603, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32603, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "InvalidResourceTemplateRegistration", "invalid resource template syntax fails at registration", ct =>
@@ -495,10 +495,10 @@ namespace Test.Shared
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, RegisterManyPrompts).ConfigureAwait(false);
                         RpcResult first = await fixture.PostMcpAsync("prompts/list", new { }, 1, null, ct).ConfigureAwait(false);
-                        RpcResult second = await fixture.PostMcpAsync("prompts/list", new { cursor = first.Result.GetProperty("nextCursor").GetString() }, 2, first.SessionId, ct).ConfigureAwait(false);
+                        RpcResult second = await fixture.PostMcpAsync("prompts/list", new { cursor = first.Result.Get("nextCursor").String() }, 2, first.SessionId, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(100, first.Result.GetProperty("prompts").GetArrayLength());
-                        TestAssert.True(second.Result.GetProperty("prompts").GetArrayLength() > 0, "Second page should contain remaining prompts.");
+                        TestAssert.Equal(100, first.Result.Get("prompts").Length);
+                        TestAssert.True(second.Result.Get("prompts").Length > 0, "Second page should contain remaining prompts.");
                     }),
 
                     Case(suiteId, "PromptGetRequiredSuccess", "prompts/get accepts required arguments", async ct =>
@@ -506,7 +506,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("prompts/get", new { name = "required", arguments = new { topic = "Voltaic" } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal("Summarize Voltaic", response.Result.GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString());
+                        TestAssert.Equal("Summarize Voltaic", response.Result.Get("messages")[0].Get("content").Get("text").String());
                     }),
 
                     Case(suiteId, "PromptGetMissingRequiredArg", "prompts/get rejects missing required arguments", async ct =>
@@ -514,8 +514,8 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("prompts/get", new { name = "required", arguments = new { } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
-                        TestAssert.True(response.Error.GetProperty("message").GetString()!.Contains("requires argument"), "Error should identify required arg.");
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
+                        TestAssert.True(response.Error.Get("message").String()!.Contains("requires argument"), "Error should identify required arg.");
                     }),
 
                     Case(suiteId, "PromptGetOptionalMissingOk", "prompts/get allows omitted optional arguments", async ct =>
@@ -523,7 +523,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("prompts/get", new { name = "optional" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal("No arguments required", response.Result.GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString());
+                        TestAssert.Equal("No arguments required", response.Result.Get("messages")[0].Get("content").Get("text").String());
                     }),
 
                     Case(suiteId, "PromptGetMissingName", "prompts/get rejects missing name", async ct =>
@@ -531,7 +531,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("prompts/get", new { }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "PromptGetEmptyName", "prompts/get rejects empty names", async ct =>
@@ -539,7 +539,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("prompts/get", new { name = "" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "PromptGetUnknown", "prompts/get rejects unknown prompts", async ct =>
@@ -547,7 +547,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("prompts/get", new { name = "missing" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "PromptHandlerException", "prompt handler exceptions map to internal errors", async ct =>
@@ -555,7 +555,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("prompts/get", new { name = "explode-prompt" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32603, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32603, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "CompletionCompletePrompt", "completion/complete returns bounded prompt completions", async ct =>
@@ -567,10 +567,10 @@ namespace Test.Shared
                             argument = new { name = "topic", value = "Vo" }
                         }, 1, null, ct).ConfigureAwait(false);
 
-                        JsonElement completion = response.Result.GetProperty("completion");
-                        TestAssert.Equal("Voltaic", completion.GetProperty("values")[0].GetString());
-                        TestAssert.Equal(1, completion.GetProperty("total").GetInt32());
-                        TestAssert.False(completion.GetProperty("hasMore").GetBoolean(), "Completion should report no additional matches.");
+                        JsonProbe completion = response.Result.Get("completion");
+                        TestAssert.Equal("Voltaic", completion.Get("values")[0].String());
+                        TestAssert.Equal(1, completion.Get("total").Int());
+                        TestAssert.False(completion.Get("hasMore").Bool(), "Completion should report no additional matches.");
                     }),
 
                     Case(suiteId, "CompletionCompleteInvalidReference", "completion/complete rejects invalid references", async ct =>
@@ -582,7 +582,7 @@ namespace Test.Shared
                             argument = new { name = "topic", value = "Vo" }
                         }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.GetProperty("code").GetInt32());
+                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
                     }),
 
                     Case(suiteId, "ResourceSubscribeUnsubscribe", "resources/subscribe and resources/unsubscribe accept resource URIs", async ct =>
@@ -591,8 +591,8 @@ namespace Test.Shared
                         RpcResult subscribe = await fixture.PostMcpAsync("resources/subscribe", new { uri = "voltaic://static" }, 1, null, ct).ConfigureAwait(false);
                         RpcResult unsubscribe = await fixture.PostMcpAsync("resources/unsubscribe", new { uri = "voltaic://static" }, 2, subscribe.SessionId, ct).ConfigureAwait(false);
 
-                        TestAssert.True(subscribe.Result.ValueKind == JsonValueKind.Object, "Subscribe should return an empty result object.");
-                        TestAssert.True(unsubscribe.Result.ValueKind == JsonValueKind.Object, "Unsubscribe should return an empty result object.");
+                        TestAssert.True(subscribe.Result.IsObject, "Subscribe should return an empty result object.");
+                        TestAssert.True(unsubscribe.Result.IsObject, "Unsubscribe should return an empty result object.");
                     }),
 
                     Case(suiteId, "LoggingSetLevel", "logging/setLevel accepts supported levels and rejects invalid levels", async ct =>
@@ -601,8 +601,8 @@ namespace Test.Shared
                         RpcResult success = await fixture.PostMcpAsync("logging/setLevel", new { level = "warning" }, 1, null, ct).ConfigureAwait(false);
                         RpcResult failure = await fixture.PostMcpAsync("logging/setLevel", new { level = "verbose" }, 2, success.SessionId, ct).ConfigureAwait(false);
 
-                        TestAssert.True(success.Result.ValueKind == JsonValueKind.Object, "logging/setLevel should return an empty result object.");
-                        TestAssert.Equal(-32602, failure.Error.GetProperty("code").GetInt32());
+                        TestAssert.True(success.Result.IsObject, "logging/setLevel should return an empty result object.");
+                        TestAssert.Equal(-32602, failure.Error.Get("code").Int());
                     }),
                 });
         }
@@ -672,8 +672,8 @@ namespace Test.Shared
                         JsonRpcResponse response = await client.CallAsync("ping", token: ct).ConfigureAwait(false);
                         await client.NotifyAsync("notifications/initialized", token: ct).ConfigureAwait(false);
 
-                        JsonElement result = (JsonElement)response.Result!;
-                        TestAssert.Equal("pong", result.GetString());
+                        JsonProbe result = JsonProbe.From(response.Result!);
+                        TestAssert.Equal("pong", result.String());
                     }),
 
                     Case(suiteId, "SseNotificationEvent", "McpHttpClient receives Streamable HTTP SSE notifications", async ct =>
@@ -700,8 +700,8 @@ namespace Test.Shared
 
                         TestAssert.True(queued, "Notification should be queued.");
                         TestAssert.Equal("notifications/test", received.Method);
-                        JsonElement parameters = (JsonElement)received.Params!;
-                        TestAssert.Equal(12, parameters.GetProperty("value").GetInt32());
+                        JsonProbe parameters = JsonProbe.From(received.Params!);
+                        TestAssert.Equal(12, parameters.Get("value").Int());
                     }),
 
                     Case(suiteId, "DisconnectRaisesEvent", "McpHttpClient disconnect clears session and raises event", async ct =>

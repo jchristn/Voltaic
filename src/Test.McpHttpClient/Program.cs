@@ -134,7 +134,7 @@ namespace Test.McpHttpClient
                             {
                                 try
                                 {
-                                    callParams = JsonSerializer.Deserialize<JsonElement>(callParts[1]);
+                                    callParams = JsonSerializer.Deserialize<object?>(callParts[1]);
                                 }
                                 catch
                                 {
