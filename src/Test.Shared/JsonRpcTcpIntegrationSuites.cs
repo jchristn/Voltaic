@@ -33,7 +33,7 @@ namespace Test.Shared
                     {
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
-                            server.RegisterMethod("double", args => args!.Value.GetProperty("value").GetInt32() * 2);
+                            server.RegisterMethod("double", args => (int)(args?.GetInt64("value") ?? 0) * 2);
                         }, includeDefaultMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
@@ -90,7 +90,7 @@ namespace Test.Shared
                     {
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
-                            server.RegisterMethod("null", (Func<JsonElement?, object>)(_ => null!));
+                            server.RegisterMethod("null", (Func<RpcParameters?, object>)(_ => null!));
                         }, includeDefaultMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
@@ -234,7 +234,7 @@ namespace Test.Shared
                         {
                             server.RegisterMethod("square", args =>
                             {
-                                int value = args!.Value.GetProperty("value").GetInt32();
+                                int value = (int)(args?.GetInt64("value") ?? 0);
                                 return value * value;
                             });
                         }, includeDefaultMethods: false).ConfigureAwait(false);

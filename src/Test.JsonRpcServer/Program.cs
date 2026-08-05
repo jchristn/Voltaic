@@ -57,31 +57,25 @@ namespace Test.JsonRpcServer
             // Register custom methods
             server.RegisterMethod("greet", (args) =>
             {
-                string name = "Anonymous";
-                if (args.HasValue && args.Value.TryGetProperty("name", out JsonElement nameProp))
-                    name = nameProp.GetString() ?? "Anonymous";
+                string name = args?.GetString("name") ?? "Anonymous";
                 return $"Hello, {name}!";
             });
 
             server.RegisterMethod("multiply", (args) =>
             {
                 double x = 0, y = 0;
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("x", out JsonElement xProp))
-                        x = xProp.GetDouble();
-                    if (args.Value.TryGetProperty("y", out JsonElement yProp))
-                        y = yProp.GetDouble();
+                    x = args?.GetDouble("x") ?? x;
+                    y = args?.GetDouble("y") ?? y;
                 }
                 return x * y;
             });
 
             // Register an async method with cancellation support
-            server.RegisterMethod("slowGreet", async (JsonElement? args, CancellationToken token) =>
+            server.RegisterMethod("slowGreet", async (RpcParameters? args, CancellationToken token) =>
             {
-                string name = "World";
-                if (args.HasValue && args.Value.TryGetProperty("name", out JsonElement nameProp))
-                    name = nameProp.GetString() ?? "World";
+                string name = args?.GetString("name") ?? "World";
                 await Task.Delay(1000, token);
                 return (object)$"Hello (slowly), {name}!";
             });

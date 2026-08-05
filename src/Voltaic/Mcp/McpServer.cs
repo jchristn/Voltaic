@@ -15,7 +15,7 @@ namespace Voltaic.Mcp
     /// </summary>
     public class McpServer : IDisposable
     {
-        private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
+        private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
         private bool _IsDisposed = false;
 
@@ -60,7 +60,7 @@ namespace Voltaic.Mcp
         /// <param name="includeDefaultMethods">True to include default methods such as echo, ping, and getTime.</param>
         public McpServer(bool includeDefaultMethods = true)
         {
-            _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
+            _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
             _Endpoint = new McpEndpoint("Voltaic.Mcp.StdioServer")
             {
                 SupportsListChangedNotifications = false
@@ -75,7 +75,7 @@ namespace Voltaic.Mcp
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The function that handles the method invocation.</param>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
-        public void RegisterMethod(string name, Func<JsonElement?, object> handler)
+        public void RegisterMethod(string name, Func<RpcParameters?, object> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = (args, _) => Task.FromResult(handler(args));
@@ -89,7 +89,7 @@ namespace Voltaic.Mcp
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The async function that handles the method invocation.</param>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
-        public void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)
+        public void RegisterMethod(string name, Func<RpcParameters?, Task<object>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = (args, _) => handler(args);
@@ -103,7 +103,7 @@ namespace Voltaic.Mcp
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The async function that handles the method invocation with cancellation support.</param>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
-        public void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        public void RegisterMethod(string name, Func<RpcParameters?, CancellationToken, Task<object>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = handler;
@@ -118,7 +118,7 @@ namespace Voltaic.Mcp
         /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
         /// <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
         /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
-        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, object> handler)
+        public void RegisterTool(string name, string description, object inputSchema, Func<RpcParameters?, object> handler)
         {
             RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
         }
@@ -131,7 +131,7 @@ namespace Voltaic.Mcp
         /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
         /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
         /// <param name="handler">The function that handles the tool invocation.</param>
-        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, object> handler)
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<RpcParameters?, object> handler)
         {
             RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
         }
@@ -141,7 +141,7 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="definition">The tool definition.</param>
         /// <param name="handler">The function that handles the tool invocation.</param>
-        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, object> handler)
+        public void RegisterTool(ToolDefinition definition, Func<RpcParameters?, object> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
 
@@ -160,7 +160,7 @@ namespace Voltaic.Mcp
         /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
         /// <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
         /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
-        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, Task<object>> handler)
+        public void RegisterTool(string name, string description, object inputSchema, Func<RpcParameters?, Task<object>> handler)
         {
             RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
         }
@@ -173,7 +173,7 @@ namespace Voltaic.Mcp
         /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
         /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
         /// <param name="handler">The async function that handles the tool invocation.</param>
-        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, Task<object>> handler)
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<RpcParameters?, Task<object>> handler)
         {
             RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
         }
@@ -183,7 +183,7 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="definition">The tool definition.</param>
         /// <param name="handler">The async function that handles the tool invocation.</param>
-        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, Task<object>> handler)
+        public void RegisterTool(ToolDefinition definition, Func<RpcParameters?, Task<object>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
 
@@ -201,7 +201,7 @@ namespace Voltaic.Mcp
         /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
         /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
         /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
-        public void RegisterTool(string name, string description, object inputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        public void RegisterTool(string name, string description, object inputSchema, Func<RpcParameters?, CancellationToken, Task<object>> handler)
         {
             RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
         }
@@ -214,7 +214,7 @@ namespace Voltaic.Mcp
         /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
         /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
         /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
-        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<RpcParameters?, CancellationToken, Task<object>> handler)
         {
             RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
         }
@@ -224,7 +224,7 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="definition">The tool definition.</param>
         /// <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
-        public void RegisterTool(ToolDefinition definition, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        public void RegisterTool(ToolDefinition definition, Func<RpcParameters?, CancellationToken, Task<object>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
 
@@ -287,7 +287,7 @@ namespace Voltaic.Mcp
         /// <param name="description">Prompt description.</param>
         /// <param name="arguments">Prompt arguments.</param>
         /// <param name="handler">Prompt handler.</param>
-        public void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<JsonElement?, McpGetPromptResult> handler)
+        public void RegisterPrompt(string name, string description, IEnumerable<McpPromptArgument>? arguments, Func<RpcParameters?, McpGetPromptResult> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             RegisterPrompt(CreatePrompt(name, description, arguments), (args, _) => Task.FromResult(handler(args)));
@@ -298,7 +298,7 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="prompt">Prompt metadata.</param>
         /// <param name="handler">Prompt handler.</param>
-        public void RegisterPrompt(McpPrompt prompt, Func<JsonElement?, CancellationToken, Task<McpGetPromptResult>> handler)
+        public void RegisterPrompt(McpPrompt prompt, Func<RpcParameters?, CancellationToken, Task<McpGetPromptResult>> handler)
         {
             _Endpoint.RegisterPrompt(prompt, handler);
         }
@@ -505,9 +505,8 @@ namespace Voltaic.Mcp
                 },
                 (args) =>
                 {
-                    if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
-                        return messageProp.GetString() ?? "empty";
-                    return "empty";
+                    McpEchoArguments? echo = args?.Deserialize<McpEchoArguments>();
+                    return echo?.Message ?? "empty";
                 });
 
             RegisterTool("getTime",
@@ -548,11 +547,7 @@ namespace Voltaic.Mcp
                     {
                         try
                         {
-                            JsonElement? paramsElement = null;
-                            if (request.Params is JsonElement jsonElement)
-                            {
-                                paramsElement = jsonElement;
-                            }
+                            RpcParameters? paramsElement = request.Params == null ? null : RpcParameters.FromObject(request.Params);
                             await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
                         }
                         catch (Exception ex)
@@ -569,11 +564,7 @@ namespace Voltaic.Mcp
                 {
                     try
                     {
-                        JsonElement? paramsElement = null;
-                        if (request.Params is JsonElement jsonElement)
-                        {
-                            paramsElement = jsonElement;
-                        }
+                        RpcParameters? paramsElement = request.Params == null ? null : RpcParameters.FromObject(request.Params);
 
                         object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
                         response = new JsonRpcResponse

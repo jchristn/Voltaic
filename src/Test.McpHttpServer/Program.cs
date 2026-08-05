@@ -79,9 +79,7 @@ namespace Test.McpHttpServer
                 },
                 (args) =>
                 {
-                    string name = "Anonymous";
-                    if (args.HasValue && args.Value.TryGetProperty("name", out JsonElement nameProp))
-                        name = nameProp.GetString() ?? "Anonymous";
+                    string name = args?.GetString("name") ?? "Anonymous";
                     return $"Hello, {name}!";
                 });
 
@@ -110,12 +108,10 @@ namespace Test.McpHttpServer
                     double a = 0;
                     double b = 0;
 
-                    if (args.HasValue)
+                    if ((args?.HasValue ?? false))
                     {
-                        if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                            a = aProp.GetDouble();
-                        if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                            b = bProp.GetDouble();
+                        a = args?.GetDouble("a") ?? a;
+                        b = args?.GetDouble("b") ?? b;
                     }
                     return a + b;
                 });
@@ -145,12 +141,10 @@ namespace Test.McpHttpServer
                     double x = 0;
                     double y = 0;
 
-                    if (args.HasValue)
+                    if ((args?.HasValue ?? false))
                     {
-                        if (args.Value.TryGetProperty("x", out JsonElement xProp))
-                            x = xProp.GetDouble();
-                        if (args.Value.TryGetProperty("y", out JsonElement yProp))
-                            y = yProp.GetDouble();
+                        x = args?.GetDouble("x") ?? x;
+                        y = args?.GetDouble("y") ?? y;
                     }
                     return x * y;
                 });
@@ -171,11 +165,9 @@ namespace Test.McpHttpServer
                     },
                     required = new[] { "value" }
                 },
-                async (JsonElement? args, CancellationToken token) =>
+                async (RpcParameters? args, CancellationToken token) =>
                 {
-                    double value = 0;
-                    if (args.HasValue && args.Value.TryGetProperty("value", out JsonElement valueProp))
-                        value = valueProp.GetDouble();
+                    double value = args?.GetDouble("value") ?? 0;
                     await Task.Delay(500, token);
                     return (object)(value * value);
                 });

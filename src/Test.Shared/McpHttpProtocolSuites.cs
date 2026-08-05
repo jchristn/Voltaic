@@ -253,8 +253,8 @@ namespace Test.Shared
                     new { type = "object", properties = new { total = new { type = "number" } } },
                     args =>
                     {
-                        int a = args!.Value.GetProperty("a").GetInt32();
-                        int b = args.Value.GetProperty("b").GetInt32();
+                        int a = (int)(args?.GetInt64("a") ?? 0);
+                        int b = (int)(args?.GetInt64("b") ?? 0);
                         return McpToolCallResult.FromStructured(new { total = a + b });
                     });
 
@@ -309,7 +309,7 @@ namespace Test.Shared
                                 Role = "user",
                                 Content = new McpTextContent
                                 {
-                                    Text = $"Summarize {args!.Value.GetProperty("topic").GetString()}"
+                                    Text = $"Summarize {args?.GetString("topic")}"
                                 }
                             }
                         }

@@ -201,9 +201,9 @@ namespace Test.Shared
                     Case(suiteId, "JsonRpcServerRegisterMethodValidation", "JsonRpcServer RegisterMethod overloads validate handlers", ct =>
                     {
                         using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
-                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("sync", (Func<JsonElement?, object>)null!), "Sync handler should be required.");
-                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("async", (Func<JsonElement?, Task<object>>)null!), "Async handler should be required.");
-                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("token", (Func<JsonElement?, CancellationToken, Task<object>>)null!), "Token handler should be required.");
+                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("sync", (Func<RpcParameters?, object>)null!), "Sync handler should be required.");
+                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("async", (Func<RpcParameters?, Task<object>>)null!), "Async handler should be required.");
+                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("token", (Func<RpcParameters?, CancellationToken, Task<object>>)null!), "Token handler should be required.");
                         return Task.CompletedTask;
                     }),
 
@@ -241,9 +241,9 @@ namespace Test.Shared
                     Case(suiteId, "McpServerRegisterMethodValidation", "McpServer RegisterMethod overloads validate handlers", ct =>
                     {
                         using McpServer server = new McpServer(includeDefaultMethods: false);
-                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("sync", (Func<JsonElement?, object>)null!), "Sync handler should be required.");
-                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("async", (Func<JsonElement?, Task<object>>)null!), "Async handler should be required.");
-                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("token", (Func<JsonElement?, CancellationToken, Task<object>>)null!), "Token handler should be required.");
+                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("sync", (Func<RpcParameters?, object>)null!), "Sync handler should be required.");
+                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("async", (Func<RpcParameters?, Task<object>>)null!), "Async handler should be required.");
+                        TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("token", (Func<RpcParameters?, CancellationToken, Task<object>>)null!), "Token handler should be required.");
                         return Task.CompletedTask;
                     }),
 
@@ -377,10 +377,10 @@ namespace Test.Shared
         }
 
         private static void TestRegisterValidation(
-            Action<string, string, object, Func<JsonElement?, object>> registerTool,
+            Action<string, string, object, Func<RpcParameters?, object>> registerTool,
             Action<string, string, string, Func<McpReadResourceResult>> registerResource,
             Action<string, string, string, Func<string, McpReadResourceResult>> registerTemplate,
-            Action<string, string, IEnumerable<McpPromptArgument>?, Func<JsonElement?, McpGetPromptResult>> registerPrompt)
+            Action<string, string, IEnumerable<McpPromptArgument>?, Func<RpcParameters?, McpGetPromptResult>> registerPrompt)
         {
             TestAssert.Throws<ArgumentNullException>(() => registerTool(null!, "description", new { type = "object" }, _ => "ok"), "Null tool name should fail.");
             TestAssert.Throws<ArgumentNullException>(() => registerTool("", "description", new { type = "object" }, _ => "ok"), "Empty tool name should fail.");

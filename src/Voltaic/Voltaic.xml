@@ -1462,7 +1462,7 @@
             <param name="port">The port number to listen on.</param>
             <param name="includeDefaultMethods">True to include default methods such as echo, ping, getTime, add, and getClients.</param>
         </member>
-        <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a custom RPC method with the specified synchronous handler.
             The handler is wrapped internally to support async invocation.
@@ -1471,7 +1471,7 @@
             <param name="handler">The function that handles the method invocation.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler.
             Use this overload when the handler needs to perform asynchronous operations such as
@@ -1481,7 +1481,7 @@
             <param name="handler">The async function that handles the method invocation.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
             Use this overload when the handler needs to perform cancellable asynchronous operations.
@@ -1491,14 +1491,14 @@
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Core.JsonRpcServer.TryInvokeMethodAsync(System.String,System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Core.JsonRpcServer.TryInvokeMethodAsync(System.String,Voltaic.Core.RpcParameters,System.Threading.CancellationToken)">
             <summary>
             Attempts to invoke a registered method by name with the given parameters asynchronously.
             </summary>
             <param name="methodName">The name of the method to invoke.</param>
             <param name="parameters">The parameters to pass to the method.</param>
             <param name="token">Cancellation token to pass to the method handler.</param>
-            <returns>A tuple indicating whether the method was found and the result of invocation.</returns>
+            <returns>An <see cref="T:Voltaic.Core.RpcMethodInvocation"/> indicating whether the method was found and the result of invocation.</returns>
         </member>
         <member name="M:Voltaic.Core.JsonRpcServer.StartAsync(System.Threading.CancellationToken)">
             <summary>
@@ -1709,6 +1709,116 @@
             </summary>
             <param name="pendingRequest">The pending request state.</param>
             <param name="response">The JSON-RPC response.</param>
+        </member>
+        <member name="T:Voltaic.Core.RpcEchoArguments">
+            <summary>
+            Typed view of the built-in <c>echo</c> method arguments.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.RpcAddArguments">
+            <summary>
+            Typed view of the built-in <c>add</c> method arguments.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.RpcMethodInvocation">
+            <summary>
+            The outcome of attempting to invoke a registered JSON-RPC method: whether a handler was
+            found and, if so, its result. Replaces a value tuple return. Instances are immutable.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.RpcMethodInvocation.Success">
+            <summary>
+            Gets a value indicating whether a registered handler was found and invoked.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.RpcMethodInvocation.Result">
+            <summary>
+            Gets the result returned by the handler, or null when no handler was found.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.RpcMethodInvocation.#ctor(System.Boolean,System.Object)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Core.RpcMethodInvocation"/> class.
+            </summary>
+            <param name="success">Whether a handler was found and invoked.</param>
+            <param name="result">The handler result, or null.</param>
+        </member>
+        <member name="T:Voltaic.Core.RpcParameters">
+            <summary>
+            A dependency-light, DOM-free wrapper around JSON-RPC request parameters. It carries the raw
+            parameters JSON and exposes typed deserialization and scalar property access without exposing
+            any <c>System.Text.Json</c> DOM type (<c>JsonElement</c>, <c>JsonDocument</c>, <c>JsonNode</c>).
+            Scalar accessors use the streaming <see cref="T:System.Text.Json.Utf8JsonReader"/>. This replaces the previous
+            <c>JsonElement?</c> handler parameter across JSON-RPC and MCP. Instances are immutable and
+            therefore thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.RpcParameters.RawJson">
+            <summary>
+            Gets the raw JSON text of the parameters, or null when no parameters were supplied.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.RpcParameters.HasValue">
+            <summary>
+            Gets a value indicating whether any parameters were supplied.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Core.RpcParameters"/> class from raw JSON text.
+            </summary>
+            <param name="rawJson">The raw parameters JSON, or null when none were supplied.</param>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.FromObject(System.Object)">
+            <summary>
+            Creates parameters from a CLR value by serializing it to JSON.
+            </summary>
+            <param name="value">The value to serialize, or null.</param>
+            <returns>A new <see cref="T:Voltaic.Core.RpcParameters"/> instance.</returns>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.Deserialize``1">
+            <summary>
+            Deserializes the parameters into the specified type. Returns the type default when no
+            parameters were supplied.
+            </summary>
+            <typeparam name="T">The target type.</typeparam>
+            <returns>The deserialized value, or the type default when empty.</returns>
+            <exception cref="T:System.Text.Json.JsonException">Thrown when the raw JSON cannot be deserialized into <typeparamref name="T"/>.</exception>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.ContainsProperty(System.String)">
+            <summary>
+            Determines whether the top-level parameters object contains the named property.
+            </summary>
+            <param name="propertyName">The property name. Must not be null.</param>
+            <returns>True if the property is present; otherwise false.</returns>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.GetString(System.String)">
+            <summary>
+            Gets the string value of a top-level property, or null when it is absent or not a string.
+            </summary>
+            <param name="propertyName">The property name. Must not be null.</param>
+            <returns>The string value, or null.</returns>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.GetDouble(System.String)">
+            <summary>
+            Gets the numeric value of a top-level property, or null when it is absent or not a number.
+            </summary>
+            <param name="propertyName">The property name. Must not be null.</param>
+            <returns>The numeric value, or null.</returns>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.GetInt64(System.String)">
+            <summary>
+            Gets the 64-bit integer value of a top-level property, or null when it is absent or not an integer.
+            </summary>
+            <param name="propertyName">The property name. Must not be null.</param>
+            <returns>The integer value, or null.</returns>
+        </member>
+        <member name="M:Voltaic.Core.RpcParameters.GetBoolean(System.String)">
+            <summary>
+            Gets the boolean value of a top-level property, or null when it is absent or not a boolean.
+            </summary>
+            <param name="propertyName">The property name. Must not be null.</param>
+            <returns>The boolean value, or null.</returns>
         </member>
         <member name="T:Voltaic.Core.ServerPendingRequest">
             <summary>
@@ -2316,6 +2426,45 @@
             caching guidance is not provided.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpInitializeParams">
+            <summary>
+            Typed view of <c>initialize</c> request parameters, used by the dispatcher to avoid
+            System.Text.Json DOM access.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpNamedArgumentsParams">
+            <summary>
+            Typed view of request parameters that carry a <c>name</c> and optional <c>arguments</c>
+            (used by <c>tools/call</c> and <c>prompts/get</c>). The arguments are captured as a CLR value
+            so they can be re-serialized into an <see cref="!:McpParameters"/> for the handler without DOM.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpUriParams">
+            <summary>
+            Typed view of request parameters that carry a <c>uri</c> (used by resource methods).
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpLevelParams">
+            <summary>
+            Typed view of request parameters that carry a logging <c>level</c>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpCursorParams">
+            <summary>
+            Typed view of request parameters that carry a pagination <c>cursor</c>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpEchoArguments">
+            <summary>
+            Typed view of the built-in <c>echo</c> tool arguments.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpJsonSchema">
+            <summary>
+            Typed, recursive view of the subset of JSON Schema that Voltaic validates
+            (<c>type</c>, <c>required</c>, and <c>properties</c>). Other keywords are ignored.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpHttpClient">
             <summary>
             Provides an HTTP-based MCP (Model Context Protocol) client implementation.
@@ -2709,7 +2858,7 @@
             <param name="mcpPath">The URL path for the MCP Streamable HTTP endpoint. Default is "/mcp". Set to null to disable.</param>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a custom RPC method with the specified synchronous handler.
             The handler is wrapped internally to support async invocation.
@@ -2718,7 +2867,7 @@
             <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler.
             Use this overload when the handler needs to perform asynchronous operations such as
@@ -2728,7 +2877,7 @@
             <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
             Use this overload when the handler needs to perform cancellable asynchronous operations.
@@ -2738,7 +2887,7 @@
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
             This registers both the method handler and the tool definition for tools/list.
@@ -2749,7 +2898,7 @@
             <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with input and output schema metadata using a synchronous handler.
             </summary>
@@ -2759,14 +2908,14 @@
             <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
             <param name="handler">The function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool from a full tool definition using a synchronous handler.
             </summary>
             <param name="definition">The tool definition.</param>
             <param name="handler">The function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
             This registers both the method handler and the tool definition for tools/list.
@@ -2779,7 +2928,7 @@
             <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using an asynchronous handler.
             </summary>
@@ -2789,14 +2938,14 @@
             <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
             <param name="handler">The async function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using an asynchronous handler.
             </summary>
             <param name="definition">The tool definition.</param>
             <param name="handler">The async function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
             This registers both the method handler and the tool definition for tools/list.
@@ -2808,7 +2957,7 @@
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
             </summary>
@@ -2818,7 +2967,7 @@
             <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using a cancellable asynchronous handler.
             </summary>
@@ -2857,7 +3006,7 @@
             <param name="template">Template metadata.</param>
             <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.Mcp.McpGetPromptResult})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{Voltaic.Core.RpcParameters,Voltaic.Mcp.McpGetPromptResult})">
             <summary>
             Registers an MCP prompt with a synchronous handler.
             </summary>
@@ -2866,7 +3015,7 @@
             <param name="arguments">Prompt arguments.</param>
             <param name="handler">Prompt handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
             <summary>
             Registers an MCP prompt with a cancellable handler.
             </summary>
@@ -3127,6 +3276,36 @@
             Gets or sets the listed tasks.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpJsonValueKind">
+            <summary>
+            A DOM-free classification of a JSON value's kind, used by the schema validator instead of
+            the System.Text.Json <c>JsonValueKind</c>/<c>JsonElement</c> DOM types.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.Absent">
+            <summary>No value was present.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.Object">
+            <summary>A JSON object.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.Array">
+            <summary>A JSON array.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.String">
+            <summary>A JSON string.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.Number">
+            <summary>A JSON number that is not an integer.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.Integer">
+            <summary>A JSON number that fits in a 64-bit integer.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.Boolean">
+            <summary>A JSON boolean.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonValueKind.Null">
+            <summary>A JSON null.</summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpListToolsResult">
             <summary>
             Result returned by tools/list.
@@ -3209,47 +3388,6 @@
             Gets or sets an opaque server-owned state string. Clients must echo it verbatim on retry
             and must not inspect, parse, or modify it. Null when the server needs no echoed state.
             </summary>
-        </member>
-        <member name="T:Voltaic.Mcp.McpParameters">
-            <summary>
-            A dependency-light, DOM-free wrapper around JSON-RPC request parameters. It carries the raw
-            parameters JSON and exposes typed deserialization without exposing any
-            <c>System.Text.Json</c> DOM type (<c>JsonElement</c>, <c>JsonDocument</c>, <c>JsonNode</c>).
-            This replaces the previous <c>JsonElement?</c> handler parameter.
-            Instances are immutable and therefore thread-safe.
-            </summary>
-        </member>
-        <member name="P:Voltaic.Mcp.McpParameters.RawJson">
-            <summary>
-            Gets the raw JSON text of the parameters, or null when no parameters were supplied.
-            </summary>
-        </member>
-        <member name="P:Voltaic.Mcp.McpParameters.HasValue">
-            <summary>
-            Gets a value indicating whether any parameters were supplied.
-            </summary>
-        </member>
-        <member name="M:Voltaic.Mcp.McpParameters.#ctor(System.String)">
-            <summary>
-            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpParameters"/> class from raw JSON text.
-            </summary>
-            <param name="rawJson">The raw parameters JSON, or null when none were supplied.</param>
-        </member>
-        <member name="M:Voltaic.Mcp.McpParameters.FromObject(System.Object)">
-            <summary>
-            Creates parameters from a CLR value by serializing it to JSON.
-            </summary>
-            <param name="value">The value to serialize, or null.</param>
-            <returns>A new <see cref="T:Voltaic.Mcp.McpParameters"/> instance.</returns>
-        </member>
-        <member name="M:Voltaic.Mcp.McpParameters.Deserialize``1">
-            <summary>
-            Deserializes the parameters into the specified type. Returns the type default when no
-            parameters were supplied.
-            </summary>
-            <typeparam name="T">The target type.</typeparam>
-            <returns>The deserialized value, or the type default when empty.</returns>
-            <exception cref="T:System.Text.Json.JsonException">Thrown when the raw JSON cannot be deserialized into <typeparamref name="T"/>.</exception>
         </member>
         <member name="T:Voltaic.Mcp.McpPrompt">
             <summary>
@@ -3829,6 +3967,43 @@
             or null when no caching guidance is provided.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpSchemaValidator">
+            <summary>
+            A DOM-free, best-effort JSON Schema validator covering the subset Voltaic enforces
+            (<c>type</c>, <c>required</c>, and nested object <c>properties</c>). It parses values with the
+            streaming <see cref="T:System.Text.Json.Utf8JsonReader"/> rather than any System.Text.Json DOM type.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaValidator.Validate(System.Object,System.String,System.String)">
+            <summary>
+            Validates a value's raw JSON against a schema, throwing an
+            <see cref="T:Voltaic.Mcp.McpProtocolException"/> validation error on the first violation.
+            </summary>
+            <param name="schema">The schema object (or its JSON), or null to skip validation.</param>
+            <param name="valueJson">The raw JSON of the value, or null when the value is absent.</param>
+            <param name="context">A human-readable context prefix for error messages.</param>
+            <exception cref="T:Voltaic.Mcp.McpProtocolException">Thrown when validation fails.</exception>
+        </member>
+        <member name="T:Voltaic.Mcp.JsonValueInfo">
+            <summary>
+            A DOM-free parsed view of a JSON value: its <see cref="P:Voltaic.Mcp.JsonValueInfo.Kind"/> and, for objects, its members.
+            Built with the streaming <see cref="T:System.Text.Json.Utf8JsonReader"/>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.JsonValueInfo.Kind">
+            <summary>Gets the value kind.</summary>
+        </member>
+        <member name="P:Voltaic.Mcp.JsonValueInfo.Members">
+            <summary>Gets the object members (name to value), or null for non-object values.</summary>
+        </member>
+        <member name="M:Voltaic.Mcp.JsonValueInfo.Parse(System.String)">
+            <summary>
+            Parses raw JSON into a <see cref="T:Voltaic.Mcp.JsonValueInfo"/>. Returns an absent value for null,
+            blank, or malformed JSON.
+            </summary>
+            <param name="json">The raw JSON, or null.</param>
+            <returns>The parsed value information.</returns>
+        </member>
         <member name="T:Voltaic.Mcp.McpServer">
             <summary>
             MCP server using stdio transport for subprocess-based operation.
@@ -3864,7 +4039,7 @@
             </summary>
             <param name="includeDefaultMethods">True to include default methods such as echo, ping, and getTime.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a custom RPC method with the specified synchronous handler.
             The handler is wrapped internally to support async invocation.
@@ -3873,7 +4048,7 @@
             <param name="handler">The function that handles the method invocation.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler.
             Use this overload when the handler needs to perform asynchronous operations such as
@@ -3883,7 +4058,7 @@
             <param name="handler">The async function that handles the method invocation.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
             Use this overload when the handler needs to perform cancellable asynchronous operations.
@@ -3893,7 +4068,7 @@
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
             This registers both the method handler and the tool definition for tools/list.
@@ -3904,7 +4079,7 @@
             <param name="handler">The function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with input and output schema metadata using a synchronous handler.
             </summary>
@@ -3914,14 +4089,14 @@
             <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
             <param name="handler">The function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool from a full tool definition using a synchronous handler.
             </summary>
             <param name="definition">The tool definition.</param>
             <param name="handler">The function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
             This registers both the method handler and the tool definition for tools/list.
@@ -3934,7 +4109,7 @@
             <param name="handler">The async function that handles the tool invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using an asynchronous handler.
             </summary>
@@ -3944,14 +4119,14 @@
             <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
             <param name="handler">The async function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using an asynchronous handler.
             </summary>
             <param name="definition">The tool definition.</param>
             <param name="handler">The async function that handles the tool invocation.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
             This registers both the method handler and the tool definition for tools/list.
@@ -3963,7 +4138,7 @@
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
             </summary>
@@ -3973,7 +4148,7 @@
             <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using a cancellable asynchronous handler.
             </summary>
@@ -4012,7 +4187,7 @@
             <param name="template">Template metadata.</param>
             <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.Mcp.McpGetPromptResult})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{Voltaic.Core.RpcParameters,Voltaic.Mcp.McpGetPromptResult})">
             <summary>
             Registers an MCP prompt with a synchronous handler.
             </summary>
@@ -4021,7 +4196,7 @@
             <param name="arguments">Prompt arguments.</param>
             <param name="handler">Prompt handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
+        <member name="M:Voltaic.Mcp.McpServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
             <summary>
             Registers an MCP prompt with a cancellable handler.
             </summary>
@@ -4212,7 +4387,7 @@
             <param name="port">The port number to listen on.</param>
             <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with metadata for MCP tool discovery using a synchronous handler.
             </summary>
@@ -4221,7 +4396,7 @@
             <param name="inputSchema">Input JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with input and output schema metadata using a synchronous handler.
             </summary>
@@ -4231,14 +4406,14 @@
             <param name="outputSchema">Output JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool from a full tool definition using a synchronous handler.
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP tool discovery using an asynchronous handler.
             </summary>
@@ -4247,7 +4422,7 @@
             <param name="inputSchema">Input JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using an asynchronous handler.
             </summary>
@@ -4257,14 +4432,14 @@
             <param name="outputSchema">Output JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using an asynchronous handler.
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP tool discovery using a cancellable asynchronous handler.
             </summary>
@@ -4273,7 +4448,7 @@
             <param name="inputSchema">Input JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
             </summary>
@@ -4283,7 +4458,7 @@
             <param name="outputSchema">Output JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using a cancellable asynchronous handler.
             </summary>
@@ -4322,7 +4497,7 @@
             <param name="template">Template metadata.</param>
             <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.Mcp.McpGetPromptResult})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{Voltaic.Core.RpcParameters,Voltaic.Mcp.McpGetPromptResult})">
             <summary>
             Registers an MCP prompt with a synchronous handler.
             </summary>
@@ -4331,7 +4506,7 @@
             <param name="arguments">Prompt arguments.</param>
             <param name="handler">Prompt handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
             <summary>
             Registers an MCP prompt with a cancellable handler.
             </summary>
@@ -4774,7 +4949,7 @@
             <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a custom RPC method with the specified synchronous handler.
             The handler is wrapped internally to support async invocation.
@@ -4783,7 +4958,7 @@
             <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler.
             Use this overload when the handler needs to perform asynchronous operations such as
@@ -4793,7 +4968,7 @@
             <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a custom RPC method with the specified asynchronous handler that accepts a cancellation token.
             Use this overload when the handler needs to perform cancellable asynchronous operations.
@@ -4803,7 +4978,7 @@
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with metadata for MCP tool discovery using a synchronous handler.
             </summary>
@@ -4812,7 +4987,7 @@
             <param name="inputSchema">Input JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with input and output schema metadata using a synchronous handler.
             </summary>
@@ -4822,14 +4997,14 @@
             <param name="outputSchema">Output JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Object})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool from a full tool definition using a synchronous handler.
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP tool discovery using an asynchronous handler.
             </summary>
@@ -4838,7 +5013,7 @@
             <param name="inputSchema">Input JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using an asynchronous handler.
             </summary>
@@ -4848,14 +5023,14 @@
             <param name="outputSchema">Output JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using an asynchronous handler.
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP tool discovery using a cancellable asynchronous handler.
             </summary>
@@ -4864,7 +5039,7 @@
             <param name="inputSchema">Input JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with input and output schema metadata using a cancellable asynchronous handler.
             </summary>
@@ -4874,7 +5049,7 @@
             <param name="outputSchema">Output JSON schema.</param>
             <param name="handler">Tool handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool from a full tool definition using a cancellable asynchronous handler.
             </summary>
@@ -4913,7 +5088,7 @@
             <param name="template">Template metadata.</param>
             <param name="readHandler">Read handler that receives the matched URI and template variables.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{System.Nullable{System.Text.Json.JsonElement},Voltaic.Mcp.McpGetPromptResult})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterPrompt(System.String,System.String,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpPromptArgument},System.Func{Voltaic.Core.RpcParameters,Voltaic.Mcp.McpGetPromptResult})">
             <summary>
             Registers an MCP prompt with a synchronous handler.
             </summary>
@@ -4922,7 +5097,7 @@
             <param name="arguments">Prompt arguments.</param>
             <param name="handler">Prompt handler.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{System.Nullable{System.Text.Json.JsonElement},System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterPrompt(Voltaic.Mcp.McpPrompt,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{Voltaic.Mcp.McpGetPromptResult}})">
             <summary>
             Registers an MCP prompt with a cancellable handler.
             </summary>

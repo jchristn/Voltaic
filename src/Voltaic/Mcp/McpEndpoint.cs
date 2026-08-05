@@ -59,19 +59,19 @@ namespace Voltaic.Mcp
             ServerName = serverName;
         }
 
-        public object Initialize(JsonElement? args)
+        public object Initialize(RpcParameters? args)
         {
             string clientProtocolVersion = ProtocolVersion;
-            if (args.HasValue && args.Value.TryGetProperty("protocolVersion", out JsonElement protocolVersionProp))
+            McpInitializeParams? initialize = args?.Deserialize<McpInitializeParams>();
+            if (initialize != null && !String.IsNullOrEmpty(initialize.ProtocolVersion))
             {
                 try
                 {
-                    clientProtocolVersion = McpProtocol.NegotiateVersion(protocolVersionProp.GetString() ?? ProtocolVersion);
+                    clientProtocolVersion = McpProtocol.NegotiateVersion(initialize.ProtocolVersion);
                 }
                 catch (ArgumentException)
                 {
-                    string requested = protocolVersionProp.GetString() ?? string.Empty;
-                    throw McpProtocolException.UnsupportedVersion(requested);
+                    throw McpProtocolException.UnsupportedVersion(initialize.ProtocolVersion!);
                 }
             }
 
@@ -89,13 +89,13 @@ namespace Voltaic.Mcp
             };
         }
 
-        public object Initialized(JsonElement? args)
+        public object Initialized(RpcParameters? args)
         {
             State = McpSessionLifecycleState.Initialized;
             return new { };
         }
 
-        public McpDiscoverResult Discover(JsonElement? args)
+        public McpDiscoverResult Discover(RpcParameters? args)
         {
             McpServerCapabilities capabilities = BuildCapabilities();
 
@@ -118,12 +118,12 @@ namespace Voltaic.Mcp
             return result;
         }
 
-        public object Ping(JsonElement? args)
+        public object Ping(RpcParameters? args)
         {
             return new { };
         }
 
-        public ToolDefinition RegisterTool(ToolDefinition definition, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        public ToolDefinition RegisterTool(ToolDefinition definition, Func<RpcParameters?, CancellationToken, Task<object>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             ValidateToolDefinition(definition);
@@ -167,7 +167,7 @@ namespace Voltaic.Mcp
             return template;
         }
 
-        public McpPrompt RegisterPrompt(McpPrompt prompt, Func<JsonElement?, CancellationToken, Task<McpGetPromptResult>> handler)
+        public McpPrompt RegisterPrompt(McpPrompt prompt, Func<RpcParameters?, CancellationToken, Task<McpGetPromptResult>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             ValidatePrompt(prompt);
@@ -200,7 +200,7 @@ namespace Voltaic.Mcp
             }
         }
 
-        public McpListToolsResult ListTools(JsonElement? args)
+        public McpListToolsResult ListTools(RpcParameters? args)
         {
             List<ToolDefinition> tools;
             lock (_Lock)
@@ -218,29 +218,26 @@ namespace Voltaic.Mcp
             };
         }
 
-        public async Task<object> CallToolAsync(JsonElement? args, CancellationToken token)
+        public async Task<object> CallToolAsync(RpcParameters? args, CancellationToken token)
         {
-            if (!args.HasValue)
+            if (args == null || !args.HasValue)
             {
                 throw McpProtocolException.InvalidParams("tools/call requires params with a name.");
             }
 
-            if (!args.Value.TryGetProperty("name", out JsonElement nameElement))
+            McpNamedArgumentsParams? call = args.Deserialize<McpNamedArgumentsParams>();
+            if (call == null || call.Name == null)
             {
                 throw McpProtocolException.InvalidParams("tools/call requires a name parameter.");
             }
 
-            string? toolName = nameElement.GetString();
+            string toolName = call.Name;
             if (String.IsNullOrWhiteSpace(toolName))
             {
                 throw McpProtocolException.InvalidParams("tools/call name must be a non-empty string.");
             }
 
-            JsonElement? toolArguments = null;
-            if (args.Value.TryGetProperty("arguments", out JsonElement argsElement))
-            {
-                toolArguments = argsElement;
-            }
+            RpcParameters? toolArguments = call.Arguments == null ? null : RpcParameters.FromObject(call.Arguments);
 
             ToolRegistration? tool;
             lock (_Lock)
@@ -253,7 +250,7 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams($"Tool '{toolName}' was not found.");
             }
 
-            ValidateJsonSchema(tool.Definition.InputSchema, toolArguments, $"Tool '{toolName}' arguments");
+            McpSchemaValidator.Validate(tool.Definition.InputSchema, toolArguments?.RawJson, $"Tool '{toolName}' arguments");
             object result = await tool.Handler(toolArguments, token).ConfigureAwait(false);
 
             // Multi Round-Trip Requests: a handler may return an input-required result to ask the
@@ -268,7 +265,7 @@ namespace Voltaic.Mcp
             {
                 if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent != null)
                 {
-                    ValidateJsonSchema(tool.Definition.OutputSchema, SerializeToElement(toolCallResult.StructuredContent), $"Tool '{toolName}' structured output");
+                    McpSchemaValidator.Validate(tool.Definition.OutputSchema, JsonSerializer.Serialize(toolCallResult.StructuredContent), $"Tool '{toolName}' structured output");
                 }
 
                 return toolCallResult;
@@ -276,7 +273,7 @@ namespace Voltaic.Mcp
 
             if (tool.Definition.OutputSchema != null)
             {
-                ValidateJsonSchema(tool.Definition.OutputSchema, SerializeToElement(result), $"Tool '{toolName}' output");
+                McpSchemaValidator.Validate(tool.Definition.OutputSchema, JsonSerializer.Serialize(result), $"Tool '{toolName}' output");
                 return McpToolCallResult.FromStructured(result);
             }
 
@@ -288,7 +285,7 @@ namespace Voltaic.Mcp
             return McpToolCallResult.FromText(JsonSerializer.Serialize(result));
         }
 
-        public McpListResourcesResult ListResources(JsonElement? args)
+        public McpListResourcesResult ListResources(RpcParameters? args)
         {
             List<McpResource> resources;
             lock (_Lock)
@@ -306,7 +303,7 @@ namespace Voltaic.Mcp
             };
         }
 
-        public McpListResourceTemplatesResult ListResourceTemplates(JsonElement? args)
+        public McpListResourceTemplatesResult ListResourceTemplates(RpcParameters? args)
         {
             List<McpResourceTemplate> templates;
             lock (_Lock)
@@ -324,18 +321,20 @@ namespace Voltaic.Mcp
             };
         }
 
-        public async Task<object> ReadResourceAsync(JsonElement? args, CancellationToken token)
+        public async Task<object> ReadResourceAsync(RpcParameters? args, CancellationToken token)
         {
-            if (!args.HasValue || !args.Value.TryGetProperty("uri", out JsonElement uriElement))
+            McpUriParams? parameters = args?.Deserialize<McpUriParams>();
+            if (parameters == null || parameters.Uri == null)
             {
                 throw McpProtocolException.InvalidParams("resources/read requires a uri parameter.");
             }
 
-            string? uri = uriElement.GetString();
-            if (String.IsNullOrWhiteSpace(uri))
+            if (String.IsNullOrWhiteSpace(parameters.Uri))
             {
                 throw McpProtocolException.InvalidParams("resources/read uri must be a non-empty string.");
             }
+
+            string uri = parameters.Uri;
 
             ResourceRegistration? resource;
             List<ResourceTemplateRegistration> templates;
@@ -371,7 +370,7 @@ namespace Voltaic.Mcp
             throw McpProtocolException.InvalidParams($"Resource '{uri}' was not found.");
         }
 
-        public McpListPromptsResult ListPrompts(JsonElement? args)
+        public McpListPromptsResult ListPrompts(RpcParameters? args)
         {
             List<McpPrompt> prompts;
             lock (_Lock)
@@ -389,24 +388,21 @@ namespace Voltaic.Mcp
             };
         }
 
-        public async Task<object> GetPromptAsync(JsonElement? args, CancellationToken token)
+        public async Task<object> GetPromptAsync(RpcParameters? args, CancellationToken token)
         {
-            if (!args.HasValue || !args.Value.TryGetProperty("name", out JsonElement nameElement))
+            McpNamedArgumentsParams? request = args?.Deserialize<McpNamedArgumentsParams>();
+            if (request == null || request.Name == null)
             {
                 throw McpProtocolException.InvalidParams("prompts/get requires a name parameter.");
             }
 
-            string? promptName = nameElement.GetString();
+            string promptName = request.Name;
             if (String.IsNullOrWhiteSpace(promptName))
             {
                 throw McpProtocolException.InvalidParams("prompts/get name must be a non-empty string.");
             }
 
-            JsonElement? promptArguments = null;
-            if (args.Value.TryGetProperty("arguments", out JsonElement argumentsElement))
-            {
-                promptArguments = argumentsElement;
-            }
+            RpcParameters? promptArguments = request.Arguments == null ? null : RpcParameters.FromObject(request.Arguments);
 
             PromptRegistration? prompt;
             lock (_Lock)
@@ -423,14 +419,14 @@ namespace Voltaic.Mcp
             return await prompt.Handler(promptArguments, token).ConfigureAwait(false);
         }
 
-        public async Task<object> CompleteAsync(JsonElement? args, CancellationToken token)
+        public async Task<object> CompleteAsync(RpcParameters? args, CancellationToken token)
         {
-            if (!args.HasValue)
+            if (args == null || !args.HasValue)
             {
                 throw McpProtocolException.InvalidParams("completion/complete requires params.");
             }
 
-            McpCompleteRequest? request = JsonSerializer.Deserialize<McpCompleteRequest>(args.Value.GetRawText());
+            McpCompleteRequest? request = args.Deserialize<McpCompleteRequest>();
             if (request == null)
             {
                 throw McpProtocolException.InvalidParams("completion/complete params were invalid.");
@@ -476,7 +472,7 @@ namespace Voltaic.Mcp
             return result;
         }
 
-        public object SubscribeResource(JsonElement? args)
+        public object SubscribeResource(RpcParameters? args)
         {
             string uri = GetRequiredUri(args, "resources/subscribe");
             lock (_Lock)
@@ -487,7 +483,7 @@ namespace Voltaic.Mcp
             return new { };
         }
 
-        public object UnsubscribeResource(JsonElement? args)
+        public object UnsubscribeResource(RpcParameters? args)
         {
             string uri = GetRequiredUri(args, "resources/unsubscribe");
             lock (_Lock)
@@ -498,37 +494,26 @@ namespace Voltaic.Mcp
             return new { };
         }
 
-        public object SetLogLevel(JsonElement? args)
+        public object SetLogLevel(RpcParameters? args)
         {
-            if (!args.HasValue || !args.Value.TryGetProperty("level", out JsonElement levelElement))
+            McpLevelParams? parameters = args?.Deserialize<McpLevelParams>();
+            if (parameters == null || parameters.Level == null)
             {
                 throw McpProtocolException.InvalidParams("logging/setLevel requires a level parameter.");
             }
 
-            string? level = levelElement.GetString();
+            string level = parameters.Level;
             if (!IsValidLogLevel(level))
             {
                 throw McpProtocolException.InvalidParams($"Invalid log level '{level}'.");
             }
 
-            MinimumLogLevel = level!;
+            MinimumLogLevel = level;
             return new { };
         }
 
-        public object Cancelled(JsonElement? args)
+        public object Cancelled(RpcParameters? args)
         {
-            if (!args.HasValue)
-            {
-                return new { };
-            }
-
-            if (!args.Value.TryGetProperty("requestId", out JsonElement requestId) ||
-                requestId.ValueKind == JsonValueKind.Null ||
-                requestId.ValueKind == JsonValueKind.Undefined)
-            {
-                return new { };
-            }
-
             return new { };
         }
 
@@ -610,16 +595,17 @@ namespace Voltaic.Mcp
             if (String.IsNullOrWhiteSpace(prompt.Name)) throw new ArgumentException("Prompt must include a name.", nameof(prompt));
         }
 
-        private static void ValidateRequiredPromptArguments(McpPrompt prompt, JsonElement? arguments)
+        private static void ValidateRequiredPromptArguments(McpPrompt prompt, RpcParameters? arguments)
         {
             if (prompt.Arguments == null)
             {
                 return;
             }
 
+            JsonValueInfo provided = JsonValueInfo.Parse(arguments?.RawJson);
             foreach (McpPromptArgument argument in prompt.Arguments.Where(argument => argument.Required == true))
             {
-                if (!arguments.HasValue || !arguments.Value.TryGetProperty(argument.Name, out _))
+                if (provided.Kind != McpJsonValueKind.Object || provided.Members == null || !provided.Members.ContainsKey(argument.Name))
                 {
                     throw McpProtocolException.InvalidParams($"Prompt '{prompt.Name}' requires argument '{argument.Name}'.");
                 }
@@ -640,30 +626,26 @@ namespace Voltaic.Mcp
             return new Page<T>(pageItems, nextOffset < items.Count ? nextOffset.ToString() : null);
         }
 
-        private static string? GetCursor(JsonElement? args)
+        private static string? GetCursor(RpcParameters? args)
         {
-            if (args.HasValue && args.Value.TryGetProperty("cursor", out JsonElement cursorElement))
-            {
-                return cursorElement.GetString();
-            }
-
-            return null;
+            McpCursorParams? parameters = args?.Deserialize<McpCursorParams>();
+            return parameters?.Cursor;
         }
 
-        private static string GetRequiredUri(JsonElement? args, string method)
+        private static string GetRequiredUri(RpcParameters? args, string method)
         {
-            if (!args.HasValue || !args.Value.TryGetProperty("uri", out JsonElement uriElement))
+            McpUriParams? parameters = args?.Deserialize<McpUriParams>();
+            if (parameters == null || parameters.Uri == null)
             {
                 throw McpProtocolException.InvalidParams($"{method} requires a uri parameter.");
             }
 
-            string? uri = uriElement.GetString();
-            if (String.IsNullOrWhiteSpace(uri))
+            if (String.IsNullOrWhiteSpace(parameters.Uri))
             {
                 throw McpProtocolException.InvalidParams($"{method} uri must be a non-empty string.");
             }
 
-            return uri;
+            return parameters.Uri;
         }
 
         private static void ValidateCompletionRequest(McpCompleteRequest request)
@@ -706,93 +688,6 @@ namespace Voltaic.Mcp
                 level == "emergency";
         }
 
-        private static void ValidateJsonSchema(object schema, JsonElement? value, string context)
-        {
-            JsonElement schemaElement = SerializeToElement(schema);
-            ValidateJsonSchema(schemaElement, value, context);
-        }
-
-        private static JsonElement SerializeToElement(object? value)
-        {
-            return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(value));
-        }
-
-        private static void ValidateJsonSchema(JsonElement schema, JsonElement? value, string context)
-        {
-            if (schema.ValueKind != JsonValueKind.Object)
-            {
-                return;
-            }
-
-            if (schema.TryGetProperty("required", out JsonElement requiredElement) && requiredElement.ValueKind == JsonValueKind.Array)
-            {
-                foreach (JsonElement requiredItem in requiredElement.EnumerateArray())
-                {
-                    string? requiredName = requiredItem.GetString();
-                    if (!String.IsNullOrEmpty(requiredName) &&
-                        (!value.HasValue || value.Value.ValueKind != JsonValueKind.Object || !value.Value.TryGetProperty(requiredName, out _)))
-                    {
-                        throw McpProtocolException.ValidationError($"{context} is missing required property '{requiredName}'.");
-                    }
-                }
-            }
-
-            if (!schema.TryGetProperty("type", out JsonElement typeElement) || typeElement.ValueKind != JsonValueKind.String)
-            {
-                return;
-            }
-
-            string? expectedType = typeElement.GetString();
-            if (String.IsNullOrEmpty(expectedType))
-            {
-                return;
-            }
-
-            if (!value.HasValue)
-            {
-                if (expectedType == "object")
-                {
-                    return;
-                }
-
-                throw McpProtocolException.ValidationError($"{context} is required.");
-            }
-
-            if (!JsonTypeMatches(expectedType, value.Value))
-            {
-                throw McpProtocolException.ValidationError($"{context} must be a JSON {expectedType}.");
-            }
-
-            if (expectedType == "object" &&
-                value.Value.ValueKind == JsonValueKind.Object &&
-                schema.TryGetProperty("properties", out JsonElement propertiesElement) &&
-                propertiesElement.ValueKind == JsonValueKind.Object)
-            {
-                foreach (JsonProperty property in propertiesElement.EnumerateObject())
-                {
-                    if (value.Value.TryGetProperty(property.Name, out JsonElement propertyValue))
-                    {
-                        ValidateJsonSchema(property.Value, propertyValue, $"{context}.{property.Name}");
-                    }
-                }
-            }
-        }
-
-        private static bool JsonTypeMatches(string expectedType, JsonElement value)
-        {
-            return expectedType switch
-            {
-                "object" => value.ValueKind == JsonValueKind.Object,
-                "array" => value.ValueKind == JsonValueKind.Array,
-                "string" => value.ValueKind == JsonValueKind.String,
-                "number" => value.ValueKind == JsonValueKind.Number,
-                "integer" => value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out _),
-                "boolean" => value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False,
-                "null" => value.ValueKind == JsonValueKind.Null,
-                _ => true
-            };
-        }
-
         private static Regex CreateTemplateRegex(string uriTemplate)
         {
             StringBuilder pattern = new StringBuilder();
@@ -823,7 +718,7 @@ namespace Voltaic.Mcp
             return new Regex("^" + pattern + "$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
         }
 
-        private sealed record ToolRegistration(ToolDefinition Definition, Func<JsonElement?, CancellationToken, Task<object>> Handler);
+        private sealed record ToolRegistration(ToolDefinition Definition, Func<RpcParameters?, CancellationToken, Task<object>> Handler);
 
         private sealed record ResourceRegistration(McpResource Resource, Func<string, CancellationToken, Task<McpReadResourceResult>> Handler);
 
@@ -832,7 +727,7 @@ namespace Voltaic.Mcp
             Regex Pattern,
             Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<McpReadResourceResult>> Handler);
 
-        private sealed record PromptRegistration(McpPrompt Prompt, Func<JsonElement?, CancellationToken, Task<McpGetPromptResult>> Handler);
+        private sealed record PromptRegistration(McpPrompt Prompt, Func<RpcParameters?, CancellationToken, Task<McpGetPromptResult>> Handler);
 
         private sealed record CompletionRegistration(
             string ReferenceType,

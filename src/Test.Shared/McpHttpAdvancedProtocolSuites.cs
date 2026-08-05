@@ -738,8 +738,8 @@ namespace Test.Shared
                 },
                 args =>
                 {
-                    int a = args!.Value.GetProperty("a").GetInt32();
-                    int b = args.Value.GetProperty("b").GetInt32();
+                    int a = (int)(args?.GetInt64("a") ?? 0);
+                    int b = (int)(args?.GetInt64("b") ?? 0);
                     return McpToolCallResult.FromStructured(new { total = a + b });
                 });
             server.RegisterTool("full-result", "Returns full content", new { type = "object" }, _ => new McpToolCallResult
@@ -796,7 +796,7 @@ namespace Test.Shared
                     new McpPromptArgument { Name = "topic", Required = true },
                     new McpPromptArgument { Name = "style", Required = false }
                 },
-                args => Prompt($"Summarize {args!.Value.GetProperty("topic").GetString()}"));
+                args => Prompt($"Summarize {args?.GetString("topic")}"));
             server.RegisterPrompt("optional", "No required arguments", null, _ => Prompt("No arguments required"));
             server.RegisterPrompt("explode-prompt", "Throws", null, _ => throw new InvalidOperationException("prompt boom"));
             server.RegisterCompletionProvider(

@@ -83,7 +83,7 @@ namespace Voltaic.Core
         private readonly int _Port;
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Clients;
-        private readonly Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>> _Methods;
+        private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private int _ClientIdCounter = 0;
         private string _DefaultContentType = "application/json; charset=utf-8";
         private int _MaxQueueSize = 100;
@@ -103,7 +103,7 @@ namespace Voltaic.Core
             _Ip = ip;
             _Port = port;
             _Clients = new ConcurrentDictionary<string, ClientConnection>();
-            _Methods = new Dictionary<string, Func<JsonElement?, CancellationToken, Task<object>>>();
+            _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
 
             if (includeDefaultMethods) RegisterBuiltInMethods();
         }
@@ -115,7 +115,7 @@ namespace Voltaic.Core
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The function that handles the method invocation.</param>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
-        public void RegisterMethod(string name, Func<JsonElement?, object> handler)
+        public void RegisterMethod(string name, Func<RpcParameters?, object> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = (args, _) => Task.FromResult(handler(args));
@@ -129,7 +129,7 @@ namespace Voltaic.Core
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The async function that handles the method invocation.</param>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
-        public void RegisterMethod(string name, Func<JsonElement?, Task<object>> handler)
+        public void RegisterMethod(string name, Func<RpcParameters?, Task<object>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = (args, _) => handler(args);
@@ -143,7 +143,7 @@ namespace Voltaic.Core
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The async function that handles the method invocation with cancellation support.</param>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
-        public void RegisterMethod(string name, Func<JsonElement?, CancellationToken, Task<object>> handler)
+        public void RegisterMethod(string name, Func<RpcParameters?, CancellationToken, Task<object>> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Methods[name] = handler;
@@ -155,15 +155,15 @@ namespace Voltaic.Core
         /// <param name="methodName">The name of the method to invoke.</param>
         /// <param name="parameters">The parameters to pass to the method.</param>
         /// <param name="token">Cancellation token to pass to the method handler.</param>
-        /// <returns>A tuple indicating whether the method was found and the result of invocation.</returns>
-        protected async Task<(bool Success, object? Result)> TryInvokeMethodAsync(string methodName, JsonElement? parameters, CancellationToken token = default)
+        /// <returns>An <see cref="RpcMethodInvocation"/> indicating whether the method was found and the result of invocation.</returns>
+        protected async Task<RpcMethodInvocation> TryInvokeMethodAsync(string methodName, RpcParameters? parameters, CancellationToken token = default)
         {
             if (_Methods.ContainsKey(methodName))
             {
                 object result = await _Methods[methodName](parameters, token).ConfigureAwait(false);
-                return (true, result);
+                return new RpcMethodInvocation(true, result);
             }
-            return (false, null);
+            return new RpcMethodInvocation(false, null);
         }
 
         /// <summary>
@@ -311,22 +311,14 @@ namespace Voltaic.Core
 
             RegisterMethod("echo", (args) =>
             {
-                if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
-                    return messageProp.GetString() ?? "empty";
-                return "empty";
+                RpcEchoArguments? echo = args?.Deserialize<RpcEchoArguments>();
+                return echo?.Message ?? "empty";
             });
             RegisterMethod("getTime", (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
             RegisterMethod("add", (args) =>
             {
-                double a = 0, b = 0;
-                if (args.HasValue)
-                {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
-                }
-                return a + b;
+                RpcAddArguments? add = args?.Deserialize<RpcAddArguments>();
+                return add == null ? 0d : add.A + add.B;
             });
             RegisterMethod("getClients", (_) => GetConnectedClients());
             RegisterMethod("ping", (_) => "pong");
@@ -448,11 +440,7 @@ namespace Voltaic.Core
                 {
                     try
                     {
-                        JsonElement? paramsElement = null;
-                        if (request.Params is JsonElement jsonElement)
-                        {
-                            paramsElement = jsonElement;
-                        }
+                        RpcParameters? paramsElement = request.Params == null ? null : RpcParameters.FromObject(request.Params);
 
                         object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
                         response = new JsonRpcResponse

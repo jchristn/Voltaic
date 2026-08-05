@@ -17,66 +17,58 @@ namespace Sample.McpServer
         private const string _Localhost = "127.0.0.1";
 
         // Tool handler functions - defined once and reused
-        private static readonly Func<JsonElement?, object> _GenerateRandomNumberHandler = (args) =>
+        private static readonly Func<RpcParameters?, object> _GenerateRandomNumberHandler = (args) =>
         {
             int min = 0;
             int max = 100;
 
-            if (args.HasValue)
+            if ((args?.HasValue ?? false))
             {
-                if (args.Value.TryGetProperty("min", out JsonElement minProp))
-                    min = minProp.GetInt32();
-                if (args.Value.TryGetProperty("max", out JsonElement maxProp))
-                    max = maxProp.GetInt32();
+                min = (int)(args?.GetInt64("min") ?? min);
+                max = (int)(args?.GetInt64("max") ?? max);
             }
 
             Random random = new Random();
             return random.Next(min, max + 1);
         };
 
-        private static readonly Func<JsonElement?, object> _AddHandler = (args) =>
+        private static readonly Func<RpcParameters?, object> _AddHandler = (args) =>
         {
             double a = 0;
             double b = 0;
 
-            if (args.HasValue)
+            if ((args?.HasValue ?? false))
             {
-                if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                    a = aProp.GetDouble();
-                if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                    b = bProp.GetDouble();
+                a = args?.GetDouble("a") ?? a;
+                b = args?.GetDouble("b") ?? b;
             }
 
             return a + b;
         };
 
-        private static readonly Func<JsonElement?, object> _MultiplyHandler = (args) =>
+        private static readonly Func<RpcParameters?, object> _MultiplyHandler = (args) =>
         {
             double a = 0;
             double b = 0;
 
-            if (args.HasValue)
+            if ((args?.HasValue ?? false))
             {
-                if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                    a = aProp.GetDouble();
-                if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                    b = bProp.GetDouble();
+                a = args?.GetDouble("a") ?? a;
+                b = args?.GetDouble("b") ?? b;
             }
 
             return a * b;
         };
 
-        private static readonly Func<JsonElement?, object> _DivideHandler = (args) =>
+        private static readonly Func<RpcParameters?, object> _DivideHandler = (args) =>
         {
             double a = 0;
             double b = 1;
 
-            if (args.HasValue)
+            if ((args?.HasValue ?? false))
             {
-                if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                    a = aProp.GetDouble();
-                if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                    b = bProp.GetDouble();
+                a = args?.GetDouble("a") ?? a;
+                b = args?.GetDouble("b") ?? b;
             }
 
             if (b == 0)
@@ -85,52 +77,42 @@ namespace Sample.McpServer
             return a / b;
         };
 
-        private static readonly Func<JsonElement?, object> _SubtractHandler = (args) =>
+        private static readonly Func<RpcParameters?, object> _SubtractHandler = (args) =>
         {
             double a = 0;
             double b = 0;
 
-            if (args.HasValue)
+            if ((args?.HasValue ?? false))
             {
-                if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                    a = aProp.GetDouble();
-                if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                    b = bProp.GetDouble();
+                a = args?.GetDouble("a") ?? a;
+                b = args?.GetDouble("b") ?? b;
             }
 
             return a - b;
         };
 
-        private static readonly Func<JsonElement?, object> _GreetHandler = (args) =>
+        private static readonly Func<RpcParameters?, object> _GreetHandler = (args) =>
         {
             string name = "World";
 
-            if (args.HasValue)
-            {
-                if (args.Value.TryGetProperty("name", out JsonElement nameProp))
-                    name = nameProp.GetString() ?? "World";
-            }
+            name = args?.GetString("name") ?? "World";
 
             return $"Hello, {name}!";
         };
 
-        private static readonly Func<JsonElement?, object> _GetTimeHandler = (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        private static readonly Func<RpcParameters?, object> _GetTimeHandler = (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
 
-        private static readonly Func<JsonElement?, object> _EchoHandler = (args) =>
+        private static readonly Func<RpcParameters?, object> _EchoHandler = (args) =>
         {
-            if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
-                return messageProp.GetString() ?? "empty";
-            return "empty";
+            return args?.GetString("message") ?? "empty";
         };
 
-        private static readonly Func<JsonElement?, object> _PingHandler = (_) => "pong";
+        private static readonly Func<RpcParameters?, object> _PingHandler = (_) => "pong";
 
         // Async handler with cancellation support
-        private static readonly Func<JsonElement?, CancellationToken, Task<object>> _SlowComputeHandler = async (args, token) =>
+        private static readonly Func<RpcParameters?, CancellationToken, Task<object>> _SlowComputeHandler = async (args, token) =>
         {
-            double value = 0;
-            if (args.HasValue && args.Value.TryGetProperty("value", out JsonElement valueProp))
-                value = valueProp.GetDouble();
+            double value = args?.GetDouble("value") ?? 0;
             await Task.Delay(500, token);
             return (object)(value * value);
         };
@@ -372,8 +354,8 @@ namespace Sample.McpServer
                 },
                 args =>
                 {
-                    double a = args?.TryGetProperty("a", out JsonElement aProp) == true ? aProp.GetDouble() : 0;
-                    double b = args?.TryGetProperty("b", out JsonElement bProp) == true ? bProp.GetDouble() : 0;
+                    double a = args?.GetDouble("a") ?? 0;
+                    double b = args?.GetDouble("b") ?? 0;
                     return McpToolCallResult.FromStructured(new { total = a + b });
                 });
 
@@ -425,11 +407,7 @@ namespace Sample.McpServer
                 },
                 args =>
                 {
-                    string topic = "the topic";
-                    if (args.HasValue && args.Value.TryGetProperty("topic", out JsonElement topicProp))
-                    {
-                        topic = topicProp.GetString() ?? topic;
-                    }
+                    string topic = args?.GetString("topic") ?? "the topic";
 
                     return new McpGetPromptResult
                     {
@@ -477,12 +455,10 @@ namespace Sample.McpServer
                 int min = 0;
                 int max = 100;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("min", out JsonElement minProp))
-                        min = minProp.GetInt32();
-                    if (args.Value.TryGetProperty("max", out JsonElement maxProp))
-                        max = maxProp.GetInt32();
+                    min = (int)(args?.GetInt64("min") ?? min);
+                    max = (int)(args?.GetInt64("max") ?? max);
                 }
 
                 Random random = new Random();
@@ -495,12 +471,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 return a + b;
@@ -512,12 +486,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 return a * b;
@@ -529,12 +501,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 1;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 if (b == 0)
@@ -549,12 +519,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 return a - b;
@@ -565,11 +533,7 @@ namespace Sample.McpServer
             {
                 string name = "World";
 
-                if (args.HasValue)
-                {
-                    if (args.Value.TryGetProperty("name", out JsonElement nameProp))
-                        name = nameProp.GetString() ?? "World";
-                }
+                name = args?.GetString("name") ?? "World";
 
                 return $"Hello, {name}!";
             });
@@ -580,9 +544,7 @@ namespace Sample.McpServer
             // echo method
             server.RegisterMethod("echo", (args) =>
             {
-                if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
-                    return messageProp.GetString() ?? "empty";
-                return "empty";
+                return args?.GetString("message") ?? "empty";
             });
 
             // ping method
@@ -600,12 +562,10 @@ namespace Sample.McpServer
                 int min = 0;
                 int max = 100;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("min", out JsonElement minProp))
-                        min = minProp.GetInt32();
-                    if (args.Value.TryGetProperty("max", out JsonElement maxProp))
-                        max = maxProp.GetInt32();
+                    min = (int)(args?.GetInt64("min") ?? min);
+                    max = (int)(args?.GetInt64("max") ?? max);
                 }
 
                 Random random = new Random();
@@ -618,12 +578,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 return a + b;
@@ -635,12 +593,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 return a * b;
@@ -652,12 +608,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 1;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 if (b == 0)
@@ -672,12 +626,10 @@ namespace Sample.McpServer
                 double a = 0;
                 double b = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
 
                 return a - b;
@@ -688,11 +640,7 @@ namespace Sample.McpServer
             {
                 string name = "World";
 
-                if (args.HasValue)
-                {
-                    if (args.Value.TryGetProperty("name", out JsonElement nameProp))
-                        name = nameProp.GetString() ?? "World";
-                }
+                name = args?.GetString("name") ?? "World";
 
                 return $"Hello, {name}!";
             });
@@ -703,9 +651,7 @@ namespace Sample.McpServer
             // echo method
             server.RegisterMethod("echo", (args) =>
             {
-                if (args.HasValue && args.Value.TryGetProperty("message", out JsonElement messageProp))
-                    return messageProp.GetString() ?? "empty";
-                return "empty";
+                return args?.GetString("message") ?? "empty";
             });
 
             // ping method

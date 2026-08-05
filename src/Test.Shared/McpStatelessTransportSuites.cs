@@ -242,7 +242,7 @@ namespace Test.Shared
 
                 server.RegisterTool("confirm", "Requires confirmation", schema, (args) =>
                 {
-                    ConfirmArguments? parsed = args == null ? null : JsonSerializer.Deserialize<ConfirmArguments>(JsonSerializer.Serialize(args));
+                    ConfirmArguments? parsed = args?.Deserialize<ConfirmArguments>();
                     if (parsed != null && parsed.Confirmed)
                     {
                         return (object)"confirmed";

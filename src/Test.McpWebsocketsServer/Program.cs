@@ -57,9 +57,7 @@ namespace Test.McpWebsocketsServer
             // Register custom methods
             server.RegisterMethod("greet", (args) =>
             {
-                string name = "Anonymous";
-                if (args.HasValue && args.Value.TryGetProperty("name", out JsonElement nameProp))
-                    name = nameProp.GetString() ?? "Anonymous";
+                string name = args?.GetString("name") ?? "Anonymous";
                 return $"Hello, {name}!";
             });
 
@@ -68,12 +66,10 @@ namespace Test.McpWebsocketsServer
                 double a = 0;
                 double b = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("a", out JsonElement aProp))
-                        a = aProp.GetDouble();
-                    if (args.Value.TryGetProperty("b", out JsonElement bProp))
-                        b = bProp.GetDouble();
+                    a = args?.GetDouble("a") ?? a;
+                    b = args?.GetDouble("b") ?? b;
                 }
                 return a + b;
             });
@@ -83,22 +79,18 @@ namespace Test.McpWebsocketsServer
                 double x = 0;
                 double y = 0;
 
-                if (args.HasValue)
+                if ((args?.HasValue ?? false))
                 {
-                    if (args.Value.TryGetProperty("x", out JsonElement xProp))
-                        x = xProp.GetDouble();
-                    if (args.Value.TryGetProperty("y", out JsonElement yProp))
-                        y = yProp.GetDouble();
+                    x = args?.GetDouble("x") ?? x;
+                    y = args?.GetDouble("y") ?? y;
                 }
                 return x * y;
             });
 
             // Register an async method with cancellation support
-            server.RegisterMethod("asyncLookup", async (JsonElement? args, CancellationToken token) =>
+            server.RegisterMethod("asyncLookup", async (RpcParameters? args, CancellationToken token) =>
             {
-                string key = "default";
-                if (args.HasValue && args.Value.TryGetProperty("key", out JsonElement keyProp))
-                    key = keyProp.GetString() ?? "default";
+                string key = args?.GetString("key") ?? "default";
                 await Task.Delay(100, token);
                 return (object)$"value-for-{key}";
             });

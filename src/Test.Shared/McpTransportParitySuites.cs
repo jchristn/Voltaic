@@ -160,8 +160,8 @@ namespace Test.Shared
         {
             server.RegisterTool("multiply", "Multiplies numbers", new { type = "object" }, args =>
             {
-                int a = args!.Value.GetProperty("a").GetInt32();
-                int b = args.Value.GetProperty("b").GetInt32();
+                int a = (int)(args?.GetInt64("a") ?? 0);
+                int b = (int)(args?.GetInt64("b") ?? 0);
                 return McpToolCallResult.FromStructured(new { product = a * b });
             });
             server.RegisterResource("voltaic://tcp/static", "static", "text/plain", () => TextResource("voltaic://tcp/static", "tcp static"));
@@ -170,14 +170,14 @@ namespace Test.Shared
                 "tcp-prompt",
                 "TCP prompt",
                 new[] { new McpPromptArgument { Name = "topic", Required = true } },
-                args => Prompt($"TCP {args!.Value.GetProperty("topic").GetString()}"));
+                args => Prompt($"TCP {args?.GetString("topic")}"));
         }
 
         private static void ConfigureMcpWebSocketServer(McpWebsocketsServer server)
         {
             server.RegisterTool("ws-echo", "Echoes a message", new { type = "object" }, args =>
             {
-                return McpToolCallResult.FromStructured(new { message = args!.Value.GetProperty("message").GetString() });
+                return McpToolCallResult.FromStructured(new { message = args?.GetString("message") });
             });
         }
 

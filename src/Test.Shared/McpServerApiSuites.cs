@@ -54,7 +54,7 @@ namespace Test.Shared
                             () => server.RegisterTool("tool", "description", null!, _ => "ok"),
                             "Input schema should be required.");
                         TestAssert.Throws<ArgumentNullException>(
-                            () => server.RegisterTool("tool", "description", new { type = "object" }, (Func<JsonElement?, object>)null!),
+                            () => server.RegisterTool("tool", "description", new { type = "object" }, (Func<RpcParameters?, object>)null!),
                             "Tool handler should be required.");
                         return Task.CompletedTask;
                     }),
