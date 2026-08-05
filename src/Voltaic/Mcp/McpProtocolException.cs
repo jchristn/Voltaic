@@ -2,6 +2,8 @@ namespace Voltaic.Mcp
 {
     using Voltaic.Core;
     using System;
+    using System.Collections.Generic;
+    using System.Linq;
 
     /// <summary>
     /// Represents an MCP protocol error that should be surfaced as a JSON-RPC error response.
@@ -103,6 +105,49 @@ namespace Voltaic.Mcp
         public static McpProtocolException MethodNotFound(string message, object? data = null)
         {
             return new McpProtocolException(-32601, message, data);
+        }
+
+        /// <summary>
+        /// Creates a header-mismatch error (JSON-RPC code <c>-32020</c>) used by the stateless
+        /// 2026-07-28 transport when an HTTP routing header does not match the request body,
+        /// or when a required routing header is missing or malformed. The HTTP status is <c>400</c>.
+        /// </summary>
+        /// <param name="message">Error message describing the mismatch. May not be null.</param>
+        /// <returns>Protocol exception.</returns>
+        public static McpProtocolException HeaderMismatch(string message)
+        {
+            return new McpProtocolException(-32020, message);
+        }
+
+        /// <summary>
+        /// Creates a missing-required-client-capability error (JSON-RPC code <c>-32021</c>) used by
+        /// the stateless 2026-07-28 transport when a request requires a capability the client did
+        /// not declare. The HTTP status is <c>400</c>.
+        /// </summary>
+        /// <param name="message">Error message. May not be null.</param>
+        /// <param name="requiredCapabilities">The capabilities required by the server. May be null.</param>
+        /// <returns>Protocol exception.</returns>
+        public static McpProtocolException MissingRequiredClientCapability(string message, object? requiredCapabilities = null)
+        {
+            return new McpProtocolException(-32021, message, requiredCapabilities == null ? null : new { requiredCapabilities });
+        }
+
+        /// <summary>
+        /// Creates an unsupported-protocol-version error (JSON-RPC code <c>-32022</c>) used by the
+        /// stateless 2026-07-28 transport when the requested version is unknown or unsupported.
+        /// The <c>data</c> payload carries the supported versions and the requested value.
+        /// The HTTP status is <c>400</c>.
+        /// </summary>
+        /// <param name="requested">The requested (unsupported) version. May not be null.</param>
+        /// <param name="supported">The versions the server supports. May not be null.</param>
+        /// <returns>Protocol exception.</returns>
+        public static McpProtocolException UnsupportedProtocolVersion(string requested, IEnumerable<string> supported)
+        {
+            string[] supportedArray = supported == null ? Array.Empty<string>() : supported.ToArray();
+            return new McpProtocolException(
+                -32022,
+                $"Unsupported MCP protocol version '{requested}'.",
+                new { supported = supportedArray, requested });
         }
 
         /// <summary>

@@ -36,6 +36,15 @@ namespace Voltaic.Mcp
         [JsonPropertyName("elicitation")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public object? Elicitation { get; set; }
+
+        /// <summary>
+        /// Gets or sets negotiated extension capabilities keyed by extension identifier
+        /// (for example <c>io.modelcontextprotocol/tasks</c>), 2026-07-28+. Null when no extensions
+        /// are declared.
+        /// </summary>
+        [JsonPropertyName("extensions")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public Dictionary<string, object>? Extensions { get; set; }
     }
 
     /// <summary>
@@ -84,6 +93,15 @@ namespace Voltaic.Mcp
         [JsonPropertyName("tools")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public McpListChangedCapability? Tools { get; set; }
+
+        /// <summary>
+        /// Gets or sets negotiated extension capabilities keyed by extension identifier
+        /// (for example <c>io.modelcontextprotocol/tasks</c>), 2026-07-28+. Null when no extensions
+        /// are advertised.
+        /// </summary>
+        [JsonPropertyName("extensions")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public Dictionary<string, object>? Extensions { get; set; }
     }
 
     /// <summary>

@@ -1783,6 +1783,13 @@
             Gets or sets elicitation capabilities.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpClientCapabilities.Extensions">
+            <summary>
+            Gets or sets negotiated extension capabilities keyed by extension identifier
+            (for example <c>io.modelcontextprotocol/tasks</c>), 2026-07-28+. Null when no extensions
+            are declared.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpServerCapabilities">
             <summary>
             Capabilities an MCP server can expose to a client.
@@ -1816,6 +1823,13 @@
         <member name="P:Voltaic.Mcp.McpServerCapabilities.Tools">
             <summary>
             Gets or sets tool capabilities.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpServerCapabilities.Extensions">
+            <summary>
+            Gets or sets negotiated extension capabilities keyed by extension identifier
+            (for example <c>io.modelcontextprotocol/tasks</c>), 2026-07-28+. Null when no extensions
+            are advertised.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpListChangedCapability">
@@ -2040,6 +2054,18 @@
             Gets or sets the cursor for the next page, if one exists.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpPaginatedResult.TtlMs">
+            <summary>
+            Gets or sets the time in milliseconds for which the result may be cached (2026-07-28+),
+            or null when no caching guidance is provided.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpPaginatedResult.CacheScope">
+            <summary>
+            Gets or sets the cache scope, for example <c>public</c> or <c>private</c> (2026-07-28+),
+            or null when no caching guidance is provided.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpCompleteRequest">
             <summary>
             Parameters supplied to an MCP completion request.
@@ -2248,6 +2274,46 @@
         <member name="P:Voltaic.Mcp.McpResourceLinkContent.MimeType">
             <summary>
             Gets or sets the MIME type.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpDiscoverResult">
+            <summary>
+            Result of the <c>server/discover</c> RPC (2026-07-28+). Reports the server's supported
+            protocol versions, capabilities, and identity in a single response. The result is cacheable
+            via <see cref="P:Voltaic.Mcp.McpDiscoverResult.TtlMs"/> and <see cref="P:Voltaic.Mcp.McpDiscoverResult.CacheScope"/>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpDiscoverResult.ResultType">
+            <summary>
+            Gets or sets the result discriminator. Always <c>complete</c> for a discovery result.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpDiscoverResult.SupportedVersions">
+            <summary>
+            Gets or sets the protocol versions the server supports. The client should choose one of
+            these for subsequent requests.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpDiscoverResult.Capabilities">
+            <summary>
+            Gets or sets the capabilities the server supports.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpDiscoverResult.Instructions">
+            <summary>
+            Gets or sets optional natural-language guidance for LLMs on how to use this server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpDiscoverResult.TtlMs">
+            <summary>
+            Gets or sets the time in milliseconds for which the result may be cached, or null when
+            caching guidance is not provided.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpDiscoverResult.CacheScope">
+            <summary>
+            Gets or sets the cache scope, for example <c>public</c> or <c>private</c>, or null when
+            caching guidance is not provided.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpHttpClient">
@@ -2865,6 +2931,85 @@
             Routes to the appropriate handler (MCP or RPC) based on the request path.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpInCoreTask">
+            <summary>
+            A task record for the experimental in-core tasks feature introduced in <c>2025-11-25</c>.
+            This is distinct from the 2026-07-28 <see cref="T:Voltaic.Mcp.McpTask"/> extension: field names differ
+            (<c>ttl</c>/<c>pollInterval</c> versus <c>ttlMs</c>/<c>pollIntervalMs</c>) and the two use
+            different methods and notifications. Do not interchange them.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInCoreTask.TaskId">
+            <summary>
+            Gets or sets the unique, receiver-generated task identifier.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInCoreTask.Status">
+            <summary>
+            Gets or sets the current status. One of the <see cref="T:Voltaic.Mcp.McpTaskStatus"/> values.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInCoreTask.StatusMessage">
+            <summary>
+            Gets or sets an optional human-readable status message.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInCoreTask.CreatedAt">
+            <summary>
+            Gets or sets the ISO 8601 timestamp when the task was created.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInCoreTask.LastUpdatedAt">
+            <summary>
+            Gets or sets the ISO 8601 timestamp when the task status was last updated.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInCoreTask.Ttl">
+            <summary>
+            Gets or sets the time in milliseconds from creation before the task may be deleted,
+            or null for unlimited.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInCoreTask.PollInterval">
+            <summary>
+            Gets or sets the suggested polling interval in milliseconds, or null when not provided.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpCreateInCoreTaskResult">
+            <summary>
+            The result returned when accepting a task-augmented request under the <c>2025-11-25</c>
+            experimental in-core tasks feature. The underlying operation result is retrieved later via
+            <c>tasks/result</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpCreateInCoreTaskResult.Task">
+            <summary>
+            Gets or sets the created task record.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpTaskAugmentation">
+            <summary>
+            The <c>task</c> augmentation object included in request parameters to request task-based
+            execution under the <c>2025-11-25</c> experimental in-core tasks feature.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTaskAugmentation.Ttl">
+            <summary>
+            Gets or sets the requested task lifetime in milliseconds, or null to accept the
+            receiver's default.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpListTasksResult">
+            <summary>
+            The paginated result of a <c>tasks/list</c> request under the <c>2025-11-25</c> experimental
+            in-core tasks feature.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpListTasksResult.Tasks">
+            <summary>
+            Gets or sets the listed tasks.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpListToolsResult">
             <summary>
             Result returned by tools/list.
@@ -2903,6 +3048,49 @@
         <member name="P:Voltaic.Mcp.McpListPromptsResult.Prompts">
             <summary>
             Gets or sets the listed prompts.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpInputRequest">
+            <summary>
+            A single server-initiated request surfaced to the client through the Multi Round-Trip
+            Requests (MRTR) pattern (2026-07-28+). The <see cref="P:Voltaic.Mcp.McpInputRequest.Method"/> is one of
+            <c>elicitation/create</c>, <c>sampling/createMessage</c>, or <c>roots/list</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInputRequest.Method">
+            <summary>
+            Gets or sets the server-initiated method name.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInputRequest.Params">
+            <summary>
+            Gets or sets the parameters for the server-initiated request, or null.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpInputRequiredResult">
+            <summary>
+            A result indicating that additional input is required before a request can be completed
+            (2026-07-28+). Valid only on responses to <c>tools/call</c>, <c>resources/read</c>, and
+            <c>prompts/get</c>. A conforming response includes at least one of <see cref="P:Voltaic.Mcp.McpInputRequiredResult.InputRequests"/>
+            or <see cref="P:Voltaic.Mcp.McpInputRequiredResult.RequestState"/>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInputRequiredResult.ResultType">
+            <summary>
+            Gets or sets the result discriminator. Always <c>input_required</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInputRequiredResult.InputRequests">
+            <summary>
+            Gets or sets the map of server-initiated requests the client must fulfill. Keys are
+            server-assigned identifiers; the client echoes the same keys in its input responses.
+            Null when the server only needs the original request retried with echoed state.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpInputRequiredResult.RequestState">
+            <summary>
+            Gets or sets an opaque server-owned state string. Clients must echo it verbatim on retry
+            and must not inspect, parse, or modify it. Null when the server needs no echoed state.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpPrompt">
@@ -2987,17 +3175,45 @@
         </member>
         <member name="T:Voltaic.Mcp.McpProtocol">
             <summary>
-            MCP protocol constants used by Voltaic.
+            MCP protocol constants and the version registry used by Voltaic.
             </summary>
         </member>
         <member name="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion">
             <summary>
-            The latest MCP protocol version targeted by Voltaic.
+            The default handshake protocol version negotiated by Voltaic servers when a client
+            does not request a specific version. This remains <c>2025-11-25</c> for backward
+            compatibility; the newest overall revision is <see cref="F:Voltaic.Mcp.McpProtocol.NewestProtocolVersion"/>.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.NewestProtocolVersion">
+            <summary>
+            The newest MCP protocol revision recognized by Voltaic (<c>2026-07-28</c>, stateless era).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.ProtocolVersion20241105">
+            <summary>
+            The original MCP protocol revision (<c>2024-11-05</c>, HTTP+SSE transport, now Deprecated).
             </summary>
         </member>
         <member name="F:Voltaic.Mcp.McpProtocol.ProtocolVersion20250326">
             <summary>
-            The previous MCP protocol version supported for compatibility.
+            The <c>2025-03-26</c> revision that introduced the Streamable HTTP transport.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.ProtocolVersion20250618">
+            <summary>
+            The <c>2025-06-18</c> revision (structured output, elicitation, required protocol-version
+            header, batching removed).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.ProtocolVersion20251125">
+            <summary>
+            The <c>2025-11-25</c> revision (icons, experimental in-core tasks, OIDC discovery).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.ProtocolVersion20260728">
+            <summary>
+            The <c>2026-07-28</c> stateless revision.
             </summary>
         </member>
         <member name="F:Voltaic.Mcp.McpProtocol.JsonRpcVersion">
@@ -3020,20 +3236,109 @@
             Streamable HTTP protocol version header.
             </summary>
         </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.MethodHeader">
+            <summary>
+            Stateless header carrying the JSON-RPC <c>method</c> value (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.NameHeader">
+            <summary>
+            Stateless header carrying the <c>params.name</c> or <c>params.uri</c> value (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.MetaProtocolVersionKey">
+            <summary>
+            The <c>_meta</c> key carrying the per-request protocol version (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.MetaClientInfoKey">
+            <summary>
+            The <c>_meta</c> key carrying client identity (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.MetaClientCapabilitiesKey">
+            <summary>
+            The <c>_meta</c> key carrying per-request client capabilities (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.MetaServerInfoKey">
+            <summary>
+            The <c>_meta</c> key carrying server identity in discovery results (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.MetaRelatedTaskKey">
+            <summary>
+            The <c>_meta</c> key associating a message with a task (2025-11-25 in-core tasks).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.TasksExtensionId">
+            <summary>
+            The extension identifier for the 2026-07-28 tasks extension.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtocol.SupportedVersions">
+            <summary>
+            Gets every MCP protocol revision supported by this release, oldest first.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocol.SupportedVersionStrings">
+            <summary>
+            Gets the protocol version strings supported by this release, oldest first.
+            </summary>
+            <returns>An ordered list of version strings.</returns>
+        </member>
         <member name="M:Voltaic.Mcp.McpProtocol.IsSupportedVersion(System.String)">
             <summary>
             Determines whether the supplied protocol version is supported by this release.
             </summary>
-            <param name="version">Protocol version to inspect.</param>
+            <param name="version">Protocol version to inspect. A null or blank value is not supported.</param>
             <returns>True if supported.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocol.GetVersionInfo(System.String)">
+            <summary>
+            Gets the registry entry for a version, or null when the version is unknown.
+            </summary>
+            <param name="version">Protocol version to look up. May be null.</param>
+            <returns>The registry entry, or null.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocol.GetEra(System.String)">
+            <summary>
+            Gets the architectural era for a supported version.
+            </summary>
+            <param name="version">Protocol version to inspect.</param>
+            <returns>The era of the version.</returns>
+            <exception cref="T:System.ArgumentException">Thrown when the version is unsupported.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpProtocol.NegotiateVersion(System.String)">
             <summary>
             Negotiates a protocol version from a client-requested version.
+            When no version is requested, the default handshake version
+            (<see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>) is returned for backward compatibility.
             </summary>
-            <param name="requestedVersion">The client-requested version.</param>
+            <param name="requestedVersion">The client-requested version. May be null or blank.</param>
             <returns>The version to use for the session.</returns>
             <exception cref="T:System.ArgumentException">Thrown when the requested version is unsupported.</exception>
+        </member>
+        <member name="T:Voltaic.Mcp.McpProtocolEra">
+            <summary>
+            Identifies the architectural era of an MCP protocol revision.
+            The era determines how a request negotiates its version and whether the
+            transport is session-oriented or stateless.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocolEra.Handshake">
+            <summary>
+            Initialization-based revisions (<c>2024-11-05</c> through <c>2025-11-25</c>).
+            These negotiate once via the <c>initialize</c>/<c>initialized</c> handshake and,
+            on Streamable HTTP, may mint a session identified by <c>Mcp-Session-Id</c>.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocolEra.Stateless">
+            <summary>
+            Stateless revisions (<c>2026-07-28</c> and later). Every request is self-describing
+            via the <c>_meta</c> field, there is no handshake, and capabilities may be discovered
+            up front through the optional <c>server/discover</c> RPC.
+            </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpProtocolException">
             <summary>
@@ -3111,11 +3416,123 @@
             <param name="data">Optional error data.</param>
             <returns>Protocol exception.</returns>
         </member>
+        <member name="M:Voltaic.Mcp.McpProtocolException.HeaderMismatch(System.String)">
+            <summary>
+            Creates a header-mismatch error (JSON-RPC code <c>-32020</c>) used by the stateless
+            2026-07-28 transport when an HTTP routing header does not match the request body,
+            or when a required routing header is missing or malformed. The HTTP status is <c>400</c>.
+            </summary>
+            <param name="message">Error message describing the mismatch. May not be null.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocolException.MissingRequiredClientCapability(System.String,System.Object)">
+            <summary>
+            Creates a missing-required-client-capability error (JSON-RPC code <c>-32021</c>) used by
+            the stateless 2026-07-28 transport when a request requires a capability the client did
+            not declare. The HTTP status is <c>400</c>.
+            </summary>
+            <param name="message">Error message. May not be null.</param>
+            <param name="requiredCapabilities">The capabilities required by the server. May be null.</param>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocolException.UnsupportedProtocolVersion(System.String,System.Collections.Generic.IEnumerable{System.String})">
+            <summary>
+            Creates an unsupported-protocol-version error (JSON-RPC code <c>-32022</c>) used by the
+            stateless 2026-07-28 transport when the requested version is unknown or unsupported.
+            The <c>data</c> payload carries the supported versions and the requested value.
+            The HTTP status is <c>400</c>.
+            </summary>
+            <param name="requested">The requested (unsupported) version. May not be null.</param>
+            <param name="supported">The versions the server supports. May not be null.</param>
+            <returns>Protocol exception.</returns>
+        </member>
         <member name="M:Voltaic.Mcp.McpProtocolException.ToJsonRpcError">
             <summary>
             Converts this exception into a JSON-RPC error object.
             </summary>
             <returns>JSON-RPC error.</returns>
+        </member>
+        <member name="T:Voltaic.Mcp.McpProtocolVersionInfo">
+            <summary>
+            Describes the capabilities and transport shape of a single MCP protocol revision.
+            Instances are immutable and are held in the <see cref="T:Voltaic.Mcp.McpProtocol"/> registry.
+            This type is thread-safe because all members are read-only.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtocolVersionInfo.Version">
+            <summary>
+            Gets the protocol version string in <c>YYYY-MM-DD</c> form. Never null or empty.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtocolVersionInfo.Era">
+            <summary>
+            Gets the architectural era of the revision.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtocolVersionInfo.SupportsSessions">
+            <summary>
+            Gets a value indicating whether the revision assigns Streamable HTTP sessions
+            via the <c>Mcp-Session-Id</c> header. False for stateless revisions and for the
+            original <c>2024-11-05</c> HTTP+SSE transport.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtocolVersionInfo.SupportsBatching">
+            <summary>
+            Gets a value indicating whether JSON-RPC batching is permitted. Batching was removed
+            in <c>2025-06-18</c>; it is permitted only on <c>2024-11-05</c> and <c>2025-03-26</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtocolVersionInfo.RequiresProtocolVersionHeader">
+            <summary>
+            Gets a value indicating whether the <c>MCP-Protocol-Version</c> HTTP header is required
+            on requests subsequent to initialization. Required from <c>2025-06-18</c> onward.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtocolVersionInfo.UsesHeaderRouting">
+            <summary>
+            Gets a value indicating whether the revision uses the stateless header-routing model
+            (<c>Mcp-Method</c>, <c>Mcp-Name</c>, <c>Mcp-Param-*</c>). True only for stateless revisions.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocolVersionInfo.#ctor(System.String,Voltaic.Mcp.McpProtocolEra,System.Boolean,System.Boolean,System.Boolean,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpProtocolVersionInfo"/> class.
+            </summary>
+            <param name="version">Protocol version string. May not be null or empty.</param>
+            <param name="era">Architectural era of the revision.</param>
+            <param name="supportsSessions">Whether Streamable HTTP sessions are used.</param>
+            <param name="supportsBatching">Whether JSON-RPC batching is permitted.</param>
+            <param name="requiresProtocolVersionHeader">Whether the protocol-version header is required.</param>
+            <param name="usesHeaderRouting">Whether the stateless header-routing model applies.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="version"/> is null or empty.</exception>
+        </member>
+        <member name="T:Voltaic.Mcp.McpResolvedVersion">
+            <summary>
+            The outcome of resolving the protocol version and era for an incoming MCP request.
+            Instances are immutable and therefore thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpResolvedVersion.Version">
+            <summary>
+            Gets the resolved protocol version string. Never null or empty.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpResolvedVersion.Era">
+            <summary>
+            Gets the architectural era of the resolved version.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpResolvedVersion.Info">
+            <summary>
+            Gets the registry entry for the resolved version. Never null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpResolvedVersion.#ctor(Voltaic.Mcp.McpProtocolVersionInfo)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpResolvedVersion"/> class.
+            </summary>
+            <param name="info">Registry entry for the resolved version. May not be null.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="info"/> is null.</exception>
         </member>
         <member name="T:Voltaic.Mcp.McpResource">
             <summary>
@@ -3240,6 +3657,18 @@
         <member name="P:Voltaic.Mcp.McpReadResourceResult.Contents">
             <summary>
             Gets or sets resource contents.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpReadResourceResult.TtlMs">
+            <summary>
+            Gets or sets the time in milliseconds for which the result may be cached (2026-07-28+),
+            or null when no caching guidance is provided.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpReadResourceResult.CacheScope">
+            <summary>
+            Gets or sets the cache scope, for example <c>public</c> or <c>private</c> (2026-07-28+),
+            or null when no caching guidance is provided.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpServer">
@@ -3468,6 +3897,119 @@
             Releases the unmanaged resources used by the <see cref="T:Voltaic.Mcp.McpServer"/> and optionally releases the managed resources.
             </summary>
             <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        </member>
+        <member name="T:Voltaic.Mcp.McpTaskStatus">
+            <summary>
+            Task status values for the 2026-07-28 <c>io.modelcontextprotocol/tasks</c> extension.
+            Modeled as string constants (rather than an enum) so the wire values <c>input_required</c>
+            and friends serialize identically across .NET 8.0 and .NET 10.0.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpTaskStatus.Working">
+            <summary>The operation is in progress.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpTaskStatus.InputRequired">
+            <summary>The server needs client input before continuing; see input requests.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpTaskStatus.Completed">
+            <summary>The operation finished; the result is available.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpTaskStatus.Failed">
+            <summary>A JSON-RPC error occurred during execution.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpTaskStatus.Cancelled">
+            <summary>The operation was cancelled.</summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpTask">
+            <summary>
+            A durable task handle for the 2026-07-28 tasks extension. Status-specific fields
+            (<see cref="P:Voltaic.Mcp.McpTask.InputRequests"/>, <see cref="P:Voltaic.Mcp.McpTask.Result"/>, <see cref="P:Voltaic.Mcp.McpTask.Error"/>) are populated only
+            for the corresponding status, matching the schema's <c>DetailedTask</c> variants.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.TaskId">
+            <summary>
+            Gets or sets the unique, receiver-generated task identifier.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.Status">
+            <summary>
+            Gets or sets the current status. One of the <see cref="T:Voltaic.Mcp.McpTaskStatus"/> values.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.StatusMessage">
+            <summary>
+            Gets or sets an optional human-readable status message.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.TtlMs">
+            <summary>
+            Gets or sets the time in milliseconds before the task may be discarded, or null for
+            unlimited. This field is always serialized (including as JSON <c>null</c>) because the
+            schema requires it.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.PollIntervalMs">
+            <summary>
+            Gets or sets the suggested polling interval in milliseconds, or null when not provided.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.InputRequests">
+            <summary>
+            Gets or sets input requests surfaced while the task is in the
+            <see cref="F:Voltaic.Mcp.McpTaskStatus.InputRequired"/> status; otherwise null.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.Result">
+            <summary>
+            Gets or sets the final result when the task is <see cref="F:Voltaic.Mcp.McpTaskStatus.Completed"/>;
+            otherwise null. The structure matches the original request's result type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTask.Error">
+            <summary>
+            Gets or sets the JSON-RPC error when the task is <see cref="F:Voltaic.Mcp.McpTaskStatus.Failed"/>;
+            otherwise null.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpCreateTaskResult">
+            <summary>
+            The result returned when a server elects asynchronous execution of a supported request
+            (2026-07-28 tasks extension). Carries the task handle with <c>resultType</c> set to
+            <c>task</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpCreateTaskResult.ResultType">
+            <summary>
+            Gets or sets the result discriminator. Always <c>task</c>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpUpdateTaskParams">
+            <summary>
+            Parameters for a <c>tasks/update</c> request (2026-07-28 tasks extension). Carries responses
+            keyed to the input requests previously surfaced by the server.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpUpdateTaskParams.TaskId">
+            <summary>
+            Gets or sets the target task identifier.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpUpdateTaskParams.InputResponses">
+            <summary>
+            Gets or sets the client responses keyed to outstanding input-request keys.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpTaskAck">
+            <summary>
+            An empty acknowledgement returned by <c>tasks/update</c> and <c>tasks/cancel</c>
+            (2026-07-28 tasks extension), with <c>resultType</c> set to <c>complete</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTaskAck.ResultType">
+            <summary>
+            Gets or sets the result discriminator. Always <c>complete</c>.
+            </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpTcpClient">
             <summary>
@@ -3845,6 +4387,49 @@
             <summary>
             Gets or sets JSON-serializable log data.
             </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpVersionResolver">
+            <summary>
+            Resolves the protocol version and era for an incoming MCP request using a deterministic
+            precedence order. The resolver is transport-agnostic: it accepts the individual signals a
+            transport can observe rather than a transport-specific request object, which makes it unit
+            testable in isolation. All members are static and thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpVersionResolver.Resolve(System.String,System.String,System.String,System.Boolean,System.Boolean)">
+            <summary>
+            Resolves the protocol version for a request from the available signals.
+            Precedence, highest first:
+            <list type="number">
+            <item><description>The <c>MCP-Protocol-Version</c> header, when present.</description></item>
+            <item><description>The <c>_meta</c> protocol-version value carried in the request body.</description></item>
+            <item><description>Structural cues: an <c>initialize</c> method or a session header implies the
+            handshake era; stateless routing headers imply the newest stateless revision.</description></item>
+            <item><description>The default handshake version (<see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>).</description></item>
+            </list>
+            When both a header and a body <c>_meta</c> version are present and disagree, a
+            <see cref="T:Voltaic.Mcp.McpProtocolException"/> with code <c>-32020</c> (header mismatch) is thrown.
+            When an explicitly requested version is unknown, a <see cref="T:Voltaic.Mcp.McpProtocolException"/> with
+            code <c>-32022</c> (unsupported protocol version) is thrown.
+            </summary>
+            <param name="protocolVersionHeader">Value of the <c>MCP-Protocol-Version</c> header, or null.</param>
+            <param name="metaProtocolVersion">Protocol version extracted from the request body <c>_meta</c>, or null.</param>
+            <param name="method">The JSON-RPC method name, or null.</param>
+            <param name="hasSessionIdHeader">True when the request carries an <c>Mcp-Session-Id</c> header.</param>
+            <param name="hasRoutingHeaders">True when the request carries stateless routing headers (<c>Mcp-Method</c>/<c>Mcp-Name</c>).</param>
+            <returns>The resolved version and era. Never null.</returns>
+            <exception cref="T:Voltaic.Mcp.McpProtocolException">
+            Thrown with code <c>-32020</c> when header and body versions disagree, or with code
+            <c>-32022</c> when an explicitly requested version is unsupported.
+            </exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpVersionResolver.ForVersion(System.String)">
+            <summary>
+            Builds a resolved-version result for a known, supported version.
+            </summary>
+            <param name="version">A supported protocol version string.</param>
+            <returns>The resolved version and era.</returns>
+            <exception cref="T:System.ArgumentException">Thrown when the version is not in the registry.</exception>
         </member>
         <member name="T:Voltaic.Mcp.McpWebsocketsClient">
             <summary>

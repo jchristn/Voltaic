@@ -148,5 +148,21 @@ namespace Voltaic.Mcp
         [JsonPropertyName("nextCursor")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? NextCursor { get; set; }
+
+        /// <summary>
+        /// Gets or sets the time in milliseconds for which the result may be cached (2026-07-28+),
+        /// or null when no caching guidance is provided.
+        /// </summary>
+        [JsonPropertyName("ttlMs")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public long? TtlMs { get; set; }
+
+        /// <summary>
+        /// Gets or sets the cache scope, for example <c>public</c> or <c>private</c> (2026-07-28+),
+        /// or null when no caching guidance is provided.
+        /// </summary>
+        [JsonPropertyName("cacheScope")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? CacheScope { get; set; }
     }
 }

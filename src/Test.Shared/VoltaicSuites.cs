@@ -14,6 +14,8 @@ namespace Test.Shared
                 ComprehensiveModelSuites.McpModelSerializationMatrix(),
                 McpProtocolModelSuites.ProtocolAndCapabilities(),
                 McpProtocolModelSuites.ContentResourcesPromptsAndTools(),
+                McpVersionSuites.VersionRegistryAndResolver(),
+                McpVersionSuites.VersionModelsAndErrors(),
                 ApiSurfaceCoverageSuites.PublicApiInventory(),
                 McpServerApiSuites.PublicRegistrationApi(),
                 PublicApiValidationSuites.ClientApiValidation(),
