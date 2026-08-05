@@ -256,6 +256,14 @@ namespace Voltaic.Mcp
             ValidateJsonSchema(tool.Definition.InputSchema, toolArguments, $"Tool '{toolName}' arguments");
             object result = await tool.Handler(toolArguments, token).ConfigureAwait(false);
 
+            // Multi Round-Trip Requests: a handler may return an input-required result to ask the
+            // client for more information. It flows through unchanged rather than being wrapped as
+            // a tool result.
+            if (result is McpInputRequiredResult inputRequired)
+            {
+                return inputRequired;
+            }
+
             if (result is McpToolCallResult toolCallResult)
             {
                 if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent != null)

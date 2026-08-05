@@ -166,6 +166,49 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.NotFound, response.StatusCode, "Unknown method should be 404.");
                         TestAssert.Equal(-32601, await ErrorCodeAsync(response, ct).ConfigureAwait(false), "Unknown method maps to -32601.");
                     }),
+
+                    Case(suiteId, "MrtrInputRequiredEmitted", "A tool can return an input-required result over tools/call", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await StartWithConfirmToolAsync(ct).ConfigureAwait(false);
+
+                        Dictionary<string, object?> parameters = new Dictionary<string, object?>
+                        {
+                            { "name", "confirm" },
+                            { "arguments", new { } },
+                            { "_meta", Meta("2026-07-28") }
+                        };
+
+                        using HttpResponseMessage response = await SendStatelessAsync(
+                            fixture, "tools/call", 1, parameters, "2026-07-28", "tools/call", "confirm", ct).ConfigureAwait(false);
+
+                        TestAssert.Equal(HttpStatusCode.OK, response.StatusCode, "An input-required result is still a 200 response.");
+                        JsonElement result = await ResultAsync(response, ct).ConfigureAwait(false);
+                        TestAssert.Equal("input_required", result.GetProperty("resultType").GetString(), "resultType should be input_required.");
+                        TestAssert.True(result.TryGetProperty("inputRequests", out _), "inputRequests should be present.");
+                        TestAssert.True(result.TryGetProperty("requestState", out _), "requestState should be present.");
+                    }),
+
+                    Case(suiteId, "MrtrRetrySucceeds", "Re-calling the tool with the gathered input returns the final result", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await StartWithConfirmToolAsync(ct).ConfigureAwait(false);
+
+                        // Voltaic surfaces tool arguments to handlers, so the gathered input is carried
+                        // in arguments here; the round trip mirrors the MRTR retry with inputResponses.
+                        Dictionary<string, object?> parameters = new Dictionary<string, object?>
+                        {
+                            { "name", "confirm" },
+                            { "arguments", new { confirmed = true } },
+                            { "_meta", Meta("2026-07-28") }
+                        };
+
+                        using HttpResponseMessage response = await SendStatelessAsync(
+                            fixture, "tools/call", 2, parameters, "2026-07-28", "tools/call", "confirm", ct).ConfigureAwait(false);
+
+                        TestAssert.Equal(HttpStatusCode.OK, response.StatusCode, "The retry should succeed.");
+                        JsonElement result = await ResultAsync(response, ct).ConfigureAwait(false);
+                        TestAssert.False(result.TryGetProperty("resultType", out _), "The final result is a normal tool result, not input_required.");
+                        TestAssert.True(result.TryGetProperty("content", out _), "The final result should carry content.");
+                    }),
                 });
         }
 
@@ -175,6 +218,36 @@ namespace Test.Shared
             {
                 server.AdvertiseTasksExtension = true;
                 server.RegisterTool("noop", "Does nothing", new { type = "object", properties = new { }, required = new string[] { } }, (_) => "ok");
+            }).ConfigureAwait(false);
+        }
+
+        private static async Task<HttpMcpTestServerFixture> StartWithConfirmToolAsync(CancellationToken token)
+        {
+            return await HttpMcpTestServerFixture.StartAsync(token, server =>
+            {
+                object schema = new
+                {
+                    type = "object",
+                    properties = new { confirmed = new { type = "boolean" } },
+                    required = new string[] { }
+                };
+
+                server.RegisterTool("confirm", "Requires confirmation", schema, (JsonElement? args) =>
+                {
+                    if (args.HasValue && args.Value.TryGetProperty("confirmed", out JsonElement confirmed) && confirmed.ValueKind == JsonValueKind.True)
+                    {
+                        return (object)"confirmed";
+                    }
+
+                    return new McpInputRequiredResult
+                    {
+                        InputRequests = new Dictionary<string, McpInputRequest>
+                        {
+                            { "confirm", new McpInputRequest { Method = "elicitation/create", Params = new { message = "Proceed?" } } }
+                        },
+                        RequestState = "state-1"
+                    };
+                });
             }).ConfigureAwait(false);
         }
 
