@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Voltaic is a JSON-RPC 2.0, Model Context Protocol (MCP), and Agent2Agent (A2A) implementation for .NET 8.0 and .NET 10.0. The library provides TCP JSON-RPC, MCP stdio/Streamable HTTP/TCP/WebSocket transports, and dependency-light A2A JSON-RPC/HTTP+JSON/gRPC/SSE hosting. Voltaic v0.4.0 targets MCP protocol version `2025-11-25`, retains MCP compatibility for `2025-03-26`, and targets A2A protocol version `1.0`.
+Voltaic is a JSON-RPC 2.0, Model Context Protocol (MCP), and Agent2Agent (A2A) implementation for .NET 8.0 and .NET 10.0. The library provides TCP JSON-RPC, MCP stdio/Streamable HTTP/TCP/WebSocket transports, and dependency-light A2A JSON-RPC/HTTP+JSON/gRPC/SSE hosting. Voltaic v0.6.0 recognizes five MCP protocol revisions — `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28` — via the `McpProtocol` version registry and `McpVersionResolver`. `McpProtocol.LatestProtocolVersion` remains `2025-11-25` as the default handshake version for backward compatibility; `McpProtocol.NewestProtocolVersion` is `2026-07-28`. A2A protocol version is `1.0`. The multi-version work is tracked in `UPDATED_MCP_VERSION.md`.
 
 ## Solution Structure
 

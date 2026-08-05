@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.0
+- Began multi-version MCP support spanning all five published protocol revisions: `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`
+- Added a version registry and era model (`McpProtocol` registry, `McpProtocolVersionInfo`, `McpProtocolEra`) that records each revision's era (handshake or stateless) and transport traits (sessions, batching, required protocol-version header, header routing)
+- Added `McpProtocol.NewestProtocolVersion` (`2026-07-28`) alongside `LatestProtocolVersion`, which remains `2025-11-25` as the default handshake version so existing servers and clients are unaffected
+- Added a deterministic version/era resolver (`McpVersionResolver`, `McpResolvedVersion`) that selects a revision from the `MCP-Protocol-Version` header, the request-body `_meta`, or structural cues, and rejects header/body disagreements
+- Added stateless-era protocol error factories with the specification's codes: `HeaderMismatch` (`-32020`), `MissingRequiredClientCapability` (`-32021`), and `UnsupportedProtocolVersion` (`-32022`, carrying the supported-version list)
+- Added additive protocol models: `server/discover` result (`McpDiscoverResult`), Multi Round-Trip Requests (`McpInputRequest`, `McpInputRequiredResult`), cacheable list/read results (`ttlMs`/`cacheScope`), the `2026-07-28` tasks extension (`McpTask`, `McpCreateTaskResult`, `McpUpdateTaskParams`, `McpTaskAck`, `McpTaskStatus`), and the `2025-11-25` experimental in-core tasks (`McpInCoreTask`, `McpCreateInCoreTaskResult`, `McpTaskAugmentation`, `McpListTasksResult`)
+- Added `extensions` to client and server capability models for extension negotiation
+- Added `McpVersion.Resolver` and `McpVersion.Models` Touchstone suites with positive and negative coverage of the registry, resolver, error factories, and additive models
+- Fully additive and backward compatible; the shared suite remains green on `net8.0` and `net10.0`
+
 ## v0.5.1
 - Documentation fixes; no code changes from v0.5.0
 - Corrected the README to reference the current version (v0.5.1) instead of v0.4.0
