@@ -28,10 +28,10 @@ Last green commit before migration: `b2b8e96` (313/313 on net8.0 + net10.0). Com
 - [ ] `src/Voltaic/A2A/A2AModels.cs` (11)
 - [ ] `src/Voltaic/A2A/A2AHttpServer.cs` (8)
 - [ ] `src/Voltaic/A2A/A2AGrpcWire.cs` (8)
-- [ ] `src/Voltaic/Mcp/McpWebsocketsClient.cs` (3)
-- [ ] `src/Voltaic/Core/JsonRpcClient.cs` (3)
-- [ ] `src/Voltaic/Mcp/McpClient.cs` (2)
-- [ ] `src/Voltaic/Mcp/McpHttpClient.cs` (1)
+- [x] `src/Voltaic/Mcp/McpWebsocketsClient.cs` (3) — result/id parsing converted (commit pending)
+- [x] `src/Voltaic/Core/JsonRpcClient.cs` (3) — result/id parsing converted
+- [x] `src/Voltaic/Mcp/McpClient.cs` (2) — result/id parsing converted
+- [x] `src/Voltaic/Mcp/McpHttpClient.cs` (1) — result parsing converted
 - [ ] `src/Voltaic/A2A/A2AClient.cs` (1)
 
 ## Foundation

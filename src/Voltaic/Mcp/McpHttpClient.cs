@@ -368,9 +368,9 @@ namespace Voltaic.Mcp
                     throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
                 }
 
-                if (response.Result is JsonElement jsonElement)
+                if (response.Result != null)
                 {
-                    return JsonSerializer.Deserialize<T>(jsonElement.GetRawText())!;
+                    return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(response.Result))!;
                 }
 
                 if (response.Result == null)

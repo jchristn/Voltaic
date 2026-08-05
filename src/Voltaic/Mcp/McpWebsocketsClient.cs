@@ -165,9 +165,9 @@ namespace Voltaic.Mcp
                         throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
                     }
 
-                    if (response.Result is JsonElement jsonElement)
+                    if (response.Result != null)
                     {
-                        return JsonSerializer.Deserialize<T>(jsonElement.GetRawText())!;
+                        return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(response.Result))!;
                     }
 
                     if (response.Result == null)
@@ -345,11 +345,11 @@ namespace Voltaic.Mcp
                 JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString);
                 if (response != null && response.Id != null)
                 {
-                    // Extract the actual integer value from JsonElement if needed
+                    // Extract the numeric id value when the response id is a JSON number.
                     object lookupKey = response.Id;
-                    if (response.Id is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Number)
+                    if (Int32.TryParse(JsonSerializer.Serialize(response.Id), out int numericId))
                     {
-                        lookupKey = jsonElement.GetInt32();
+                        lookupKey = numericId;
                     }
 
                     if (_PendingRequests.TryRemove(lookupKey, out ClientPendingRequest? pendingRequest))
