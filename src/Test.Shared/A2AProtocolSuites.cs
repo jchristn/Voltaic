@@ -306,15 +306,15 @@ namespace Test.Shared
                         SendMessageRequest request = CreateMessageRequest("rich");
                         request.Message.Parts.Add(Part.FromRaw(new byte[] { 1, 2, 3, 4 }, "application/octet-stream", "payload.bin"));
                         request.Message.Parts.Add(Part.FromUrl("https://example.com/payload.txt", "text/plain", "payload.txt"));
-                        request.Message.Parts.Add(Part.FromData(ParseJsonElement("""{"kind":"example","count":2}""")));
-                        request.Message.Metadata = new Dictionary<string, JsonElement>
+                        request.Message.Parts.Add(Part.FromData(ParseJsonValue("""{"kind":"example","count":2}""")));
+                        request.Message.Metadata = new Dictionary<string, object?>
                         {
-                            { "source", ParseJsonElement("\"qa\"") },
-                            { "attempt", ParseJsonElement("7") }
+                            { "source", ParseJsonValue("\"qa\"") },
+                            { "attempt", ParseJsonValue("7") }
                         };
-                        request.Metadata = new Dictionary<string, JsonElement>
+                        request.Metadata = new Dictionary<string, object?>
                         {
-                            { "requestId", ParseJsonElement("\"req-123\"") }
+                            { "requestId", ParseJsonValue("\"req-123\"") }
                         };
 
                         SendMessageResponse response = await client.SendMessageAsync(request, ct).ConfigureAwait(false);
@@ -328,9 +328,9 @@ namespace Test.Shared
                         TestAssert.Equal("payload.bin", userMessage.Parts[1].Filename);
                         TestAssert.Equal(4, userMessage.Parts[1].Raw!.Length);
                         TestAssert.Equal("https://example.com/payload.txt", userMessage.Parts[2].Url);
-                        TestAssert.Equal("example", userMessage.Parts[3].Data!.Value.GetProperty("kind").GetString());
-                        TestAssert.Equal("qa", userMessage.Metadata!["source"].GetString());
-                        TestAssert.Equal(7, userMessage.Metadata["attempt"].GetInt32());
+                        TestAssert.Equal("example", new RpcParameters(JsonSerializer.Serialize(userMessage.Parts[3].Data, A2AJson.DefaultOptions)).GetString("kind"));
+                        TestAssert.Equal("qa", MetaValue<string>(userMessage.Metadata!["source"]));
+                        TestAssert.Equal(7, MetaValue<int>(userMessage.Metadata["attempt"]));
                     }),
 
                     Case(suiteId, "GrpcSubscribeAndCancelTask", "A2A gRPC SubscribeToTask receives live cancellation updates", async ct =>
@@ -416,7 +416,7 @@ namespace Test.Shared
 
                         JsonRpcResponse? rpc = JsonSerializer.Deserialize<JsonRpcResponse>(responseBody, A2AJson.DefaultOptions);
                         TestAssert.NotNull(rpc?.Result, "JSON-RPC response should contain result.");
-                        string resultJson = ((JsonElement)rpc!.Result!).GetRawText();
+                        string resultJson = JsonSerializer.Serialize(rpc!.Result, A2AJson.DefaultOptions);
                         SendMessageResponse? sendResponse = JsonSerializer.Deserialize<SendMessageResponse>(resultJson, A2AJson.DefaultOptions);
                         TestAssert.Equal(TaskState.Completed, sendResponse!.Task!.Status.State);
                     }),
@@ -501,10 +501,14 @@ namespace Test.Shared
             };
         }
 
-        private static JsonElement ParseJsonElement(string json)
+        private static object? ParseJsonValue(string json)
         {
-            using JsonDocument document = JsonDocument.Parse(json);
-            return document.RootElement.Clone();
+            return JsonSerializer.Deserialize<object?>(json, A2AJson.DefaultOptions);
+        }
+
+        private static T? MetaValue<T>(object? value)
+        {
+            return value == null ? default : JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, A2AJson.DefaultOptions), A2AJson.DefaultOptions);
         }
 
         private sealed class EchoAgent : IA2AAgentHandler

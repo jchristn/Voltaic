@@ -6,6 +6,7 @@ namespace Voltaic.A2A
     using System.IO;
     using System.Linq;
     using System.Net.Http;
+    using System.Text;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
@@ -685,7 +686,7 @@ namespace Voltaic.A2A
             if (part.Text != null) grpc.Text = part.Text;
             else if (part.Raw != null) grpc.Raw = ByteString.CopyFrom(part.Raw);
             else if (part.Url != null) grpc.Url = part.Url;
-            else if (part.Data != null) grpc.Data = ToGrpcValue(part.Data.Value);
+            else if (part.Data != null) grpc.Data = ToGrpcValue(part.Data);
             if (part.Metadata != null) grpc.Metadata = ToGrpcStruct(part.Metadata);
             return grpc;
         }
@@ -711,7 +712,7 @@ namespace Voltaic.A2A
                     model.Url = part.Url;
                     break;
                 case GrpcWire.Part.ContentOneofCase.Data:
-                    model.Data = FromGrpcValue(part.Data);
+                    model.Data = ToObject(part.Data);
                     break;
             }
 
@@ -1005,10 +1006,10 @@ namespace Voltaic.A2A
             {
                 try
                 {
-                    using JsonDocument document = JsonDocument.Parse(signature.Header);
-                    if (document.RootElement.ValueKind == JsonValueKind.Object)
+                    Dictionary<string, object?>? header = JsonSerializer.Deserialize<Dictionary<string, object?>>(signature.Header, A2AJson.DefaultOptions);
+                    if (header != null)
                     {
-                        grpc.Header = ToGrpcStruct(document.RootElement.EnumerateObject().ToDictionary(item => item.Name, item => item.Value.Clone(), StringComparer.Ordinal));
+                        grpc.Header = ToGrpcStruct(header);
                     }
                 }
                 catch (JsonException)
@@ -1318,7 +1319,7 @@ namespace Voltaic.A2A
             return (Role)(int)role;
         }
 
-        private static Struct? ToGrpcStruct(Dictionary<string, JsonElement>? values)
+        private static Struct? ToGrpcStruct(Dictionary<string, object?>? values)
         {
             if (values == null || values.Count == 0)
             {
@@ -1326,7 +1327,7 @@ namespace Voltaic.A2A
             }
 
             Struct structure = new Struct();
-            foreach (KeyValuePair<string, JsonElement> item in values)
+            foreach (KeyValuePair<string, object?> item in values)
             {
                 structure.Fields[item.Key] = ToGrpcValue(item.Value);
             }
@@ -1334,56 +1335,65 @@ namespace Voltaic.A2A
             return structure;
         }
 
-        private static Dictionary<string, JsonElement>? FromGrpcStruct(Struct? structure)
+        private static Dictionary<string, object?>? FromGrpcStruct(Struct? structure)
         {
             if (structure == null || structure.Fields.Count == 0)
             {
                 return null;
             }
 
-            Dictionary<string, JsonElement> values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            Dictionary<string, object?> values = new Dictionary<string, object?>(StringComparer.Ordinal);
             foreach (KeyValuePair<string, Value> item in structure.Fields)
             {
-                values[item.Key] = FromGrpcValue(item.Value);
+                values[item.Key] = ToObject(item.Value);
             }
 
             return values;
         }
 
-        private static Value ToGrpcValue(JsonElement element)
+        private static Value ToGrpcValue(object? element)
         {
-            switch (element.ValueKind)
+            // Normalize any value (primitive, POCO, dictionary, list, or a deserialized JSON value)
+            // through JSON, then build the protobuf Value with the streaming reader. This is DOM-free
+            // and handles deserialized JSON values transparently.
+            string json = JsonSerializer.Serialize(element, A2AJson.DefaultOptions);
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            Utf8JsonReader reader = new Utf8JsonReader(bytes);
+            reader.Read();
+            return ReadGrpcValue(ref reader);
+        }
+
+        private static Value ReadGrpcValue(ref Utf8JsonReader reader)
+        {
+            switch (reader.TokenType)
             {
-                case JsonValueKind.Object:
+                case JsonTokenType.StartObject:
                     Struct structure = new Struct();
-                    foreach (JsonProperty property in element.EnumerateObject())
+                    while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
                     {
-                        structure.Fields[property.Name] = ToGrpcValue(property.Value);
+                        string name = reader.GetString() ?? string.Empty;
+                        reader.Read();
+                        structure.Fields[name] = ReadGrpcValue(ref reader);
                     }
                     return new Value { StructValue = structure };
-                case JsonValueKind.Array:
+                case JsonTokenType.StartArray:
                     ListValue list = new ListValue();
-                    foreach (JsonElement child in element.EnumerateArray())
+                    while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
                     {
-                        list.Values.Add(ToGrpcValue(child));
+                        list.Values.Add(ReadGrpcValue(ref reader));
                     }
                     return new Value { ListValue = list };
-                case JsonValueKind.String:
-                    return new Value { StringValue = element.GetString() ?? string.Empty };
-                case JsonValueKind.Number:
-                    return new Value { NumberValue = element.GetDouble() };
-                case JsonValueKind.True:
+                case JsonTokenType.String:
+                    return new Value { StringValue = reader.GetString() ?? string.Empty };
+                case JsonTokenType.Number:
+                    return new Value { NumberValue = reader.GetDouble() };
+                case JsonTokenType.True:
                     return new Value { BoolValue = true };
-                case JsonValueKind.False:
+                case JsonTokenType.False:
                     return new Value { BoolValue = false };
                 default:
                     return new Value { NullValue = NullValue.NullValue };
             }
-        }
-
-        private static JsonElement FromGrpcValue(Value value)
-        {
-            return JsonSerializer.SerializeToElement(ToObject(value), A2AJson.DefaultOptions);
         }
 
         private static object? ToObject(Value value)

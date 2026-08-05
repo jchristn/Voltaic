@@ -2,7 +2,7 @@ namespace Voltaic.Mcp
 {
     /// <summary>
     /// A DOM-free classification of a JSON value's kind, used by the schema validator instead of
-    /// the System.Text.Json <c>JsonValueKind</c>/<c>JsonElement</c> DOM types.
+    /// the System.Text.Json document object model types.
     /// </summary>
     internal enum McpJsonValueKind
     {

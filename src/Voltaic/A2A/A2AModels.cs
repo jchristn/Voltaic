@@ -65,7 +65,7 @@ namespace Voltaic.A2A
         public string Uri { get; set; } = string.Empty;
         public string? Description { get; set; }
         public bool? Required { get; set; }
-        public Dictionary<string, JsonElement>? Params { get; set; }
+        public Dictionary<string, object?>? Params { get; set; }
     }
 
     public class AgentCardSignature
@@ -179,8 +179,8 @@ namespace Voltaic.A2A
         public string? Text { get; set; }
         public byte[]? Raw { get; set; }
         public string? Url { get; set; }
-        public JsonElement? Data { get; set; }
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public object? Data { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
         public string? Filename { get; set; }
         public string? MediaType { get; set; }
 
@@ -207,7 +207,7 @@ namespace Voltaic.A2A
             return new Part { Url = url, MediaType = mediaType, Filename = filename };
         }
 
-        public static Part FromData(JsonElement data)
+        public static Part FromData(object? data)
         {
             return new Part { Data = data };
         }
@@ -222,7 +222,7 @@ namespace Voltaic.A2A
         public string? TaskId { get; set; }
         public List<string>? ReferenceTaskIds { get; set; }
         public List<string>? Extensions { get; set; }
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
     }
 
     public class Artifact
@@ -232,7 +232,7 @@ namespace Voltaic.A2A
         public string? Description { get; set; }
         public List<Part> Parts { get; set; } = new List<Part>();
         public List<string>? Extensions { get; set; }
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
     }
 
     [JsonConverter(typeof(TaskStateJsonConverter))]
@@ -263,7 +263,7 @@ namespace Voltaic.A2A
         public TaskStatus Status { get; set; } = new TaskStatus();
         public List<Message>? History { get; set; }
         public List<Artifact>? Artifacts { get; set; }
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
 
         public AgentTask WithHistoryTrimmedTo(int? historyLength)
         {
@@ -291,7 +291,7 @@ namespace Voltaic.A2A
         public string TaskId { get; set; } = string.Empty;
         public string ContextId { get; set; } = string.Empty;
         public TaskStatus Status { get; set; } = new TaskStatus();
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
     }
 
     public class TaskArtifactUpdateEvent
@@ -301,7 +301,7 @@ namespace Voltaic.A2A
         public Artifact Artifact { get; set; } = new Artifact();
         public bool Append { get; set; }
         public bool LastChunk { get; set; }
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
     }
 
     public enum SendMessageResponseCase
@@ -353,7 +353,7 @@ namespace Voltaic.A2A
         public string? Tenant { get; set; }
         public Message Message { get; set; } = new Message();
         public SendMessageConfiguration? Configuration { get; set; }
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
     }
 
     public class SendMessageConfiguration
@@ -395,7 +395,7 @@ namespace Voltaic.A2A
     {
         public string? Tenant { get; set; }
         public string Id { get; set; } = string.Empty;
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
     }
 
     public class SubscribeToTaskRequest

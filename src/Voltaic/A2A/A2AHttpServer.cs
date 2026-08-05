@@ -35,7 +35,7 @@ namespace Voltaic.A2A
         public bool IsContinuation => ExistingTask != null;
         public bool StreamingResponse { get; set; }
         public SendMessageConfiguration? Configuration { get; set; }
-        public Dictionary<string, JsonElement>? Metadata { get; set; }
+        public Dictionary<string, object?>? Metadata { get; set; }
     }
 
     public sealed class A2AAgentEventQueue
@@ -960,11 +960,6 @@ namespace Voltaic.A2A
                 return new T();
             }
 
-            if (parameters is JsonElement element)
-            {
-                return JsonSerializer.Deserialize<T>(element.GetRawText(), A2AJson.DefaultOptions) ?? new T();
-            }
-
             string json = JsonSerializer.Serialize(parameters, A2AJson.DefaultOptions);
             return JsonSerializer.Deserialize<T>(json, A2AJson.DefaultOptions) ?? new T();
         }
@@ -988,8 +983,8 @@ namespace Voltaic.A2A
                 return new CreateTaskPushNotificationConfigRequest();
             }
 
-            using JsonDocument document = JsonDocument.Parse(body);
-            if (document.RootElement.TryGetProperty("config", out _))
+            Dictionary<string, object?>? fields = JsonSerializer.Deserialize<Dictionary<string, object?>>(body, A2AJson.DefaultOptions);
+            if (fields != null && fields.ContainsKey("config"))
             {
                 return JsonSerializer.Deserialize<CreateTaskPushNotificationConfigRequest>(body, A2AJson.DefaultOptions)
                     ?? new CreateTaskPushNotificationConfigRequest();
@@ -1195,17 +1190,17 @@ namespace Voltaic.A2A
             return current;
         }
 
-        private static Dictionary<string, JsonElement>? Merge(Dictionary<string, JsonElement>? left, Dictionary<string, JsonElement>? right)
+        private static Dictionary<string, object?>? Merge(Dictionary<string, object?>? left, Dictionary<string, object?>? right)
         {
             if (right == null || right.Count == 0)
             {
                 return left;
             }
 
-            Dictionary<string, JsonElement> merged = left != null
-                ? new Dictionary<string, JsonElement>(left, StringComparer.Ordinal)
-                : new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-            foreach (KeyValuePair<string, JsonElement> item in right)
+            Dictionary<string, object?> merged = left != null
+                ? new Dictionary<string, object?>(left, StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, object?> item in right)
             {
                 merged[item.Key] = item.Value;
             }

@@ -8,9 +8,9 @@ namespace Voltaic.Core
     /// <summary>
     /// A dependency-light, DOM-free wrapper around JSON-RPC request parameters. It carries the raw
     /// parameters JSON and exposes typed deserialization and scalar property access without exposing
-    /// any <c>System.Text.Json</c> DOM type (<c>JsonElement</c>, <c>JsonDocument</c>, <c>JsonNode</c>).
+    /// any <c>System.Text.Json</c> document object model type.
     /// Scalar accessors use the streaming <see cref="Utf8JsonReader"/>. This replaces the previous
-    /// <c>JsonElement?</c> handler parameter across JSON-RPC and MCP. Instances are immutable and
+    /// document-object-model handler parameter across JSON-RPC and MCP. Instances are immutable and
     /// therefore thread-safe.
     /// </summary>
     public sealed class RpcParameters

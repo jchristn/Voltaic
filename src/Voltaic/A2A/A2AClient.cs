@@ -251,12 +251,6 @@ namespace Voltaic.A2A
                 return default!;
             }
 
-            if (result is JsonElement element)
-            {
-                return JsonSerializer.Deserialize<TResult>(element.GetRawText(), A2AJson.DefaultOptions)
-                    ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "JSON-RPC result could not be deserialized.");
-            }
-
             string json = JsonSerializer.Serialize(result, A2AJson.DefaultOptions);
             return JsonSerializer.Deserialize<TResult>(json, A2AJson.DefaultOptions)
                 ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "JSON-RPC result could not be deserialized.");
