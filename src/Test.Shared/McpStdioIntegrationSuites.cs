@@ -182,6 +182,17 @@ namespace Test.Shared
 
         private static string[] TestServerArguments()
         {
+            string? builtServer = FindBuiltServerDll();
+            if (builtServer != null)
+            {
+                // Launch the pre-built server assembly directly. This avoids
+                // invoking the SDK build pipeline on every test case, which is
+                // both faster and far more reliable than shelling out to
+                // "dotnet run" (which rebuilds and can fail under constrained
+                // or heavily parallel build environments).
+                return new[] { builtServer };
+            }
+
             return new[]
             {
                 "run",
@@ -191,6 +202,39 @@ namespace Test.Shared
                 CurrentTargetFramework(),
                 "--no-restore"
             };
+        }
+
+        private static string? FindBuiltServerDll()
+        {
+            string projectPath = FindTestMcpServerProjectPath();
+            string? projectDirectory = Path.GetDirectoryName(projectPath);
+            if (projectDirectory == null)
+            {
+                return null;
+            }
+
+            string framework = CurrentTargetFramework();
+
+            // Prefer the configuration this test host was built in, then fall
+            // back to the other so a Debug host can still locate a Release
+            // server build (and vice versa).
+            string[] configurations =
+#if DEBUG
+                new[] { "Debug", "Release" };
+#else
+                new[] { "Release", "Debug" };
+#endif
+
+            foreach (string configuration in configurations)
+            {
+                string candidate = Path.Combine(projectDirectory, "bin", configuration, framework, "Test.McpServer.dll");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
         }
 
         private static string CurrentTargetFramework()

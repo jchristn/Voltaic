@@ -65,7 +65,7 @@ dotnet test src/Test.Xunit/Test.Xunit.csproj -c Release --framework net10.0
 dotnet test src/Test.Nunit/Test.Nunit.csproj -c Release --framework net8.0
 dotnet test src/Test.Nunit/Test.Nunit.csproj -c Release --framework net10.0
 
-# The shared suite currently projects 274 deterministic cases through the console, xUnit, and NUnit runners.
+# The shared suite currently projects 352 deterministic cases through the console, xUnit, and NUnit runners.
 ```
 
 ## Running Interactive Test Applications

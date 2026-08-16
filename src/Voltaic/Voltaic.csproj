@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>0.6.0</Version>
+		<Version>0.6.1</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -19,7 +19,7 @@
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
-		<PackageReleaseNotes>v0.6.0: Begins multi-version MCP support across all five published revisions (2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25, and the stateless 2026-07-28). Adds the version registry and era model (McpProtocol, McpProtocolVersionInfo, McpProtocolEra), a deterministic version resolver (McpVersionResolver), stateless-era error factories (HeaderMismatch -32020, MissingRequiredClientCapability -32021, UnsupportedProtocolVersion -32022), and additive protocol models: server/discover (McpDiscoverResult), Multi Round-Trip Requests (McpInputRequiredResult), cacheable list results (ttlMs/cacheScope), the 2026-07-28 tasks extension, and the 2025-11-25 in-core tasks. Fully additive and backward compatible: the server still defaults to the 2025-11-25 handshake and existing clients are unaffected. Prior release — v0.5.1: Documentation fixes; no code changes from v0.5.0. Prior release — v0.5.0: Adds McpHttpClient.SetRequestHeader(name, value) so HTTP/Streamable-HTTP MCP clients can attach authentication headers to every request. Prior release — v0.4.0: Splits public APIs into Voltaic.Core, Voltaic.Mcp, and Voltaic.A2A; adds dependency-light A2A v1.0 support.</PackageReleaseNotes>
+		<PackageReleaseNotes>v0.6.1: Dependency refresh with no public API or behavioral changes. Updates the runtime dependency Watson to 7.1.0 and the build-time dependency Grpc.Tools to 2.83.0 (Google.Protobuf stays at the latest stable 3.35.1). The public surface of Voltaic.Core, Voltaic.Mcp, and Voltaic.A2A is unchanged. Prior release — v0.6.0: Begins multi-version MCP support across all five published revisions (2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25, and the stateless 2026-07-28). Adds the version registry and era model (McpProtocol, McpProtocolVersionInfo, McpProtocolEra), a deterministic version resolver (McpVersionResolver), stateless-era error factories (HeaderMismatch -32020, MissingRequiredClientCapability -32021, UnsupportedProtocolVersion -32022), and additive protocol models: server/discover (McpDiscoverResult), Multi Round-Trip Requests (McpInputRequiredResult), cacheable list results (ttlMs/cacheScope), the 2026-07-28 tasks extension, and the 2025-11-25 in-core tasks. Fully additive and backward compatible: the server still defaults to the 2025-11-25 handshake and existing clients are unaffected. Prior release — v0.5.1: Documentation fixes; no code changes from v0.5.0. Prior release — v0.5.0: Adds McpHttpClient.SetRequestHeader(name, value) so HTTP/Streamable-HTTP MCP clients can attach authentication headers to every request. Prior release — v0.4.0: Splits public APIs into Voltaic.Core, Voltaic.Mcp, and Voltaic.A2A; adds dependency-light A2A v1.0 support.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -31,8 +31,8 @@
 
 	<ItemGroup>
 		<PackageReference Include="Google.Protobuf" Version="3.35.1" />
-		<PackageReference Include="Grpc.Tools" Version="2.81.1" PrivateAssets="All" />
-		<PackageReference Include="Watson" Version="7.0.14" />
+		<PackageReference Include="Grpc.Tools" Version="2.83.0" PrivateAssets="All" />
+		<PackageReference Include="Watson" Version="7.1.0" />
 	</ItemGroup>
 
 	<ItemGroup>

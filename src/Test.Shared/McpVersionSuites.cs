@@ -6,6 +6,7 @@ namespace Test.Shared
     using System.Threading;
     using System.Threading.Tasks;
     using Touchstone.Core;
+    using Voltaic.Core;
     using Voltaic.Mcp;
 
     /// <summary>
@@ -134,6 +135,79 @@ namespace Test.Shared
                         TestAssert.Throws<ArgumentException>(() => McpProtocol.GetEra("nope"), "GetEra should reject unknown versions.");
                         return Task.CompletedTask;
                     }),
+
+                    Case(suiteId, "RegistryFlagsForRemainingRevisions", "Registry records transport flags for 2025-03-26 and 2025-11-25", ct =>
+                    {
+                        McpProtocolVersionInfo v20250326 = McpProtocol.GetVersionInfo("2025-03-26")!;
+                        TestAssert.Equal(McpProtocolEra.Handshake, v20250326.Era, "2025-03-26 is handshake.");
+                        TestAssert.True(v20250326.SupportsBatching, "2025-03-26 still allows batching.");
+                        TestAssert.True(v20250326.SupportsSessions, "2025-03-26 Streamable HTTP uses sessions.");
+                        TestAssert.False(v20250326.UsesHeaderRouting, "2025-03-26 does not use stateless header routing.");
+
+                        McpProtocolVersionInfo v20251125 = McpProtocol.GetVersionInfo("2025-11-25")!;
+                        TestAssert.Equal(McpProtocolEra.Handshake, v20251125.Era, "2025-11-25 is handshake.");
+                        TestAssert.False(v20251125.SupportsBatching, "2025-11-25 does not allow batching.");
+                        TestAssert.True(v20251125.RequiresProtocolVersionHeader, "2025-11-25 requires the version header.");
+                        TestAssert.False(v20251125.UsesHeaderRouting, "2025-11-25 does not use stateless header routing.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "GetVersionInfoNullAndBlank", "GetVersionInfo returns null for null, blank, and unknown versions", ct =>
+                    {
+                        TestAssert.Null(McpProtocol.GetVersionInfo(null), "Null version has no registry entry.");
+                        TestAssert.Null(McpProtocol.GetVersionInfo(""), "Blank version has no registry entry.");
+                        TestAssert.Null(McpProtocol.GetVersionInfo("   "), "Whitespace version has no registry entry.");
+                        TestAssert.Null(McpProtocol.GetVersionInfo("2024-01-01"), "Unknown version has no registry entry.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "VersionInfoRejectsNullOrEmptyVersion", "McpProtocolVersionInfo rejects a null or empty version string", ct =>
+                    {
+                        TestAssert.Throws<ArgumentNullException>(
+                            () => new McpProtocolVersionInfo(null!, McpProtocolEra.Handshake, false, false, false, false),
+                            "A null version should be rejected.");
+                        TestAssert.Throws<ArgumentNullException>(
+                            () => new McpProtocolVersionInfo(string.Empty, McpProtocolEra.Handshake, false, false, false, false),
+                            "An empty version should be rejected.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "ForVersionPositiveAndNegative", "ForVersion resolves a supported version and rejects an unsupported one", ct =>
+                    {
+                        McpResolvedVersion resolved = McpVersionResolver.ForVersion("2026-07-28");
+                        TestAssert.Equal("2026-07-28", resolved.Version, "ForVersion should echo the supported version.");
+                        TestAssert.Equal(McpProtocolEra.Stateless, resolved.Era, "2026-07-28 resolves to the stateless era.");
+
+                        TestAssert.Throws<ArgumentException>(
+                            () => McpVersionResolver.ForVersion("1999-01-01"),
+                            "ForVersion should reject an unsupported version.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "ResolveSessionHeaderIsHandshake", "A session-id header alone resolves to the handshake default", ct =>
+                    {
+                        McpResolvedVersion resolved = McpVersionResolver.Resolve(null, null, null, true, false);
+                        TestAssert.Equal("2025-11-25", resolved.Version, "A session header implies the handshake version.");
+                        TestAssert.Equal(McpProtocolEra.Handshake, resolved.Era, "A session header implies the handshake era.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "ResolveInitializedNotificationIsHandshake", "A notifications/initialized method resolves to the handshake default", ct =>
+                    {
+                        McpResolvedVersion resolved = McpVersionResolver.Resolve(null, null, "notifications/initialized", false, false);
+                        TestAssert.Equal("2025-11-25", resolved.Version, "notifications/initialized should default to the handshake version.");
+                        TestAssert.Equal(McpProtocolEra.Handshake, resolved.Era, "notifications/initialized is handshake era.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "ResolveMetaOnlyUnsupportedRejected", "An unsupported version carried only in body meta raises -32022", ct =>
+                    {
+                        McpProtocolException? caught = ExpectProtocolException(
+                            () => McpVersionResolver.Resolve(null, "1999-01-01", "tools/call", false, true));
+                        TestAssert.NotNull(caught, "An unsupported meta version should throw.");
+                        TestAssert.Equal(-32022, caught!.Code, "Unsupported meta version should map to -32022.");
+                        return Task.CompletedTask;
+                    }),
                 });
         }
 
@@ -258,6 +332,167 @@ namespace Test.Shared
                         McpProtocolException missing = McpProtocolException.MissingRequiredClientCapability("need elicitation", new { elicitation = new { } });
                         string data = JsonSerializer.Serialize(missing.ErrorData);
                         TestAssert.True(data.Contains("requiredCapabilities"), "Missing-capability data should wrap requiredCapabilities.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "ErrorFactoryNullDataAndMapping", "Error factories omit null data, empty supported lists, and map to JSON-RPC errors", ct =>
+                    {
+                        // MissingRequiredClientCapability with no capabilities carries no data payload.
+                        McpProtocolException missingNoData = McpProtocolException.MissingRequiredClientCapability("nope");
+                        TestAssert.Null(missingNoData.ErrorData, "Missing-capability data should be null when no capabilities are supplied.");
+
+                        // UnsupportedProtocolVersion tolerates a null supported list by emitting an empty array.
+                        McpProtocolException unsupportedNull = McpProtocolException.UnsupportedProtocolVersion("2000-01-01", null!);
+                        string unsupportedData = JsonSerializer.Serialize(unsupportedNull.ErrorData);
+                        TestAssert.True(unsupportedData.Contains("\"supported\":[]"), "A null supported list should serialize as an empty array.");
+                        TestAssert.True(unsupportedData.Contains("\"requested\":\"2000-01-01\""), "Error data should echo the requested version.");
+
+                        // ToJsonRpcError propagates code, message, and data.
+                        JsonRpcError mismatchError = McpProtocolException.HeaderMismatch("boom").ToJsonRpcError();
+                        TestAssert.Equal(-32020, mismatchError.Code, "ToJsonRpcError should preserve the code.");
+                        TestAssert.Equal("boom", mismatchError.Message, "ToJsonRpcError should preserve the message.");
+                        TestAssert.Null(mismatchError.Data, "A header mismatch carries no data.");
+
+                        JsonRpcError unsupportedError = unsupportedNull.ToJsonRpcError();
+                        TestAssert.Equal(-32022, unsupportedError.Code, "ToJsonRpcError should preserve the -32022 code.");
+                        TestAssert.NotNull(unsupportedError.Data, "The unsupported-version error should carry data.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "GeneralErrorFactoryCodes", "General MCP error factories carry their standard JSON-RPC codes", ct =>
+                    {
+                        TestAssert.Equal(-32602, McpProtocolException.InvalidParams("x").Code, "InvalidParams is -32602.");
+                        TestAssert.Equal(-32602, McpProtocolException.ValidationError("x").Code, "ValidationError maps to invalid-params.");
+                        TestAssert.Equal(-32602, McpProtocolException.UnsupportedVersion("2000-01-01").Code, "UnsupportedVersion maps to invalid-params.");
+                        TestAssert.Equal(-32602, McpProtocolException.InvalidCursor("c").Code, "InvalidCursor is -32602.");
+                        TestAssert.Equal(-32602, McpProtocolException.InvalidSession("s").Code, "InvalidSession is -32602.");
+                        TestAssert.Equal(-32601, McpProtocolException.MethodNotFound("m").Code, "MethodNotFound is -32601.");
+                        TestAssert.Equal(-32800, McpProtocolException.CancelledRequest().Code, "CancelledRequest is -32800.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "DiscoverResultOmitsOptionalFields", "A minimal discover result omits capabilities, instructions, and cache hints", ct =>
+                    {
+                        McpDiscoverResult discover = new McpDiscoverResult
+                        {
+                            SupportedVersions = new List<string> { "2026-07-28" }
+                        };
+
+                        string json = JsonSerializer.Serialize(discover);
+                        TestAssert.True(json.Contains("\"resultType\":\"complete\""), "resultType should still serialize.");
+                        TestAssert.True(json.Contains("\"supportedVersions\""), "supportedVersions should serialize.");
+                        TestAssert.False(json.Contains("capabilities"), "Null capabilities should be omitted.");
+                        TestAssert.False(json.Contains("instructions"), "Null instructions should be omitted.");
+                        TestAssert.False(json.Contains("ttlMs"), "Null ttlMs should be omitted.");
+                        TestAssert.False(json.Contains("cacheScope"), "Null cacheScope should be omitted.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "InputRequiredOmitsNullFields", "An empty input-required result and null request params omit their optional fields", ct =>
+                    {
+                        McpInputRequiredResult empty = new McpInputRequiredResult();
+                        string emptyJson = JsonSerializer.Serialize(empty);
+                        TestAssert.True(emptyJson.Contains("\"resultType\":\"input_required\""), "resultType should always serialize.");
+                        TestAssert.False(emptyJson.Contains("inputRequests"), "Null inputRequests should be omitted.");
+                        TestAssert.False(emptyJson.Contains("requestState"), "Null requestState should be omitted.");
+
+                        McpInputRequest request = new McpInputRequest { Method = "roots/list" };
+                        string requestJson = JsonSerializer.Serialize(request);
+                        TestAssert.True(requestJson.Contains("\"method\":\"roots/list\""), "The request method should serialize.");
+                        TestAssert.False(requestJson.Contains("params"), "Null params should be omitted.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "TaskStatusVariantsSerialization", "Completed, failed, and input-required tasks serialize their status-specific payloads", ct =>
+                    {
+                        McpTask completed = new McpTask { TaskId = "c1", Status = McpTaskStatus.Completed, Result = new { content = "done" } };
+                        string completedJson = JsonSerializer.Serialize(completed);
+                        TestAssert.True(completedJson.Contains("\"status\":\"completed\""), "Completed status should serialize.");
+                        TestAssert.True(completedJson.Contains("\"result\":"), "A completed task should carry its result.");
+                        TestAssert.True(completedJson.Contains("\"ttlMs\":null"), "ttlMs must serialize even when null.");
+                        TestAssert.False(completedJson.Contains("inputRequests"), "A completed task should omit inputRequests.");
+                        TestAssert.False(completedJson.Contains("\"error\""), "A completed task should omit error.");
+
+                        McpTask failed = new McpTask { TaskId = "f1", Status = McpTaskStatus.Failed, Error = new { code = -32000, message = "boom" } };
+                        string failedJson = JsonSerializer.Serialize(failed);
+                        TestAssert.True(failedJson.Contains("\"status\":\"failed\""), "Failed status should serialize.");
+                        TestAssert.True(failedJson.Contains("\"error\":"), "A failed task should carry its error.");
+                        TestAssert.False(failedJson.Contains("\"result\""), "A failed task should omit result.");
+
+                        McpTask inputRequired = new McpTask
+                        {
+                            TaskId = "i1",
+                            Status = McpTaskStatus.InputRequired,
+                            InputRequests = new Dictionary<string, McpInputRequest>
+                            {
+                                { "login", new McpInputRequest { Method = "elicitation/create" } }
+                            }
+                        };
+                        string inputJson = JsonSerializer.Serialize(inputRequired);
+                        TestAssert.True(inputJson.Contains("\"status\":\"input_required\""), "Input-required status should serialize.");
+                        TestAssert.True(inputJson.Contains("\"inputRequests\":"), "An input-required task should carry its input requests.");
+                        TestAssert.False(inputJson.Contains("\"error\""), "An input-required task should omit error.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "InCoreTaskWrappersSerialization", "In-core task wrappers serialize the task, augmentation, and paginated list shapes", ct =>
+                    {
+                        McpCreateInCoreTaskResult create = new McpCreateInCoreTaskResult
+                        {
+                            Task = new McpInCoreTask { TaskId = "ic1", Status = McpTaskStatus.Working }
+                        };
+                        string createJson = JsonSerializer.Serialize(create);
+                        TestAssert.True(createJson.Contains("\"task\":"), "Create result should wrap the task.");
+                        TestAssert.True(createJson.Contains("\"taskId\":\"ic1\""), "The wrapped task id should serialize.");
+
+                        McpTaskAugmentation augmentation = new McpTaskAugmentation { Ttl = 30000 };
+                        TestAssert.True(JsonSerializer.Serialize(augmentation).Contains("\"ttl\":30000"), "Augmentation should serialize ttl.");
+                        TestAssert.False(JsonSerializer.Serialize(new McpTaskAugmentation()).Contains("ttl"), "A null augmentation ttl should be omitted.");
+
+                        McpListTasksResult list = new McpListTasksResult
+                        {
+                            NextCursor = "cursor-1",
+                            Tasks = new List<McpInCoreTask> { new McpInCoreTask { TaskId = "ic2", Status = McpTaskStatus.Completed } }
+                        };
+                        string listJson = JsonSerializer.Serialize(list);
+                        TestAssert.True(listJson.Contains("\"tasks\":["), "List result should carry the tasks array.");
+                        TestAssert.True(listJson.Contains("\"nextCursor\":\"cursor-1\""), "List result should carry the paging cursor.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "UpdateTaskParamsSerialization", "tasks/update params serialize the task id and input responses", ct =>
+                    {
+                        McpUpdateTaskParams update = new McpUpdateTaskParams
+                        {
+                            TaskId = "t9",
+                            InputResponses = new Dictionary<string, object?> { { "login", new { token = "abc" } } }
+                        };
+
+                        string json = JsonSerializer.Serialize(update);
+                        TestAssert.True(json.Contains("\"taskId\":\"t9\""), "taskId should serialize.");
+                        TestAssert.True(json.Contains("\"inputResponses\":"), "inputResponses should serialize.");
+                        TestAssert.True(json.Contains("\"token\":\"abc\""), "The nested response payload should serialize.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "ListResultsCacheFieldPresenceAndOmission", "Resource and prompt list results carry cache hints when set and omit them when null", ct =>
+                    {
+                        McpListPromptsResult withHints = new McpListPromptsResult
+                        {
+                            NextCursor = "n1",
+                            TtlMs = 500,
+                            CacheScope = "private"
+                        };
+                        string withHintsJson = JsonSerializer.Serialize(withHints);
+                        TestAssert.True(withHintsJson.Contains("\"nextCursor\":\"n1\""), "nextCursor and cache hints should coexist.");
+                        TestAssert.True(withHintsJson.Contains("\"ttlMs\":500"), "Prompt list should carry ttlMs.");
+                        TestAssert.True(withHintsJson.Contains("\"cacheScope\":\"private\""), "Prompt list should carry cacheScope.");
+
+                        McpListResourcesResult noHints = new McpListResourcesResult();
+                        string noHintsJson = JsonSerializer.Serialize(noHints);
+                        TestAssert.False(noHintsJson.Contains("ttlMs"), "Null ttlMs should be omitted from a list result.");
+                        TestAssert.False(noHintsJson.Contains("cacheScope"), "Null cacheScope should be omitted from a list result.");
+                        TestAssert.False(noHintsJson.Contains("nextCursor"), "Null nextCursor should be omitted from a list result.");
                         return Task.CompletedTask;
                     }),
                 });
