@@ -163,6 +163,7 @@ namespace Voltaic.A2A
             {
                 string path = context.Request.Url.RawWithoutQuery ?? "/";
 
+                AuthenticationResult? caller = null;
                 if (AuthenticationHandler != null && !IsPublicAgentCardRequest(context, path))
                 {
                     AuthenticationResult auth = await AuthenticationHandler(context).ConfigureAwait(false);
@@ -171,8 +172,14 @@ namespace Voltaic.A2A
                         await SendTextAsync(context, auth.StatusCode, auth.ErrorMessage ?? "Unauthorized", context.Token).ConfigureAwait(false);
                         return;
                     }
+
+                    caller = auth;
                 }
 
+                // Make the authenticated caller ambient so the A2AHttpServer endpoint this server delegates
+                // to copies it onto the A2ARequestContext handed to the agent handler.
+                using (A2ACallerContext.Push(caller))
+                {
                 if (EnableAgentCardEndpoints &&
                     context.Request.Method == WatsonHttpMethod.GET &&
                     StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.AgentCardPath))
@@ -306,6 +313,7 @@ namespace Voltaic.A2A
                             new A2AProtocolException(A2AErrorCode.MethodNotFound, $"gRPC method path '{path}' was not found."),
                             context.Token).ConfigureAwait(false);
                         break;
+                }
                 }
             }
             catch (Exception ex)

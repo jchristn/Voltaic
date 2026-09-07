@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.1
+- Extended authenticated-caller propagation to the A2A servers, mirroring the MCP work in v0.7.0
+- `A2ARequestContext` now exposes `Principal` and `Claims`, copied from the server's `AuthenticationHandler` result before the `IA2AAgentHandler` runs, so agents can authorize per-caller (scope reads, gate writes) using the identity that authenticated the request
+- Populated over both A2A transports: `A2AHttpServer` (JSON-RPC and HTTP+JSON) and `A2AGrpcServer` (which delegates to the HTTP endpoint). Because the caller cannot be threaded through the shared public methods without changing their signatures, an internal request-scoped bridge carries it from each auth site to context construction, where it is copied onto the context so it survives the background handler task and streaming loop
+- Additive and backward compatible: `Principal`/`Claims` are null when no `AuthenticationHandler` is configured and for public Agent Card requests; existing `IA2AAgentHandler` implementations are unaffected
+- Added positive and negative Touchstone cases: the caller reaches the agent context over A2A HTTP and gRPC, and the context carries no identity when unauthenticated
+
 ## v0.7.0
 - Added `Voltaic.Core.RpcCallContext`, an ambient (`AsyncLocal`), request-scoped context that carries the authenticated caller's `Principal` and read-only `Claims` into MCP/JSON-RPC method and tool handlers
 - `McpHttpServer` now populates `RpcCallContext.Current` immediately after a successful `AuthenticationHandler` result and restores the prior value when the request ends (via an `IDisposable` scope), so the identity flows untouched down the awaited dispatch chain into `tool.Handler` without any handler-signature change

@@ -1032,6 +1032,20 @@ server.RegisterTool("list_orders", "List the caller's orders", inputSchema,
 
 Both forms are additive: existing handlers that ignore the caller compile and behave exactly as before.
 
+### Authorizing inside an A2A agent
+
+The A2A servers carry the caller the same way, but through the context object the handler already receives rather than an ambient. When `A2AHttpServer` or `A2AGrpcServer` authenticates a request, it copies the `AuthenticationResult`'s `Principal` and `Claims` onto the `A2ARequestContext` before your `IA2AAgentHandler` runs — so the identity is available even though A2A agents execute on a background task and may stream results after the request returns. `Principal`/`Claims` are `null` when no `AuthenticationHandler` is configured or for public Agent Card requests.
+
+```csharp
+public async Task ExecuteAsync(A2ARequestContext context, A2AAgentEventQueue eventQueue, CancellationToken token)
+{
+    string? principal = context.Principal;                 // who is calling
+    string? tenantId = context.Claims != null && context.Claims.TryGetValue("tenantId", out string? t) ? t : null;
+
+    // ... scope the agent's work to the authenticated caller ...
+}
+```
+
 ---
 
 ## When NOT to Use This

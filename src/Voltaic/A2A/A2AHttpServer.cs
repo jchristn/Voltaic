@@ -36,6 +36,20 @@ namespace Voltaic.A2A
         public bool StreamingResponse { get; set; }
         public SendMessageConfiguration? Configuration { get; set; }
         public Dictionary<string, object?>? Metadata { get; set; }
+
+        /// <summary>
+        /// Gets or sets the authenticated principal for the request, copied from the server's
+        /// <c>AuthenticationHandler</c> result. Null when the request was not authenticated (no handler
+        /// configured, or a public Agent Card request). Host-defined and opaque to Voltaic.
+        /// </summary>
+        public string? Principal { get; set; }
+
+        /// <summary>
+        /// Gets or sets the host-defined claims for the authenticated caller (for example tenant, user, or
+        /// role), copied from the server's <c>AuthenticationHandler</c> result. Null when the request was
+        /// not authenticated or the result carried no claims.
+        /// </summary>
+        public IReadOnlyDictionary<string, string>? Claims { get; set; }
     }
 
     public sealed class A2AAgentEventQueue
@@ -338,6 +352,7 @@ namespace Voltaic.A2A
                     return;
                 }
 
+                AuthenticationResult? caller = null;
                 if (AuthenticationHandler != null && !IsPublicAgentCardRequest(context.Request))
                 {
                     AuthenticationResult auth = await AuthenticationHandler(context.Request).ConfigureAwait(false);
@@ -346,35 +361,42 @@ namespace Voltaic.A2A
                         await SendTextAsync(context, auth.StatusCode, auth.ErrorMessage ?? "Unauthorized", token).ConfigureAwait(false);
                         return;
                     }
+
+                    caller = auth;
                 }
 
-                string path = context.Request.Url?.AbsolutePath ?? "/";
-
-                if (context.Request.HttpMethod == "GET" && StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.AgentCardPath))
+                // Make the authenticated caller ambient so it is copied onto the A2ARequestContext built
+                // for the agent handler. Push(null) is a no-op-then-restore for unauthenticated paths.
+                using (A2ACallerContext.Push(caller))
                 {
-                    await SendJsonAsync(context, AgentCard, token).ConfigureAwait(false);
-                    return;
-                }
+                    string path = context.Request.Url?.AbsolutePath ?? "/";
 
-                if (context.Request.HttpMethod == "GET" && StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.ExtendedAgentCardPath))
-                {
-                    AgentCard extended = GetExtendedAgentCard();
-                    await SendJsonAsync(context, extended, token).ConfigureAwait(false);
-                    return;
-                }
+                    if (context.Request.HttpMethod == "GET" && StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.AgentCardPath))
+                    {
+                        await SendJsonAsync(context, AgentCard, token).ConfigureAwait(false);
+                        return;
+                    }
 
-                if (StringComparer.OrdinalIgnoreCase.Equals(path, _RpcPath))
-                {
-                    await HandleJsonRpcAsync(context, token).ConfigureAwait(false);
-                    return;
-                }
+                    if (context.Request.HttpMethod == "GET" && StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.ExtendedAgentCardPath))
+                    {
+                        AgentCard extended = GetExtendedAgentCard();
+                        await SendJsonAsync(context, extended, token).ConfigureAwait(false);
+                        return;
+                    }
 
-                if (await TryHandleRestAsync(context, path, token).ConfigureAwait(false))
-                {
-                    return;
-                }
+                    if (StringComparer.OrdinalIgnoreCase.Equals(path, _RpcPath))
+                    {
+                        await HandleJsonRpcAsync(context, token).ConfigureAwait(false);
+                        return;
+                    }
 
-                await SendTextAsync(context, 404, "Not found", token).ConfigureAwait(false);
+                    if (await TryHandleRestAsync(context, path, token).ConfigureAwait(false))
+                    {
+                        return;
+                    }
+
+                    await SendTextAsync(context, 404, "Not found", token).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -803,7 +825,9 @@ namespace Voltaic.A2A
                 TaskId = task.Id,
                 ContextId = task.ContextId,
                 Message = task.History?.LastOrDefault() ?? new Message { Role = Role.User, MessageId = string.Empty },
-                Metadata = request.Metadata
+                Metadata = request.Metadata,
+                Principal = A2ACallerContext.Current?.Principal,
+                Claims = A2ACallerContext.Current?.Claims
             };
             A2AAgentEventQueue queue = new A2AAgentEventQueue();
             IA2AAgentHandler handler = Handler ?? throw new A2AProtocolException(A2AErrorCode.InternalError, "No A2A handler is registered.");
@@ -929,7 +953,9 @@ namespace Voltaic.A2A
                 ContextId = resolvedContextId,
                 StreamingResponse = streaming,
                 Configuration = request.Configuration,
-                Metadata = request.Metadata
+                Metadata = request.Metadata,
+                Principal = A2ACallerContext.Current?.Principal,
+                Claims = A2ACallerContext.Current?.Claims
             };
         }
 

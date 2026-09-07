@@ -385,6 +385,60 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.Forbidden, ex!.StatusCode);
                     }),
 
+                    Case(suiteId, "AuthenticatedCallerReachesAgentContext", "The authenticated caller (Principal + Claims) reaches the A2A agent handler context over HTTP", async ct =>
+                    {
+                        CapturingAuthAgent agent = new CapturingAuthAgent();
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, agent, server =>
+                            server.AuthenticationHandler = _ => Task.FromResult(new AuthenticationResult
+                            {
+                                IsAuthenticated = true,
+                                Principal = "a2a-user",
+                                Claims = new Dictionary<string, string> { { "tenantId", "tenant-7" } }
+                            })).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+
+                        SendMessageResponse response = await client.SendMessageAsync(CreateMessageRequest("hi"), ct).ConfigureAwait(false);
+
+                        TestAssert.NotNull(response.Task, "SendMessage should return a task.");
+                        TestAssert.True(agent.Invoked, "Agent handler should have run.");
+                        TestAssert.False(agent.PrincipalWasNull, "Principal should be non-null for an authenticated request.");
+                        TestAssert.Equal("a2a-user", agent.Principal, "Principal should match the AuthenticationResult.");
+                        TestAssert.Equal("tenant-7", agent.TenantId, "tenantId claim should reach the agent context.");
+                    }),
+
+                    Case(suiteId, "UnauthenticatedRequestHasNullCallerInContext", "Without an AuthenticationHandler the A2A agent context carries no caller identity", async ct =>
+                    {
+                        CapturingAuthAgent agent = new CapturingAuthAgent();
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, agent).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+
+                        await client.SendMessageAsync(CreateMessageRequest("hi"), ct).ConfigureAwait(false);
+
+                        TestAssert.True(agent.Invoked, "Agent handler should have run.");
+                        TestAssert.True(agent.PrincipalWasNull, "Principal should be null when no AuthenticationHandler is configured.");
+                        TestAssert.Null(agent.TenantId, "Claims should be absent when no AuthenticationHandler is configured.");
+                    }),
+
+                    Case(suiteId, "GrpcAuthenticatedCallerReachesAgentContext", "The authenticated caller reaches the agent context over the A2A gRPC transport", async ct =>
+                    {
+                        CapturingAuthAgent agent = new CapturingAuthAgent();
+                        await using A2AGrpcTestFixture fixture = await A2AGrpcTestFixture.StartAsync(ct, agent, configure: server =>
+                            server.AuthenticationHandler = _ => Task.FromResult(new AuthenticationResult
+                            {
+                                IsAuthenticated = true,
+                                Principal = "grpc-user",
+                                Claims = new Dictionary<string, string> { { "tenantId", "tenant-grpc" } }
+                            })).ConfigureAwait(false);
+                        using A2AGrpcClient client = new A2AGrpcClient(fixture.BaseUrl, fixture.Client);
+
+                        SendMessageResponse response = await client.SendMessageAsync(CreateMessageRequest("hi"), ct).ConfigureAwait(false);
+
+                        TestAssert.NotNull(response.Task, "gRPC SendMessage should return a task.");
+                        TestAssert.True(agent.Invoked, "Agent handler should have run.");
+                        TestAssert.Equal("grpc-user", agent.Principal, "Principal should reach the agent over gRPC.");
+                        TestAssert.Equal("tenant-grpc", agent.TenantId, "tenantId claim should reach the agent over gRPC.");
+                    }),
+
                     Case(suiteId, "ReturnImmediatelyPersistsSubmittedTask", "A2A returnImmediately returns a submitted task and lets the handler finish in the background", async ct =>
                     {
                         await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, new SlowAgent()).ConfigureAwait(false);
@@ -566,6 +620,35 @@ namespace Test.Shared
             }
         }
 
+        private sealed class CapturingAuthAgent : IA2AAgentHandler
+        {
+            public volatile bool Invoked;
+            public volatile bool PrincipalWasNull;
+            public string? Principal;
+            public string? TenantId;
+
+            public async Task ExecuteAsync(A2ARequestContext context, A2AAgentEventQueue eventQueue, CancellationToken token)
+            {
+                Invoked = true;
+                Principal = context.Principal;
+                PrincipalWasNull = context.Principal == null;
+                TenantId = context.Claims != null && context.Claims.TryGetValue("tenantId", out string? tenant) ? tenant : null;
+
+                A2ATaskUpdater updater = new A2ATaskUpdater(eventQueue, context.TaskId, context.ContextId);
+                await updater.SubmitAsync(token: token).ConfigureAwait(false);
+                await updater.StartAsync(token: token).ConfigureAwait(false);
+                Message response = new Message
+                {
+                    Role = Role.Agent,
+                    MessageId = Guid.NewGuid().ToString("N"),
+                    TaskId = context.TaskId,
+                    ContextId = context.ContextId,
+                    Parts = new List<Part> { Part.FromText("done") }
+                };
+                await updater.CompleteAsync(response, token).ConfigureAwait(false);
+            }
+        }
+
         private sealed class A2ATestFixture : IAsyncDisposable
         {
             private readonly A2AHttpServer _Server;
@@ -587,7 +670,7 @@ namespace Test.Shared
 
             public string EndpointUrl => $"{BaseUrl}/a2a";
 
-            public static async Task<A2ATestFixture> StartAsync(CancellationToken token, IA2AAgentHandler? handler = null)
+            public static async Task<A2ATestFixture> StartAsync(CancellationToken token, IA2AAgentHandler? handler = null, Action<A2AHttpServer>? configure = null)
             {
                 int port = TestPorts.GetFreePort();
                 string endpointUrl = $"http://localhost:{port}/a2a";
@@ -596,6 +679,7 @@ namespace Test.Shared
                 {
                     ExtendedAgentCard = CreateCard(endpointUrl, "Voltaic Extended Agent")
                 };
+                configure?.Invoke(server);
                 CancellationTokenSource tokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
                 await server.StartAsync(tokenSource.Token).ConfigureAwait(false);
 
@@ -660,7 +744,8 @@ namespace Test.Shared
             public static async Task<A2AGrpcTestFixture> StartAsync(
                 CancellationToken token,
                 IA2AAgentHandler? handler = null,
-                bool blockRpcWithAuthentication = false)
+                bool blockRpcWithAuthentication = false,
+                Action<A2AGrpcServer>? configure = null)
             {
                 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
@@ -684,6 +769,8 @@ namespace Test.Shared
                         ErrorMessage = "blocked"
                     });
                 }
+
+                configure?.Invoke(server);
 
                 CancellationTokenSource tokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
                 await server.StartAsync(tokenSource.Token).ConfigureAwait(false);

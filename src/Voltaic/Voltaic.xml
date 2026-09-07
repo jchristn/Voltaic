@@ -4,6 +4,32 @@
         <name>Voltaic</name>
     </assembly>
     <members>
+        <member name="T:Voltaic.A2A.A2ACallerContext">
+            <summary>
+            Internal, request-scoped bridge that carries the authenticated caller's
+            <see cref="T:Voltaic.Core.AuthenticationResult"/> from a server's authentication site to the point where the
+            <see cref="T:Voltaic.A2A.A2ARequestContext"/> handed to the agent handler is constructed.
+            <para>
+            The A2A gRPC server delegates to the A2A HTTP endpoint's public methods, so the authenticated
+            identity cannot be threaded through as a parameter without changing that public surface. This
+            <see cref="T:System.Threading.AsyncLocal`1"/> flows the caller along the shared asynchronous request flow instead;
+            the constructed <see cref="T:Voltaic.A2A.A2ARequestContext"/> copies the identity onto itself so it survives
+            into the background handler task and the streaming loop, where the ambient scope no longer applies.
+            </para>
+            </summary>
+        </member>
+        <member name="P:Voltaic.A2A.A2ACallerContext.Current">
+            <summary>Gets the authenticated caller for the current request flow, or null when unauthenticated.</summary>
+        </member>
+        <member name="M:Voltaic.A2A.A2ACallerContext.Push(Voltaic.Core.AuthenticationResult)">
+            <summary>
+            Makes the supplied authenticated caller ambient for the current asynchronous flow and returns a
+            token that restores the prior value when disposed. Pushing null is a safe no-op-then-restore for
+            unauthenticated request paths.
+            </summary>
+            <param name="caller">The authenticated caller, or null.</param>
+            <returns>An <see cref="T:System.IDisposable"/> that restores the previously ambient value when disposed.</returns>
+        </member>
         <member name="T:Voltaic.A2A.A2ACardResolver">
             <summary>
             Resolves A2A Agent Cards from the well-known discovery endpoint.
@@ -27,6 +53,20 @@
         <member name="T:Voltaic.A2A.A2AGrpcServer">
             <summary>
             Direct A2A gRPC server implemented with Watson HTTP/2 and protobuf framing.
+            </summary>
+        </member>
+        <member name="P:Voltaic.A2A.A2ARequestContext.Principal">
+            <summary>
+            Gets or sets the authenticated principal for the request, copied from the server's
+            <c>AuthenticationHandler</c> result. Null when the request was not authenticated (no handler
+            configured, or a public Agent Card request). Host-defined and opaque to Voltaic.
+            </summary>
+        </member>
+        <member name="P:Voltaic.A2A.A2ARequestContext.Claims">
+            <summary>
+            Gets or sets the host-defined claims for the authenticated caller (for example tenant, user, or
+            role), copied from the server's <c>AuthenticationHandler</c> result. Null when the request was
+            not authenticated or the result carried no claims.
             </summary>
         </member>
         <member name="T:Voltaic.A2A.A2AJson">

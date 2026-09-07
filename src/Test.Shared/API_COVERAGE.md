@@ -31,7 +31,7 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | `A2AHttpServer` | Covered | `A2A.Protocol.*`, official-style JSON-RPC and HTTP+JSON compatibility cases |
 | `A2AGrpcServer` | Covered | `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.GrpcErrorMapsToA2AProtocolException`, `A2A.Protocol.GrpcPreservesRichMessagePartsAndMetadata`, `A2A.Protocol.GrpcSubscribeAndCancelTask`, `A2A.Protocol.GrpcAuthenticationBlocksRpcButAllowsAgentCard`, sample/manual harness coverage |
 | `IA2AAgentHandler` | Covered | `A2A.Protocol.*`, sample/test handlers |
-| `A2ARequestContext` | Covered | `A2A.Protocol.*`, handler integration coverage |
+| `A2ARequestContext` | Covered | `A2A.Protocol.*`, handler integration coverage, `A2A.Protocol.AuthenticatedCallerReachesAgentContext`, `A2A.Protocol.GrpcAuthenticatedCallerReachesAgentContext`, `A2A.Protocol.UnauthenticatedRequestHasNullCallerInContext` (Principal/Claims propagation) |
 | `A2AAgentEventQueue` | Covered | `A2A.Protocol.*`, handler integration coverage |
 | `A2ATaskUpdater` | Covered | `A2A.Protocol.*`, task lifecycle and streaming coverage |
 | `IA2ATaskStore` / `InMemoryA2ATaskStore` | Covered | `A2A.Protocol.JsonRpcSendMessageAndGetTask`, `A2A.Protocol.HttpJsonClientCoversRestBinding`, list/get/task lifecycle coverage |
