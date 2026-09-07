@@ -107,6 +107,7 @@ namespace Test.Shared
                             "Voltaic.Core.MessageFraming",
                             "Voltaic.Core.RequestSentEventArgs",
                             "Voltaic.Core.ResponseReceivedEventArgs",
+                            "Voltaic.Core.RpcCallContext",
                             "Voltaic.Core.RpcMethodInvocation",
                             "Voltaic.Core.RpcParameters",
                             "Voltaic.Mcp.McpAnnotations",

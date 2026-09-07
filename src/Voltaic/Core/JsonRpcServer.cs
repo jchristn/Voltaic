@@ -150,6 +150,21 @@ namespace Voltaic.Core
         }
 
         /// <summary>
+        /// Registers a custom RPC method whose handler additionally receives the authenticated caller for
+        /// the current request. The context is the ambient <see cref="RpcCallContext.Current"/> captured at
+        /// invocation time; it is null when the transport did not authenticate the request (the base
+        /// TCP JSON-RPC transport performs no authentication, so it is always null there).
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when handler is null.</exception>
+        public void RegisterMethod(string name, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _Methods[name] = (RpcParameters? args, CancellationToken token) => handler(args, RpcCallContext.Current, token);
+        }
+
+        /// <summary>
         /// Attempts to invoke a registered method by name with the given parameters asynchronously.
         /// </summary>
         /// <param name="methodName">The name of the method to invoke.</param>

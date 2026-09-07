@@ -7,6 +7,7 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | API family | Status | Descriptor suites |
 |---|---:|---|
 | `AuthenticationResult` | Covered | `ModelApi.Supporting.*`, `ModelApi.Mcp.Matrix.AuthenticationResultCustomValues` |
+| `RpcCallContext` | Covered | `McpHttp.Server.CallContext.*` (ambient and explicit-context propagation, unauthenticated null, ping bypass, concurrent isolation) |
 | `ClientConnectedEventArgs` | Covered | `ModelApi.Supporting.*`, `JsonRpc.Tcp.Integration.ClientAndServerEvents`, `McpHttp.Client.Matrix.DisconnectRaisesEvent` |
 | `ClientConnection` | Covered | `ClientConnection.*`, `ClientConnection.Matrix.*` |
 | `ClientConnectionTypeEnum` | Covered | `ClientConnection.Matrix.TypedConstructorAllEnumValues`, `ModelApi.Mcp.Matrix.ClientConnectionTypeEnumAllValues` |

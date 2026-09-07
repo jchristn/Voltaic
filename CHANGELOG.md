@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.0
+- Added `Voltaic.Core.RpcCallContext`, an ambient (`AsyncLocal`), request-scoped context that carries the authenticated caller's `Principal` and read-only `Claims` into MCP/JSON-RPC method and tool handlers
+- `McpHttpServer` now populates `RpcCallContext.Current` immediately after a successful `AuthenticationHandler` result and restores the prior value when the request ends (via an `IDisposable` scope), so the identity flows untouched down the awaited dispatch chain into `tool.Handler` without any handler-signature change
+- `RpcCallContext.Current` is `null` when no `AuthenticationHandler` is configured, on transports that do not authenticate, and for requests that bypass authentication (for example `ping`); concurrent requests on independent async flows never observe one another's context
+- Added optional explicit-context registration overloads on `JsonRpcServer`, `McpServer`, `McpHttpServer`, `McpTcpServer`, and `McpWebsocketsServer`: `RegisterMethod`/`RegisterTool` variants whose handler receives `Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>>` and forward `RpcCallContext.Current`
+- Fully additive and backward compatible: all existing `RegisterMethod`/`RegisterTool` overloads compile and behave unchanged, and handlers that ignore the caller are unaffected
+- Added the `McpHttp.Server.CallContext` Touchstone suite with positive and negative cases (context reflects the auth result inside a `tools/call` handler, is null without an `AuthenticationHandler`, is null on the pre-auth `ping` bypass, isolates concurrent callers, and flows through the explicit-context overload)
+
 ## v0.6.0
 - Began multi-version MCP support spanning all five published protocol revisions: `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`
 - Added a version registry and era model (`McpProtocol` registry, `McpProtocolVersionInfo`, `McpProtocolEra`) that records each revision's era (handshake or stateless) and transport traits (sessions, batching, required protocol-version header, header routing)

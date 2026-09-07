@@ -10,7 +10,7 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v0.6.0 recognizes five MCP protocol revisions — `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28` — and targets A2A protocol version `1.0`. A server defaults to the `2025-11-25` handshake for backward compatibility and enters the stateless `2026-07-28` model only when a request selects it, so existing clients keep working unchanged. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Voltaic v0.7.0 recognizes five MCP protocol revisions — `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28` — and targets A2A protocol version `1.0`. A server defaults to the `2025-11-25` handshake for backward compatibility and enters the stateless `2026-07-28` model only when a request selects it, so existing clients keep working unchanged. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 Version negotiation is driven by the `McpProtocol` registry and `McpVersionResolver`: each revision carries its era (handshake or stateless) and transport traits, and the resolver selects a version from the `MCP-Protocol-Version` header, the request-body `_meta`, or structural cues. This release adds the additive models the newer revisions need — `server/discover`, Multi Round-Trip Requests, cacheable list results, and both the `2025-11-25` in-core tasks and the `2026-07-28` tasks extension — while the transport, client, and extension wiring land incrementally on top of that foundation.
 
@@ -996,6 +996,41 @@ await client.ConnectStreamableAsync("http://localhost:8080");
 ```
 
 This pairs with the server-side `AuthenticationHandler` above: the client sends the credential and the handler validates it. Because the `ping` handshake bypasses server authentication, the header first takes effect on the client's first non-ping call.
+
+### Authorizing inside a handler
+
+`AuthenticationHandler` decides whether a request is allowed in; to make per-caller authorization decisions *inside* a tool or method handler (scope reads to a tenant, gate writes by role, and so on) the handler needs the caller's identity. Voltaic carries it there for you.
+
+After a successful `AuthenticationResult`, `McpHttpServer` publishes the caller's `Principal` and `Claims` as an ambient, request-scoped `Voltaic.Core.RpcCallContext`. Because it flows on the request's async call chain, any handler can read `RpcCallContext.Current` without changing its signature. `Current` is `null` when no `AuthenticationHandler` is configured, on transports that do not authenticate, and for requests that bypass authentication (such as `ping`).
+
+```csharp
+using Voltaic.Core;
+using Voltaic.Mcp;
+
+server.RegisterTool("list_orders", "List the caller's orders", inputSchema, async (RpcParameters? args, CancellationToken token) =>
+{
+    RpcCallContext? caller = RpcCallContext.Current;
+    if (caller == null) throw new InvalidOperationException("Unauthenticated.");
+
+    string tenantId = caller.Claims.TryGetValue("tenantId", out string? t) ? t : throw new InvalidOperationException("No tenant.");
+    bool isAdmin = caller.Claims.TryGetValue("isAdmin", out string? a) && a == "true";
+
+    return await LoadOrdersAsync(tenantId, caller.Principal, isAdmin, token);
+});
+```
+
+If you prefer the caller passed in explicitly rather than read from an ambient, every `RegisterMethod`/`RegisterTool` surface also offers an overload that receives an `RpcCallContext?` parameter (it simply forwards `RpcCallContext.Current`):
+
+```csharp
+server.RegisterTool("list_orders", "List the caller's orders", inputSchema,
+    async (RpcParameters? args, RpcCallContext? caller, CancellationToken token) =>
+    {
+        // caller == RpcCallContext.Current
+        return await LoadOrdersAsync(caller, token);
+    });
+```
+
+Both forms are additive: existing handlers that ignore the caller compile and behave exactly as before.
 
 ---
 

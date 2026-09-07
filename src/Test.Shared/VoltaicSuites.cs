@@ -33,6 +33,7 @@ namespace Test.Shared
                 McpHttpAdvancedProtocolSuites.RegistryProtocolMatrix(),
                 McpHttpAdvancedProtocolSuites.HttpClientMatrix(),
                 McpHttpAuthSuites.RequestHeaderMatrix(),
+                McpHttpCallContextSuites.CallContextPropagation(),
                 MessageFramingSuites.Framing(),
                 MessageFramingAdvancedSuites.EdgeCases(),
                 ClientConnectionSuites.QueueAndLifecycle(),

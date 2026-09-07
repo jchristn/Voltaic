@@ -1491,6 +1491,17 @@
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
+        <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method whose handler additionally receives the authenticated caller for
+            the current request. The context is the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/> captured at
+            invocation time; it is null when the transport did not authenticate the request (the base
+            TCP JSON-RPC transport performs no authentication, so it is always null there).
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when handler is null.</exception>
+        </member>
         <member name="M:Voltaic.Core.JsonRpcServer.TryInvokeMethodAsync(System.String,Voltaic.Core.RpcParameters,System.Threading.CancellationToken)">
             <summary>
             Attempts to invoke a registered method by name with the given parameters asynchronously.
@@ -1719,6 +1730,88 @@
             <summary>
             Typed view of the built-in <c>add</c> method arguments.
             </summary>
+        </member>
+        <member name="T:Voltaic.Core.RpcCallContext">
+            <summary>
+            Ambient, request-scoped context describing the authenticated caller for the JSON-RPC / MCP
+            request currently being handled on this asynchronous flow.
+            <para>
+            The context is populated by the transport immediately after a successful
+            <see cref="T:Voltaic.Core.AuthenticationResult"/> and restored to its prior value when the request completes.
+            Because it is stored in an <see cref="T:System.Threading.AsyncLocal`1"/>, it flows automatically through the
+            awaited call chain into method and tool handlers without any change to their signatures, and
+            concurrent requests on independent asynchronous flows never observe one another's context.
+            </para>
+            <para>
+            Handlers read <see cref="P:Voltaic.Core.RpcCallContext.Current"/> to authorize per-caller (for example, to scope reads or gate
+            writes by tenant, user, or role). <see cref="P:Voltaic.Core.RpcCallContext.Current"/> is <see langword="null"/> when no
+            authentication handler is configured on the transport, when the transport does not support
+            authentication, or when the request was allowed to bypass authentication (for example, the MCP
+            <c>ping</c> handshake).
+            </para>
+            </summary>
+            <remarks>
+            This type is immutable and therefore thread-safe. The ambient value is isolated per asynchronous
+            flow by <see cref="T:System.Threading.AsyncLocal`1"/>; reads from <see cref="P:Voltaic.Core.RpcCallContext.Current"/> on unrelated flows are safe
+            and independent.
+            </remarks>
+        </member>
+        <member name="P:Voltaic.Core.RpcCallContext.Current">
+            <summary>
+            Gets the context for the request currently being handled on this asynchronous flow, or
+            <see langword="null"/> when there is no authenticated caller for the current request.
+            </summary>
+            <value>
+            The ambient <see cref="T:Voltaic.Core.RpcCallContext"/> for the current asynchronous flow, or
+            <see langword="null"/>. Never throws.
+            </value>
+        </member>
+        <member name="P:Voltaic.Core.RpcCallContext.Principal">
+            <summary>
+            Gets the authenticated principal supplied by the transport's authentication handler.
+            This value is host-defined and opaque to Voltaic (for example, a user id or service account).
+            </summary>
+            <value>The principal, or <see langword="null"/> when the authentication result carried none.</value>
+        </member>
+        <member name="P:Voltaic.Core.RpcCallContext.Claims">
+            <summary>
+            Gets the host-defined claims copied from the authentication result (for example,
+            <c>tenantId</c>, <c>userId</c>, or role flags).
+            </summary>
+            <value>
+            A read-only, never-null dictionary of claims. Empty when the authentication result carried
+            no claims.
+            </value>
+        </member>
+        <member name="M:Voltaic.Core.RpcCallContext.#ctor(System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String})">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Core.RpcCallContext"/> class. Intended to be created
+            by transports; hosts read the ambient value through <see cref="P:Voltaic.Core.RpcCallContext.Current"/> rather than
+            constructing instances directly.
+            </summary>
+            <param name="principal">
+            The authenticated principal, or <see langword="null"/> when none is available.
+            </param>
+            <param name="claims">
+            The host-defined claims associated with the authenticated identity, or <see langword="null"/>.
+            A <see langword="null"/> value is treated as an empty claim set. The supplied dictionary is
+            referenced as-is and is expected to be effectively immutable for the lifetime of the context.
+            </param>
+        </member>
+        <member name="M:Voltaic.Core.RpcCallContext.Push(Voltaic.Core.RpcCallContext)">
+            <summary>
+            Sets the ambient context for the current asynchronous flow and returns a token that restores
+            the previously ambient value when disposed.
+            </summary>
+            <param name="context">
+            The context to make ambient, or <see langword="null"/> to make no context ambient (a
+            no-op-then-restore that safely covers unauthenticated code paths).
+            </param>
+            <returns>
+            An <see cref="T:System.IDisposable"/> that, when disposed, restores the value that was ambient before
+            this call. Disposing more than once is safe. Callers should dispose the token (typically via a
+            <c>using</c> block) so the ambient value never leaks across pooled continuations.
+            </returns>
         </member>
         <member name="T:Voltaic.Core.RpcMethodInvocation">
             <summary>
@@ -2974,6 +3067,49 @@
             <param name="definition">The tool definition.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
         </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method whose handler additionally receives the authenticated caller for
+            the current request. The context is the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/> captured at
+            invocation time; it is null when the request was not authenticated (for example, when no
+            <see cref="P:Voltaic.Mcp.McpHttpServer.AuthenticationHandler"/> is configured).
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool whose handler additionally receives the authenticated caller for the current
+            request. The context is the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/> captured at invocation
+            time; it is null when the request was not authenticated.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when handler is null.</exception>
+        </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.Mcp.McpReadResourceResult})">
             <summary>
             Registers a static MCP resource with a synchronous read handler.
@@ -4155,6 +4291,48 @@
             <param name="definition">The tool definition.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
         </member>
+        <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method whose handler additionally receives the authenticated caller for
+            the current request. The context is the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/> captured at
+            invocation time; it is null when the transport did not authenticate the request.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool whose handler additionally receives the authenticated caller for the current
+            request. The context is the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/> captured at invocation
+            time; it is null when the transport did not authenticate the request.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when any required parameter is null.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="name">The name of the tool.</param>
+            <param name="description">A description of what the tool does.</param>
+            <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+            <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+            <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="definition">The tool definition.</param>
+            <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when handler is null.</exception>
+        </member>
         <member name="M:Voltaic.Mcp.McpServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.Mcp.McpReadResourceResult})">
             <summary>
             Registers a static MCP resource with a synchronous read handler.
@@ -4464,6 +4642,37 @@
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool whose handler additionally receives the authenticated caller for the current
+            request via the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/>. The base TCP transport performs no
+            authentication, so the context is null unless a derived transport populates it.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when handler is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.Mcp.McpReadResourceResult})">
             <summary>
@@ -5055,6 +5264,46 @@
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a custom RPC method whose handler additionally receives the authenticated caller for
+            the current request via the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/>. The base WebSocket
+            transport performs no authentication, so the context is null unless populated by the host.
+            </summary>
+            <param name="name">The name of the method to register.</param>
+            <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool whose handler additionally receives the authenticated caller for the current
+            request via the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/>.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(System.String,System.String,System.Object,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool with input and output schema metadata whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="name">Tool name.</param>
+            <param name="description">Tool description.</param>
+            <param name="inputSchema">Input JSON schema.</param>
+            <param name="outputSchema">Output JSON schema.</param>
+            <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterTool(Voltaic.Mcp.ToolDefinition,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
+            <summary>
+            Registers a tool from a full tool definition whose handler additionally receives the
+            authenticated caller for the current request.
+            </summary>
+            <param name="definition">Tool metadata.</param>
+            <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when handler is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterResource(System.String,System.String,System.String,System.Func{Voltaic.Mcp.McpReadResourceResult})">
             <summary>

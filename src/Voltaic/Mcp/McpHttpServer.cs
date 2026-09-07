@@ -423,6 +423,66 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Registers a custom RPC method whose handler additionally receives the authenticated caller for
+        /// the current request. The context is the ambient <see cref="RpcCallContext.Current"/> captured at
+        /// invocation time; it is null when the request was not authenticated (for example, when no
+        /// <see cref="AuthenticationHandler"/> is configured).
+        /// </summary>
+        /// <param name="name">The name of the method to register.</param>
+        /// <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
+        public void RegisterMethod(string name, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            RegisterMethod(name, (RpcParameters? args, CancellationToken token) => handler(args, RpcCallContext.Current, token));
+        }
+
+        /// <summary>
+        /// Registers a tool whose handler additionally receives the authenticated caller for the current
+        /// request. The context is the ambient <see cref="RpcCallContext.Current"/> captured at invocation
+        /// time; it is null when the request was not authenticated.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any required parameter is null.</exception>
+        public void RegisterTool(string name, string description, object inputSchema, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata whose handler additionally receives the
+        /// authenticated caller for the current request.
+        /// </summary>
+        /// <param name="name">The name of the tool.</param>
+        /// <param name="description">A description of what the tool does.</param>
+        /// <param name="inputSchema">The JSON schema object defining the tool's input parameters.</param>
+        /// <param name="outputSchema">The JSON schema object defining structured output, or null.</param>
+        /// <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition whose handler additionally receives the
+        /// authenticated caller for the current request.
+        /// </summary>
+        /// <param name="definition">The tool definition.</param>
+        /// <param name="handler">The async function that handles the tool invocation with caller context and cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when handler is null.</exception>
+        public void RegisterTool(ToolDefinition definition, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            RegisterTool(definition, (RpcParameters? args, CancellationToken token) => handler(args, RpcCallContext.Current, token));
+        }
+
+        /// <summary>
         /// Registers a static MCP resource with a synchronous read handler.
         /// </summary>
         /// <param name="uri">Resource URI.</param>
@@ -987,6 +1047,10 @@ namespace Voltaic.Mcp
             {
                 string path = context.Request.Url?.AbsolutePath ?? "";
 
+                // Carries the authenticated caller (Principal + Claims) into method/tool handlers via
+                // an ambient AsyncLocal. Null unless an AuthenticationHandler authenticated this request.
+                RpcCallContext? callContext = null;
+
                 // Handle CORS preflight
                 if (context.Request.HttpMethod == "OPTIONS")
                 {
@@ -1055,30 +1119,42 @@ namespace Voltaic.Mcp
                         return;
                     }
 
+                    // Make the authenticated caller ambient for the remainder of this request.
+                    callContext = new RpcCallContext(authResult.Principal, authResult.Claims);
+
                     // If we already buffered the body, pass it through to avoid re-reading
                     if (requestBody != null)
                     {
-                        await HandlePreReadRpcRequestAsync(context, path, requestBody, token).ConfigureAwait(false);
+                        using (RpcCallContext.Push(callContext))
+                        {
+                            await HandlePreReadRpcRequestAsync(context, path, requestBody, token).ConfigureAwait(false);
+                        }
+
                         return;
                     }
                 }
 
-                if (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath))
+                // Push the ambient caller context (a no-op that restores null when unauthenticated) so it
+                // flows into every method/tool handler dispatched below and is cleared when the request ends.
+                using (RpcCallContext.Push(callContext))
                 {
-                    await HandleMcpRequestAsync(context, token).ConfigureAwait(false);
-                }
-                else if (path.StartsWith(_RpcPath))
-                {
-                    await HandleRpcRequestAsync(context, token).ConfigureAwait(false);
-                }
-                else if (path.StartsWith(_EventsPath))
-                {
-                    await HandleSseRequestAsync(context, token).ConfigureAwait(false);
-                }
-                else
-                {
-                    context.Response.StatusCode = 404;
-                    context.Response.Close();
+                    if (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath))
+                    {
+                        await HandleMcpRequestAsync(context, token).ConfigureAwait(false);
+                    }
+                    else if (path.StartsWith(_RpcPath))
+                    {
+                        await HandleRpcRequestAsync(context, token).ConfigureAwait(false);
+                    }
+                    else if (path.StartsWith(_EventsPath))
+                    {
+                        await HandleSseRequestAsync(context, token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        context.Response.StatusCode = 404;
+                        context.Response.Close();
+                    }
                 }
             }
             catch (Exception ex)

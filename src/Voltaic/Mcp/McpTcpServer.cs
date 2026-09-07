@@ -176,6 +176,47 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Registers a tool whose handler additionally receives the authenticated caller for the current
+        /// request via the ambient <see cref="RpcCallContext.Current"/>. The base TCP transport performs no
+        /// authentication, so the context is null unless a derived transport populates it.
+        /// </summary>
+        /// <param name="name">Tool name.</param>
+        /// <param name="description">Tool description.</param>
+        /// <param name="inputSchema">Input JSON schema.</param>
+        /// <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+        public void RegisterTool(string name, string description, object inputSchema, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, null), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool with input and output schema metadata whose handler additionally receives the
+        /// authenticated caller for the current request.
+        /// </summary>
+        /// <param name="name">Tool name.</param>
+        /// <param name="description">Tool description.</param>
+        /// <param name="inputSchema">Input JSON schema.</param>
+        /// <param name="outputSchema">Output JSON schema.</param>
+        /// <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+        public void RegisterTool(string name, string description, object inputSchema, object? outputSchema, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            RegisterTool(CreateToolDefinition(name, description, inputSchema, outputSchema), handler);
+        }
+
+        /// <summary>
+        /// Registers a tool from a full tool definition whose handler additionally receives the
+        /// authenticated caller for the current request.
+        /// </summary>
+        /// <param name="definition">Tool metadata.</param>
+        /// <param name="handler">Tool handler receiving caller context and cancellation support.</param>
+        /// <exception cref="ArgumentNullException">Thrown when handler is null.</exception>
+        public void RegisterTool(ToolDefinition definition, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            RegisterTool(definition, (RpcParameters? args, CancellationToken token) => handler(args, RpcCallContext.Current, token));
+        }
+
+        /// <summary>
         /// Registers a static MCP resource with a synchronous read handler.
         /// </summary>
         /// <param name="uri">Resource URI.</param>
