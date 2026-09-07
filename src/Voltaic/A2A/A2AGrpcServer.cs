@@ -180,140 +180,140 @@ namespace Voltaic.A2A
                 // to copies it onto the A2ARequestContext handed to the agent handler.
                 using (A2ACallerContext.Push(caller))
                 {
-                if (EnableAgentCardEndpoints &&
-                    context.Request.Method == WatsonHttpMethod.GET &&
-                    StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.AgentCardPath))
-                {
-                    await SendJsonAsync(context, AgentCard, context.Token).ConfigureAwait(false);
-                    return;
-                }
+                    if (EnableAgentCardEndpoints &&
+                        context.Request.Method == WatsonHttpMethod.GET &&
+                        StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.AgentCardPath))
+                    {
+                        await SendJsonAsync(context, AgentCard, context.Token).ConfigureAwait(false);
+                        return;
+                    }
 
-                if (EnableAgentCardEndpoints &&
-                    context.Request.Method == WatsonHttpMethod.GET &&
-                    StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.ExtendedAgentCardPath))
-                {
-                    await SendJsonAsync(context, GetExtendedAgentCard(), context.Token).ConfigureAwait(false);
-                    return;
-                }
+                    if (EnableAgentCardEndpoints &&
+                        context.Request.Method == WatsonHttpMethod.GET &&
+                        StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.ExtendedAgentCardPath))
+                    {
+                        await SendJsonAsync(context, GetExtendedAgentCard(), context.Token).ConfigureAwait(false);
+                        return;
+                    }
 
-                if (context.Request.Method != WatsonHttpMethod.POST || !path.StartsWith(A2AGrpcWire.ServicePrefix, StringComparison.Ordinal))
-                {
-                    await SendTextAsync(context, 404, "Not found", context.Token).ConfigureAwait(false);
-                    return;
-                }
+                    if (context.Request.Method != WatsonHttpMethod.POST || !path.StartsWith(A2AGrpcWire.ServicePrefix, StringComparison.Ordinal))
+                    {
+                        await SendTextAsync(context, 404, "Not found", context.Token).ConfigureAwait(false);
+                        return;
+                    }
 
-                if (context.Protocol != HttpProtocol.Http2 && context.Protocol != HttpProtocol.Http3)
-                {
-                    await SendTextAsync(context, 426, "A2A gRPC requires HTTP/2.", context.Token).ConfigureAwait(false);
-                    return;
-                }
+                    if (context.Protocol != HttpProtocol.Http2 && context.Protocol != HttpProtocol.Http3)
+                    {
+                        await SendTextAsync(context, 426, "A2A gRPC requires HTTP/2.", context.Token).ConfigureAwait(false);
+                        return;
+                    }
 
-                byte[] body = await context.Request.ReadBodyAsync(context.Token).ConfigureAwait(false);
-                byte[] payload = A2AGrpcWire.DecodeSinglePayload(body);
+                    byte[] body = await context.Request.ReadBodyAsync(context.Token).ConfigureAwait(false);
+                    byte[] payload = A2AGrpcWire.DecodeSinglePayload(body);
 
-                switch (path)
-                {
-                    case A2AGrpcWire.SendMessagePath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.SendMessageRequest.Parser.ParseFrom(payload),
-                            request => _Endpoint.SendMessageAsync(A2AGrpcWire.FromGrpc(request), false, context.Token),
-                            response => A2AGrpcWire.ToGrpc(response),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                    switch (path)
+                    {
+                        case A2AGrpcWire.SendMessagePath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.SendMessageRequest.Parser.ParseFrom(payload),
+                                request => _Endpoint.SendMessageAsync(A2AGrpcWire.FromGrpc(request), false, context.Token),
+                                response => A2AGrpcWire.ToGrpc(response),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.SendStreamingMessagePath:
-                        await SendStreamAsync(
-                            context,
-                            _Endpoint.SendStreamingMessageAsync(A2AGrpcWire.FromGrpc(GrpcWire.SendMessageRequest.Parser.ParseFrom(payload)), context.Token),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.SendStreamingMessagePath:
+                            await SendStreamAsync(
+                                context,
+                                _Endpoint.SendStreamingMessageAsync(A2AGrpcWire.FromGrpc(GrpcWire.SendMessageRequest.Parser.ParseFrom(payload)), context.Token),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.GetTaskPath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.GetTaskRequest.Parser.ParseFrom(payload),
-                            request => _Endpoint.GetTaskAsync(A2AGrpcWire.FromGrpc(request), context.Token),
-                            response => A2AGrpcWire.ToGrpc(response),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.GetTaskPath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.GetTaskRequest.Parser.ParseFrom(payload),
+                                request => _Endpoint.GetTaskAsync(A2AGrpcWire.FromGrpc(request), context.Token),
+                                response => A2AGrpcWire.ToGrpc(response),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.ListTasksPath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.ListTasksRequest.Parser.ParseFrom(payload),
-                            request => _Endpoint.ListTasksAsync(A2AGrpcWire.FromGrpc(request), context.Token),
-                            response => A2AGrpcWire.ToGrpc(response),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.ListTasksPath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.ListTasksRequest.Parser.ParseFrom(payload),
+                                request => _Endpoint.ListTasksAsync(A2AGrpcWire.FromGrpc(request), context.Token),
+                                response => A2AGrpcWire.ToGrpc(response),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.CancelTaskPath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.CancelTaskRequest.Parser.ParseFrom(payload),
-                            request => _Endpoint.CancelTaskAsync(A2AGrpcWire.FromGrpc(request), context.Token),
-                            response => A2AGrpcWire.ToGrpc(response),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.CancelTaskPath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.CancelTaskRequest.Parser.ParseFrom(payload),
+                                request => _Endpoint.CancelTaskAsync(A2AGrpcWire.FromGrpc(request), context.Token),
+                                response => A2AGrpcWire.ToGrpc(response),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.SubscribeToTaskPath:
-                        await SendStreamAsync(
-                            context,
-                            _Endpoint.SubscribeToTaskAsync(A2AGrpcWire.FromGrpc(GrpcWire.SubscribeToTaskRequest.Parser.ParseFrom(payload)), context.Token),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.SubscribeToTaskPath:
+                            await SendStreamAsync(
+                                context,
+                                _Endpoint.SubscribeToTaskAsync(A2AGrpcWire.FromGrpc(GrpcWire.SubscribeToTaskRequest.Parser.ParseFrom(payload)), context.Token),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.CreateTaskPushNotificationConfigPath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.TaskPushNotificationConfig.Parser.ParseFrom(payload),
-                            request => _Endpoint.CreateTaskPushNotificationConfigAsync(A2AGrpcWire.ToCreateRequest(request), context.Token),
-                            response => A2AGrpcWire.ToGrpc(response),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.CreateTaskPushNotificationConfigPath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.TaskPushNotificationConfig.Parser.ParseFrom(payload),
+                                request => _Endpoint.CreateTaskPushNotificationConfigAsync(A2AGrpcWire.ToCreateRequest(request), context.Token),
+                                response => A2AGrpcWire.ToGrpc(response),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.GetTaskPushNotificationConfigPath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.GetTaskPushNotificationConfigRequest.Parser.ParseFrom(payload),
-                            request => _Endpoint.GetTaskPushNotificationConfigAsync(A2AGrpcWire.FromGrpc(request), context.Token),
-                            response => A2AGrpcWire.ToGrpc(response),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.GetTaskPushNotificationConfigPath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.GetTaskPushNotificationConfigRequest.Parser.ParseFrom(payload),
+                                request => _Endpoint.GetTaskPushNotificationConfigAsync(A2AGrpcWire.FromGrpc(request), context.Token),
+                                response => A2AGrpcWire.ToGrpc(response),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.ListTaskPushNotificationConfigsPath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.ListTaskPushNotificationConfigsRequest.Parser.ParseFrom(payload),
-                            request => _Endpoint.ListTaskPushNotificationConfigAsync(A2AGrpcWire.FromGrpc(request), context.Token),
-                            response => A2AGrpcWire.ToGrpc(response),
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.ListTaskPushNotificationConfigsPath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.ListTaskPushNotificationConfigsRequest.Parser.ParseFrom(payload),
+                                request => _Endpoint.ListTaskPushNotificationConfigAsync(A2AGrpcWire.FromGrpc(request), context.Token),
+                                response => A2AGrpcWire.ToGrpc(response),
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.GetExtendedAgentCardPath:
-                        await SendUnaryAsync(context, A2AGrpcWire.ToGrpc(GetExtendedAgentCard()), context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.GetExtendedAgentCardPath:
+                            await SendUnaryAsync(context, A2AGrpcWire.ToGrpc(GetExtendedAgentCard()), context.Token).ConfigureAwait(false);
+                            break;
 
-                    case A2AGrpcWire.DeleteTaskPushNotificationConfigPath:
-                        await HandleUnaryAsync(
-                            context,
-                            GrpcWire.DeleteTaskPushNotificationConfigRequest.Parser.ParseFrom(payload),
-                            async request =>
-                            {
-                                await _Endpoint.DeleteTaskPushNotificationConfigAsync(A2AGrpcWire.FromGrpc(request), context.Token).ConfigureAwait(false);
-                                return new Empty();
-                            },
-                            response => response,
-                            context.Token).ConfigureAwait(false);
-                        break;
+                        case A2AGrpcWire.DeleteTaskPushNotificationConfigPath:
+                            await HandleUnaryAsync(
+                                context,
+                                GrpcWire.DeleteTaskPushNotificationConfigRequest.Parser.ParseFrom(payload),
+                                async request =>
+                                {
+                                    await _Endpoint.DeleteTaskPushNotificationConfigAsync(A2AGrpcWire.FromGrpc(request), context.Token).ConfigureAwait(false);
+                                    return new Empty();
+                                },
+                                response => response,
+                                context.Token).ConfigureAwait(false);
+                            break;
 
-                    default:
-                        await SendGrpcErrorAsync(
-                            context,
-                            new A2AProtocolException(A2AErrorCode.MethodNotFound, $"gRPC method path '{path}' was not found."),
-                            context.Token).ConfigureAwait(false);
-                        break;
-                }
+                        default:
+                            await SendGrpcErrorAsync(
+                                context,
+                                new A2AProtocolException(A2AErrorCode.MethodNotFound, $"gRPC method path '{path}' was not found."),
+                                context.Token).ConfigureAwait(false);
+                            break;
+                    }
                 }
             }
             catch (Exception ex)
