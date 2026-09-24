@@ -2282,9 +2282,35 @@
             Base result metadata shape used by MCP.
             </summary>
         </member>
+        <member name="F:Voltaic.Mcp.McpResult.ResultTypeComplete">
+            <summary>
+            The <c>resultType</c> value for a final result (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpResult.ResultTypeInputRequired">
+            <summary>
+            The <c>resultType</c> value for a Multi Round-Trip result that needs client input (2026-07-28+).
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpResult.ResultTypeTask">
+            <summary>
+            The <c>resultType</c> value for a result that created a task (2026-07-28 tasks extension).
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpResult.Meta">
             <summary>
             Gets or sets protocol metadata.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpResult.ResultType">
+            <summary>
+            Gets or sets the result discriminator required by stateless-era revisions (2026-07-28+):
+            <c>complete</c> (<see cref="F:Voltaic.Mcp.McpResult.ResultTypeComplete"/>) for a final result, <c>input_required</c>
+            (<see cref="F:Voltaic.Mcp.McpResult.ResultTypeInputRequired"/>) for a Multi Round-Trip result, or <c>task</c>
+            (<see cref="F:Voltaic.Mcp.McpResult.ResultTypeTask"/>) for a created task. Null by default, which omits the field from
+            the wire, as handshake-era revisions require. Voltaic servers set <c>complete</c> automatically
+            on built-in results served under a stateless-era revision when this value is null, and never
+            overwrite a value a handler has already set.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpPaginatedResult">
@@ -2526,9 +2552,10 @@
             via <see cref="P:Voltaic.Mcp.McpDiscoverResult.TtlMs"/> and <see cref="P:Voltaic.Mcp.McpDiscoverResult.CacheScope"/>.
             </summary>
         </member>
-        <member name="P:Voltaic.Mcp.McpDiscoverResult.ResultType">
+        <member name="M:Voltaic.Mcp.McpDiscoverResult.#ctor">
             <summary>
-            Gets or sets the result discriminator. Always <c>complete</c> for a discovery result.
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpDiscoverResult"/> class with
+            <see cref="P:Voltaic.Mcp.McpResult.ResultType"/> set to <c>complete</c>, the discriminator for a discovery result.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpDiscoverResult.SupportedVersions">
@@ -2596,6 +2623,15 @@
             <summary>
             Typed, recursive view of the subset of JSON Schema that Voltaic validates
             (<c>type</c>, <c>required</c>, and <c>properties</c>). Other keywords are ignored.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpEmptyResult">
+            <summary>
+            An MCP result with no payload, returned by requests whose success carries no data, such as
+            <c>ping</c>, <c>resources/subscribe</c>, <c>resources/unsubscribe</c>, and
+            <c>logging/setLevel</c>. Under handshake-era revisions it serializes to <c>{}</c>. Under a
+            stateless-era revision (2026-07-28+) Voltaic servers set <see cref="P:Voltaic.Mcp.McpResult.ResultType"/> to
+            <c>complete</c>, so it serializes to <c>{"resultType":"complete"}</c>.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpHttpClient">
@@ -2898,9 +2934,25 @@
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.ProtocolVersion">
             <summary>
-            Gets or sets the MCP protocol version.
-            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
+            request names no version. It does not cap negotiation; see
+            <see cref="P:Voltaic.Mcp.McpHttpServer.MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
+            <see cref="P:Voltaic.Mcp.McpHttpServer.MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
+            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.MaximumHandshakeProtocolVersion">
+            <summary>
+            Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
+            handshake. A client that requests a newer revision, or a stateless-era revision such as
+            <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
+            this value, following the MCP rule that a server responds with a version it supports.
+            Default is <see cref="P:Voltaic.Mcp.McpProtocol.NewestHandshakeProtocolVersion"/> (currently <c>2025-11-25</c>).
+            Lower it to pin clients to an older revision. Setting null restores the default.
+            Set this before the server starts accepting requests; it is not synchronized with in-flight
+            handshakes.
+            </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value is not a supported handshake-era revision (for example <c>2026-07-28</c> or an unknown version).</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.ServerName">
             <summary>
@@ -2952,6 +3004,9 @@
             The following endpoints always bypass authentication to allow connectivity validation:
             the health check endpoint (<c>/</c>) and the <c>ping</c> JSON-RPC method.
             CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
+            Authenticated requests run through exactly the same MCP protocol pipeline as unauthenticated
+            ones (version resolution, stateless 2026-07-28 routing, batching rules, and session tracking),
+            so setting a handler never changes protocol behavior.
             </summary>
         </member>
         <member name="E:Voltaic.Mcp.McpHttpServer.Log">
@@ -2998,6 +3053,14 @@
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+            <remarks>
+            When a request is served under the stateless 2026-07-28 revision, a result that derives from
+            <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
+            receives the <c>resultType</c> that revision requires, and cacheable results receive
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+            serialized unmodified, so a custom method that must serve stateless clients should return an
+            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
@@ -3008,6 +3071,14 @@
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+            <remarks>
+            When a request is served under the stateless 2026-07-28 revision, a result that derives from
+            <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
+            receives the <c>resultType</c> that revision requires, and cacheable results receive
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+            serialized unmodified, so a custom method that must serve stateless clients should return an
+            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
@@ -3018,6 +3089,14 @@
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+            <remarks>
+            When a request is served under the stateless 2026-07-28 revision, a result that derives from
+            <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
+            receives the <c>resultType</c> that revision requires, and cacheable results receive
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+            serialized unmodified, so a custom method that must serve stateless clients should return an
+            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
@@ -3116,6 +3195,14 @@
             </summary>
             <param name="name">The name of the method to register.</param>
             <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+            <remarks>
+            When a request is served under the stateless 2026-07-28 revision, a result that derives from
+            <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
+            receives the <c>resultType</c> that revision requires, and cacheable results receive
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+            serialized unmodified, so a custom method that must serve stateless clients should return an
+            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
@@ -3344,7 +3431,7 @@
             Sets the Mcp-Session-Id header on the response.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.HandleMcpRequestAsync(System.Net.HttpListenerContext,System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Mcp.McpHttpServer.HandleMcpRequestAsync(System.Net.HttpListenerContext,System.String,System.Threading.CancellationToken)">
             <summary>
             Handles requests on the MCP Streamable HTTP endpoint (/mcp by default).
             POST: JSON-RPC requests (same as /rpc, but with Mcp-Session-Id header).
@@ -3353,24 +3440,12 @@
             This provides compatibility with the MCP Streamable HTTP transport specification.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.String,System.Threading.CancellationToken)">
             <summary>
             Handles a POST to the MCP endpoint that resolved to the stateless (2026-07-28) era.
             Validates the required routing headers, dispatches through the shared registry without
             creating or echoing a session, and returns a single JSON response (or 202 for a
             notification). An unknown method returns HTTP 404 with a JSON-RPC method-not-found error.
-            </summary>
-        </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.HandlePreAuthRpcRequestAsync(System.Net.HttpListenerContext,System.String,System.Threading.CancellationToken)">
-            <summary>
-            Handles a ping request that bypassed authentication.
-            The request body has already been read and parsed.
-            </summary>
-        </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.HandlePreReadRpcRequestAsync(System.Net.HttpListenerContext,System.String,System.String,System.Threading.CancellationToken)">
-            <summary>
-            Handles an RPC request where the body was already read during authentication inspection.
-            Routes to the appropriate handler (MCP or RPC) based on the request path.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpInCoreTask">
@@ -3547,9 +3622,10 @@
             or <see cref="P:Voltaic.Mcp.McpInputRequiredResult.RequestState"/>.
             </summary>
         </member>
-        <member name="P:Voltaic.Mcp.McpInputRequiredResult.ResultType">
+        <member name="M:Voltaic.Mcp.McpInputRequiredResult.#ctor">
             <summary>
-            Gets or sets the result discriminator. Always <c>input_required</c>.
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpInputRequiredResult"/> class with
+            <see cref="P:Voltaic.Mcp.McpResult.ResultType"/> set to <c>input_required</c>.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpInputRequiredResult.InputRequests">
@@ -3781,15 +3857,56 @@
             <returns>The era of the version.</returns>
             <exception cref="T:System.ArgumentException">Thrown when the version is unsupported.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpProtocol.NewestHandshakeProtocolVersion">
+            <summary>
+            Gets the newest handshake-era revision in the registry (currently <c>2025-11-25</c>). This is
+            the newest revision an <c>initialize</c> handshake can agree to, because stateless-era revisions
+            define no <c>initialize</c> request and no sessions. The value is derived from
+            <see cref="P:Voltaic.Mcp.McpProtocol.SupportedVersions"/>, so it moves automatically when a newer handshake-era revision
+            is registered. Never null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocol.IsHandshakeVersion(System.String)">
+            <summary>
+            Determines whether the supplied version is a supported handshake-era revision, meaning it
+            can be negotiated through an <c>initialize</c> request.
+            </summary>
+            <param name="version">Protocol version to inspect. A null or blank value returns false.</param>
+            <returns>True when the version is supported and belongs to <see cref="F:Voltaic.Mcp.McpProtocolEra.Handshake"/>.</returns>
+        </member>
         <member name="M:Voltaic.Mcp.McpProtocol.NegotiateVersion(System.String)">
             <summary>
             Negotiates a protocol version from a client-requested version.
             When no version is requested, the default handshake version
             (<see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>) is returned for backward compatibility.
+            This method is era-agnostic: it returns any supported version unchanged, including the
+            stateless <c>2026-07-28</c> revision. Callers answering an <c>initialize</c> request should use
+            <see cref="M:Voltaic.Mcp.McpProtocol.NegotiateHandshakeVersion(System.String,System.String)"/> instead, which never agrees to a
+            stateless-era revision.
             </summary>
             <param name="requestedVersion">The client-requested version. May be null or blank.</param>
             <returns>The version to use for the session.</returns>
             <exception cref="T:System.ArgumentException">Thrown when the requested version is unsupported.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocol.NegotiateHandshakeVersion(System.String,System.String)">
+            <summary>
+            Negotiates the protocol version for a session-based handshake (the <c>initialize</c> request).
+            A stateless-era revision cannot be negotiated through <c>initialize</c>, so a request for one is
+            answered with <paramref name="maximumHandshakeVersion"/>, the newest handshake-era revision the
+            server will speak. The rules are:
+            <list type="bullet">
+            <item><description>No version requested (null or blank): <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>, lowered to the maximum when the maximum is older.</description></item>
+            <item><description>A handshake-era version at or below the maximum: that version.</description></item>
+            <item><description>A handshake-era version above the maximum: the maximum.</description></item>
+            <item><description>A stateless-era version (for example <c>2026-07-28</c>): the maximum.</description></item>
+            <item><description>An unknown version: <see cref="T:System.ArgumentException"/>.</description></item>
+            </list>
+            This method is stateless and thread-safe.
+            </summary>
+            <param name="requestedVersion">The client-requested version. May be null or blank.</param>
+            <param name="maximumHandshakeVersion">The newest handshake-era version to agree to. Must be a supported handshake-era revision; see <see cref="P:Voltaic.Mcp.McpProtocol.NewestHandshakeProtocolVersion"/> for the usual value.</param>
+            <returns>The handshake-era version to use for the session. Never null.</returns>
+            <exception cref="T:System.ArgumentException">Thrown when <paramref name="requestedVersion"/> is not a supported version, or when <paramref name="maximumHandshakeVersion"/> is not a supported handshake-era revision.</exception>
         </member>
         <member name="T:Voltaic.Mcp.McpProtocolEra">
             <summary>
@@ -4188,9 +4305,25 @@
         </member>
         <member name="P:Voltaic.Mcp.McpServer.ProtocolVersion">
             <summary>
-            Gets or sets the MCP protocol version.
-            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
+            request names no version. It does not cap negotiation; see
+            <see cref="P:Voltaic.Mcp.McpServer.MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
+            <see cref="P:Voltaic.Mcp.McpServer.MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
+            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpServer.MaximumHandshakeProtocolVersion">
+            <summary>
+            Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
+            handshake. A client that requests a newer revision, or a stateless-era revision such as
+            <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
+            this value, following the MCP rule that a server responds with a version it supports.
+            Default is <see cref="P:Voltaic.Mcp.McpProtocol.NewestHandshakeProtocolVersion"/> (currently <c>2025-11-25</c>).
+            Lower it to pin clients to an older revision. Setting null restores the default.
+            Set this before the server starts accepting requests; it is not synchronized with in-flight
+            handshakes.
+            </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value is not a supported handshake-era revision (for example <c>2026-07-28</c> or an unknown version).</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpServer.ServerName">
             <summary>
@@ -4530,9 +4663,10 @@
             <c>task</c>.
             </summary>
         </member>
-        <member name="P:Voltaic.Mcp.McpCreateTaskResult.ResultType">
+        <member name="M:Voltaic.Mcp.McpCreateTaskResult.#ctor">
             <summary>
-            Gets or sets the result discriminator. Always <c>task</c>.
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpCreateTaskResult"/> class with
+            <see cref="P:Voltaic.Mcp.McpResult.ResultType"/> set to <c>task</c>.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpUpdateTaskParams">
@@ -4557,9 +4691,10 @@
             (2026-07-28 tasks extension), with <c>resultType</c> set to <c>complete</c>.
             </summary>
         </member>
-        <member name="P:Voltaic.Mcp.McpTaskAck.ResultType">
+        <member name="M:Voltaic.Mcp.McpTaskAck.#ctor">
             <summary>
-            Gets or sets the result discriminator. Always <c>complete</c>.
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpTaskAck"/> class with
+            <see cref="P:Voltaic.Mcp.McpResult.ResultType"/> set to <c>complete</c>.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpTcpClient">
@@ -4581,9 +4716,25 @@
         </member>
         <member name="P:Voltaic.Mcp.McpTcpServer.ProtocolVersion">
             <summary>
-            Gets or sets the MCP protocol version.
-            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
+            request names no version. It does not cap negotiation; see
+            <see cref="P:Voltaic.Mcp.McpTcpServer.MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
+            <see cref="P:Voltaic.Mcp.McpTcpServer.MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
+            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.MaximumHandshakeProtocolVersion">
+            <summary>
+            Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
+            handshake. A client that requests a newer revision, or a stateless-era revision such as
+            <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
+            this value, following the MCP rule that a server responds with a version it supports.
+            Default is <see cref="P:Voltaic.Mcp.McpProtocol.NewestHandshakeProtocolVersion"/> (currently <c>2025-11-25</c>).
+            Lower it to pin clients to an older revision. Setting null restores the default.
+            Set this before the server starts accepting requests; it is not synchronized with in-flight
+            handshakes.
+            </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value is not a supported handshake-era revision (for example <c>2026-07-28</c> or an unknown version).</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpTcpServer.ServerName">
             <summary>
@@ -5172,9 +5323,25 @@
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsServer.ProtocolVersion">
             <summary>
-            Gets or sets the MCP protocol version.
-            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
+            request names no version. It does not cap negotiation; see
+            <see cref="P:Voltaic.Mcp.McpWebsocketsServer.MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
+            <see cref="P:Voltaic.Mcp.McpWebsocketsServer.MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
+            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.MaximumHandshakeProtocolVersion">
+            <summary>
+            Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
+            handshake. A client that requests a newer revision, or a stateless-era revision such as
+            <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
+            this value, following the MCP rule that a server responds with a version it supports.
+            Default is <see cref="P:Voltaic.Mcp.McpProtocol.NewestHandshakeProtocolVersion"/> (currently <c>2025-11-25</c>).
+            Lower it to pin clients to an older revision. Setting null restores the default.
+            Set this before the server starts accepting requests; it is not synchronized with in-flight
+            handshakes.
+            </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value is not a supported handshake-era revision (for example <c>2026-07-28</c> or an unknown version).</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsServer.ServerName">
             <summary>

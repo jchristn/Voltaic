@@ -34,10 +34,13 @@ namespace Voltaic.Mcp
     public class McpInputRequiredResult : McpResult
     {
         /// <summary>
-        /// Gets or sets the result discriminator. Always <c>input_required</c>.
+        /// Initializes a new instance of the <see cref="McpInputRequiredResult"/> class with
+        /// <see cref="McpResult.ResultType"/> set to <c>input_required</c>.
         /// </summary>
-        [JsonPropertyName("resultType")]
-        public string ResultType { get; set; } = "input_required";
+        public McpInputRequiredResult()
+        {
+            ResultType = ResultTypeInputRequired;
+        }
 
         /// <summary>
         /// Gets or sets the map of server-initiated requests the client must fulfill. Keys are

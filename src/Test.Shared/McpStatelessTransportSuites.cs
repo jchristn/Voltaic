@@ -212,7 +212,7 @@ namespace Test.Shared
 
                         TestAssert.Equal(HttpStatusCode.OK, response.StatusCode, "The retry should succeed.");
                         string body = await BodyAsync(response, ct).ConfigureAwait(false);
-                        TestAssert.Null(RpcResponseHelpers.ResultType(body), "The final result is a normal tool result, not input_required.");
+                        TestAssert.Equal("complete", RpcResponseHelpers.ResultType(body), "The final result is a normal tool result (resultType complete), not input_required.");
                         McpToolCallResult? result = RpcResponseHelpers.ResultAs<McpToolCallResult>(body);
                         TestAssert.NotNull(result, "Final result should deserialize.");
                         TestAssert.True(result!.Content.Count > 0, "The final result should carry content.");

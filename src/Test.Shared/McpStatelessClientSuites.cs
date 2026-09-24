@@ -76,7 +76,7 @@ namespace Test.Shared
 
                         TestAssert.True(callbackInvoked, "The input-response callback should be invoked.");
                         TestAssert.Null(response.Error, "The final response should not error.");
-                        TestAssert.Null(ResultTypeOf(response.Result), "The final response should be a normal tool result.");
+                        TestAssert.Equal("complete", ResultTypeOf(response.Result), "The final response should be a normal tool result, which the 2026-07-28 revision marks resultType complete.");
                         McpToolCallResult? result = Deserialize<McpToolCallResult>(response.Result);
                         TestAssert.NotNull(result, "Final result should deserialize.");
                         TestAssert.True(result!.Content.Count > 0, "Final result should carry content.");

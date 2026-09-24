@@ -1,6 +1,6 @@
-# DOM Removal Migration (v0.6.0, breaking — pre-1.0 ALPHA)
+# DOM Removal Migration (v0.6.0, breaking, pre-1.0)
 
-> Voltaic is pre-1.0 ALPHA; the README states surfaces are likely to shift, so this breaking
+> Voltaic was pre-1.0 at the time; the README then stated surfaces were likely to shift, so this breaking
 > change lands under v0.6.0 rather than forcing a 1.0.0. Semver-stable begins at 1.0.0.
 
 Goal: remove every use of `System.Text.Json` DOM types — `JsonElement`, `JsonDocument`, `JsonNode`,
@@ -53,4 +53,4 @@ warning-free on net8.0 and net10.0; console suite 313/313 on both.
 
 ## Release
 
-Staying on `v0.6.0` (pre-1.0 ALPHA); no version bump.
+Staying on `v0.6.0` (pre-1.0); no version bump.

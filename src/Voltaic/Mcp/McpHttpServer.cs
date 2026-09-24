@@ -79,13 +79,44 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets the MCP protocol version.
-        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
+        /// Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
+        /// request names no version. It does not cap negotiation; see
+        /// <see cref="MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
+        /// <see cref="MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
+        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
         /// </summary>
         public string ProtocolVersion
         {
             get => _Endpoint.ProtocolVersion;
             set => _Endpoint.ProtocolVersion = value ?? McpProtocol.LatestProtocolVersion;
+        }
+
+        /// <summary>
+        /// Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
+        /// handshake. A client that requests a newer revision, or a stateless-era revision such as
+        /// <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
+        /// this value, following the MCP rule that a server responds with a version it supports.
+        /// Default is <see cref="McpProtocol.NewestHandshakeProtocolVersion"/> (currently <c>2025-11-25</c>).
+        /// Lower it to pin clients to an older revision. Setting null restores the default.
+        /// Set this before the server starts accepting requests; it is not synchronized with in-flight
+        /// handshakes.
+        /// </summary>
+        /// <exception cref="ArgumentException">Thrown when the value is not a supported handshake-era revision (for example <c>2026-07-28</c> or an unknown version).</exception>
+        public string MaximumHandshakeProtocolVersion
+        {
+            get => _Endpoint.MaximumHandshakeProtocolVersion;
+            set
+            {
+                string version = value ?? McpProtocol.NewestHandshakeProtocolVersion;
+                if (!McpProtocol.IsHandshakeVersion(version))
+                {
+                    throw new ArgumentException(
+                        $"'{version}' is not a supported handshake-era MCP protocol revision. Supported handshake-era revisions: {String.Join(", ", McpProtocol.SupportedVersions.Where(info => info.Era == McpProtocolEra.Handshake).Select(info => info.Version))}.",
+                        nameof(value));
+                }
+
+                _Endpoint.MaximumHandshakeProtocolVersion = version;
+            }
         }
 
         /// <summary>
@@ -161,6 +192,9 @@ namespace Voltaic.Mcp
         /// The following endpoints always bypass authentication to allow connectivity validation:
         /// the health check endpoint (<c>/</c>) and the <c>ping</c> JSON-RPC method.
         /// CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
+        /// Authenticated requests run through exactly the same MCP protocol pipeline as unauthenticated
+        /// ones (version resolution, stateless 2026-07-28 routing, batching rules, and session tracking),
+        /// so setting a handler never changes protocol behavior.
         /// </summary>
         public Func<HttpListenerRequest, Task<AuthenticationResult>>? AuthenticationHandler
         {
@@ -258,6 +292,14 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <remarks>
+        /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
+        /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
+        /// receives the <c>resultType</c> that revision requires, and cacheable results receive
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+        /// serialized unmodified, so a custom method that must serve stateless clients should return an
+        /// <see cref="McpResult"/> subclass.
+        /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, object> handler)
         {
@@ -274,6 +316,14 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The async function that handles the method invocation. Receives optional JSON parameters and returns a result object.</param>
+        /// <remarks>
+        /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
+        /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
+        /// receives the <c>resultType</c> that revision requires, and cacheable results receive
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+        /// serialized unmodified, so a custom method that must serve stateless clients should return an
+        /// <see cref="McpResult"/> subclass.
+        /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, Task<object>> handler)
         {
@@ -290,6 +340,14 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The async function that handles the method invocation with cancellation support.</param>
+        /// <remarks>
+        /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
+        /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
+        /// receives the <c>resultType</c> that revision requires, and cacheable results receive
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+        /// serialized unmodified, so a custom method that must serve stateless clients should return an
+        /// <see cref="McpResult"/> subclass.
+        /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, CancellationToken, Task<object>> handler)
         {
@@ -430,6 +488,14 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="name">The name of the method to register.</param>
         /// <param name="handler">The async function that handles the method invocation with caller context and cancellation support.</param>
+        /// <remarks>
+        /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
+        /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
+        /// receives the <c>resultType</c> that revision requires, and cacheable results receive
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
+        /// serialized unmodified, so a custom method that must serve stateless clients should return an
+        /// <see cref="McpResult"/> subclass.
+        /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
         {
@@ -1065,11 +1131,16 @@ namespace Voltaic.Mcp
                     return;
                 }
 
+                // The request body, when it had to be read before routing (to inspect the method for the
+                // ping bypass). Null means the handler below reads the body itself. Both cases run the same
+                // routing and protocol pipeline, so authentication never changes protocol behavior.
+                string? requestBody = null;
+                bool isPingBypass = false;
+
                 // Authenticate request if handler is configured
                 if (_AuthenticationHandler != null)
                 {
                     // Buffer the request body so we can inspect the method for ping bypass
-                    string? requestBody = null;
                     if (context.Request.HttpMethod == "POST" && context.Request.HasEntityBody)
                     {
                         using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: true))
@@ -1083,19 +1154,18 @@ namespace Voltaic.Mcp
                             try
                             {
                                 JsonRpcRequest? rpcRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
-                                if (rpcRequest != null && rpcRequest.Method == "ping")
-                                {
-                                    await HandlePreAuthRpcRequestAsync(context, requestBody, token).ConfigureAwait(false);
-                                    return;
-                                }
+                                isPingBypass = rpcRequest != null && rpcRequest.Method == "ping";
                             }
                             catch (JsonException)
                             {
-                                // Not valid JSON-RPC — fall through to auth check
+                                // Not valid JSON-RPC, so fall through to the auth check
                             }
                         }
                     }
+                }
 
+                if (_AuthenticationHandler != null && !isPingBypass)
+                {
                     AuthenticationResult authResult = await _AuthenticationHandler(context.Request).ConfigureAwait(false);
                     if (!authResult.IsAuthenticated)
                     {
@@ -1121,17 +1191,6 @@ namespace Voltaic.Mcp
 
                     // Make the authenticated caller ambient for the remainder of this request.
                     callContext = new RpcCallContext(authResult.Principal, authResult.Claims);
-
-                    // If we already buffered the body, pass it through to avoid re-reading
-                    if (requestBody != null)
-                    {
-                        using (RpcCallContext.Push(callContext))
-                        {
-                            await HandlePreReadRpcRequestAsync(context, path, requestBody, token).ConfigureAwait(false);
-                        }
-
-                        return;
-                    }
                 }
 
                 // Push the ambient caller context (a no-op that restores null when unauthenticated) so it
@@ -1140,11 +1199,11 @@ namespace Voltaic.Mcp
                 {
                     if (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath))
                     {
-                        await HandleMcpRequestAsync(context, token).ConfigureAwait(false);
+                        await HandleMcpRequestAsync(context, requestBody, token).ConfigureAwait(false);
                     }
                     else if (path.StartsWith(_RpcPath))
                     {
-                        await HandleRpcRequestAsync(context, token).ConfigureAwait(false);
+                        await HandleRpcRequestAsync(context, requestBody, token).ConfigureAwait(false);
                     }
                     else if (path.StartsWith(_EventsPath))
                     {
@@ -1198,7 +1257,7 @@ namespace Voltaic.Mcp
         /// DELETE: Session termination.
         /// This provides compatibility with the MCP Streamable HTTP transport specification.
         /// </summary>
-        private async Task HandleMcpRequestAsync(HttpListenerContext context, CancellationToken token)
+        private async Task HandleMcpRequestAsync(HttpListenerContext context, string? preReadBody, CancellationToken token)
         {
             string method = context.Request.HttpMethod;
 
@@ -1210,12 +1269,9 @@ namespace Voltaic.Mcp
                     return;
                 }
 
-                // Read the request body once; both the stateless and handshake paths reuse it.
-                string requestBody;
-                using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
-                {
-                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
-                }
+                // Read the request body once; both the stateless and handshake paths reuse it. The
+                // authentication step may already have read it.
+                string requestBody = preReadBody ?? await ReadRequestBodyAsync(context).ConfigureAwait(false);
 
                 JsonRpcRequest? incomingRequest = null;
                 try
@@ -1244,9 +1300,14 @@ namespace Voltaic.Mcp
                     return;
                 }
 
-                if (resolved.Era == McpProtocolEra.Stateless)
+                // initialize is a handshake-era request by definition: stateless-era revisions define no
+                // initialize and no sessions. It always takes the handshake path, where negotiation is capped
+                // at MaximumHandshakeProtocolVersion, even when a stateless-era version header accompanies it.
+                bool isHandshakeRequest = incomingRequest != null && StringComparer.Ordinal.Equals(incomingRequest.Method, "initialize");
+
+                if (resolved.Era == McpProtocolEra.Stateless && !isHandshakeRequest)
                 {
-                    await HandleStatelessPostAsync(context, incomingRequest, requestBody, bodyName, token).ConfigureAwait(false);
+                    await HandleStatelessPostAsync(context, incomingRequest, requestBody, bodyName, resolved.Version, token).ConfigureAwait(false);
                     return;
                 }
 
@@ -1491,6 +1552,7 @@ namespace Voltaic.Mcp
             JsonRpcRequest? incomingRequest,
             string requestBody,
             string? bodyName,
+            string protocolVersion,
             CancellationToken token)
         {
             string? bodyMethod = incomingRequest?.Method;
@@ -1569,7 +1631,20 @@ namespace Voltaic.Mcp
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "application/json";
 
-            string responseJson = JsonSerializer.Serialize(response);
+            // Stateless-era revisions require resultType on every result, and ttlMs/cacheScope on cacheable
+            // results. Fill in whatever the result lacks, serialize, then revert so a result instance a
+            // handler reuses across requests never carries these fields into a handshake-era response.
+            McpStatelessResultStamp? stamp = McpStatelessResultStamper.ApplyForVersion(response, protocolVersion);
+            string responseJson;
+            try
+            {
+                responseJson = JsonSerializer.Serialize(response);
+            }
+            finally
+            {
+                stamp?.Revert();
+            }
+
             byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
             context.Response.ContentLength64 = buffer.Length;
             await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
@@ -1803,132 +1878,6 @@ namespace Voltaic.Mcp
             context.Response.Close();
         }
 
-        /// <summary>
-        /// Handles a ping request that bypassed authentication.
-        /// The request body has already been read and parsed.
-        /// </summary>
-        private async Task HandlePreAuthRpcRequestAsync(HttpListenerContext context, string requestBody, CancellationToken token)
-        {
-            string path = context.Request.Url?.AbsolutePath ?? "";
-            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
-            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
-            {
-                ClientConnection newConnection = new ClientConnection(id);
-                newConnection.MaxQueueSize = _MaxQueueSize;
-                return newConnection;
-            });
-
-
-            LogMessage($"Pre-auth ping request from session {sessionId}");
-
-            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
-
-            if (_EnableCors)
-            {
-                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
-                    context.Response.AddHeader(kvp.Key, kvp.Value);
-            }
-
-            SetSessionIdHeaders(context.Response, sessionId);
-            context.Response.ContentType = "application/json";
-
-            string responseJson = JsonSerializer.Serialize(response);
-            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
-
-            context.Response.ContentLength64 = buffer.Length;
-            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-            context.Response.Close();
-        }
-
-        /// <summary>
-        /// Handles an RPC request where the body was already read during authentication inspection.
-        /// Routes to the appropriate handler (MCP or RPC) based on the request path.
-        /// </summary>
-        private async Task HandlePreReadRpcRequestAsync(HttpListenerContext context, string path, string requestBody, CancellationToken token)
-        {
-            bool isMcpRequest = !String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath);
-            if (isMcpRequest)
-            {
-                if (!ValidateProtocolVersionHeader(context))
-                {
-                    await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
-                    return;
-                }
-
-                if (!RequestAccepts(context, "application/json") || !RequestAccepts(context, "text/event-stream"))
-                {
-                    await SendTextResponseAsync(context, 406, "POST /mcp requires Accept: application/json, text/event-stream", token).ConfigureAwait(false);
-                    return;
-                }
-            }
-
-            string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
-            if (isMcpRequest && _TerminatedSessions.ContainsKey(sessionId))
-            {
-                await SendTextResponseAsync(context, 404, "Session was terminated", token).ConfigureAwait(false);
-                return;
-            }
-
-            bool isNewSession = !_Sessions.ContainsKey(sessionId);
-            ClientConnection connection = _Sessions.GetOrAdd(sessionId, (id) =>
-            {
-                ClientConnection newConnection = new ClientConnection(id);
-                newConnection.MaxQueueSize = _MaxQueueSize;
-                return newConnection;
-            });
-
-            if (isNewSession && _Sessions.ContainsKey(sessionId))
-            {
-                RaiseClientConnected(connection);
-            }
-
-
-
-            string logPrefix = (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath)) ? "MCP" : "RPC";
-            LogMessage($"{logPrefix} request from session {sessionId}: {requestBody}");
-
-            JsonRpcRequest? incomingRequest = null;
-            if (isMcpRequest)
-            {
-                try
-                {
-                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
-                }
-                catch (JsonException)
-                {
-                }
-            }
-
-            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
-
-            if (_EnableCors)
-            {
-                foreach (KeyValuePair<string, string> kvp in _CorsHeaders)
-                    context.Response.AddHeader(kvp.Key, kvp.Value);
-            }
-
-            SetSessionIdHeaders(context.Response, sessionId);
-
-            if (incomingRequest != null && incomingRequest.Id == null)
-            {
-                context.Response.StatusCode = 202;
-                context.Response.Close();
-                LogMessage($"{logPrefix} notification accepted for session {sessionId}: {incomingRequest.Method}");
-                return;
-            }
-
-            context.Response.ContentType = "application/json";
-
-            string responseJson = JsonSerializer.Serialize(response);
-            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
-
-            context.Response.ContentLength64 = buffer.Length;
-            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-            context.Response.Close();
-
-            LogMessage($"{logPrefix} response to session {sessionId}: {responseJson}");
-        }
-
         private async Task HandleHealthCheckAsync(HttpListenerContext context, CancellationToken token)
         {
             if (_EnableCors)
@@ -1950,7 +1899,15 @@ namespace Voltaic.Mcp
             context.Response.Close();
         }
 
-        private async Task HandleRpcRequestAsync(HttpListenerContext context, CancellationToken token)
+        private static async Task<string> ReadRequestBodyAsync(HttpListenerContext context)
+        {
+            using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
+            {
+                return await reader.ReadToEndAsync().ConfigureAwait(false);
+            }
+        }
+
+        private async Task HandleRpcRequestAsync(HttpListenerContext context, string? preReadBody, CancellationToken token)
         {
             if (context.Request.HttpMethod != "POST")
             {
@@ -1974,12 +1931,8 @@ namespace Voltaic.Mcp
                 RaiseClientConnected(connection);
             }
 
-            // Read request body
-            string requestBody;
-            using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
-            {
-                requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
-            }
+            // Read request body, unless the authentication step already read it
+            string requestBody = preReadBody ?? await ReadRequestBodyAsync(context).ConfigureAwait(false);
 
             LogMessage($"RPC request from session {sessionId}: {requestBody}");
 

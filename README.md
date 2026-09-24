@@ -10,9 +10,9 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v0.7.0 recognizes five MCP protocol revisions — `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28` — and targets A2A protocol version `1.0`. A server defaults to the `2025-11-25` handshake for backward compatibility and enters the stateless `2026-07-28` model only when a request selects it, so existing clients keep working unchanged. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Voltaic v1.1.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
-Version negotiation is driven by the `McpProtocol` registry and `McpVersionResolver`: each revision carries its era (handshake or stateless) and transport traits, and the resolver selects a version from the `MCP-Protocol-Version` header, the request-body `_meta`, or structural cues. This release adds the additive models the newer revisions need — `server/discover`, Multi Round-Trip Requests, cacheable list results, and both the `2025-11-25` in-core tasks and the `2026-07-28` tasks extension — while the transport, client, and extension wiring land incrementally on top of that foundation.
+An `initialize` handshake negotiates at most the newest handshake-era revision, `2025-11-25` (configurable with `MaximumHandshakeProtocolVersion`), because the stateless `2026-07-28` revision defines no `initialize` and no sessions. Clients reach `2026-07-28` through the stateless request path instead: `server/discover` followed by per-request `MCP-Protocol-Version`, `Mcp-Method`, and `_meta` signals. That is how current clients such as Claude Code 2.1.x connect, and Voltaic's stateless responses carry the `resultType`, `ttlMs`, and `cacheScope` fields the revision requires. Version selection is driven by the `McpProtocol` registry and `McpVersionResolver`, and it behaves identically with or without an `AuthenticationHandler`. See [Protocol version negotiation](#protocol-version-negotiation).
 
 ---
 
@@ -39,7 +39,7 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Send list-changed, resource-updated, progress, cancellation, and log-message notifications where the transport supports server-to-client notifications.
 - Host HTTP compatibility endpoints (`/rpc` and `/events`) alongside the current Streamable HTTP endpoint (`/mcp`).
 - Expose and consume A2A agents through dependency-light `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2AHttpServer`, and `A2AGrpcServer` classes without ASP.NET Core.
-- Run the same 337-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+- Run the same 405-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
 
 ## MCP Endpoint Requirements
 
@@ -47,7 +47,7 @@ MCP uses JSON-RPC method names for protocol endpoints. For Streamable HTTP, thos
 
 Every MCP connection starts with the lifecycle methods:
 
-- `initialize` - required first request. The client sends its supported protocol version, capabilities, and client info; the server responds with the negotiated protocol version, capabilities, and server info.
+- `initialize` - required first request for handshake-era revisions. The client sends its supported protocol version, capabilities, and client info; the server responds with the negotiated protocol version, capabilities, and server info. See [Protocol version negotiation](#protocol-version-negotiation) for the version the server answers with.
 - `notifications/initialized` - required client notification after successful initialization. Normal operation starts after this notification.
 
 Base utility methods:
@@ -70,6 +70,33 @@ Server feature endpoints are capability-driven. If your server advertises a capa
 - `logging` capability: `logging/setLevel` from client to server, plus server `notifications/message` when logs are emitted.
 
 Voltaic registers the protocol methods for its MCP server types when default methods are enabled. Your application registers the handlers and data behind those methods with `RegisterTool`, `RegisterResource`, `RegisterResourceTemplate`, `RegisterPrompt`, and `RegisterCompletionProvider`.
+
+### Protocol version negotiation
+
+MCP revisions fall into two eras. The handshake era (`2024-11-05` through `2025-11-25`) opens every connection with `initialize` and, on Streamable HTTP, an `MCP-Session-Id`. The stateless era (`2026-07-28`) has no `initialize` and no sessions: each request carries its own version in the `MCP-Protocol-Version` header and `_meta`, plus an `Mcp-Method` routing header, and clients learn what the server offers from `server/discover`.
+
+Because `initialize` belongs to the handshake era, every Voltaic MCP server (HTTP, stdio, TCP, and WebSocket) answers it as follows:
+
+| Client requests in `initialize` | Server answers |
+|---|---|
+| No version | `ProtocolVersion` (default `2025-11-25`), lowered to the cap if it is newer |
+| A handshake-era version at or below the cap | That version |
+| A handshake-era version above the cap | The cap |
+| A stateless-era version (`2026-07-28`) | The cap |
+| An unknown version | JSON-RPC error `-32602` (invalid params) |
+
+The cap is `MaximumHandshakeProtocolVersion`. It defaults to `McpProtocol.NewestHandshakeProtocolVersion` (`2025-11-25`), accepts only handshake-era revisions, and throws `ArgumentException` for anything else. Lower it to pin clients to an older revision:
+
+```csharp
+McpHttpServer server = new McpHttpServer("localhost", 8080);
+server.MaximumHandshakeProtocolVersion = McpProtocol.ProtocolVersion20250618;
+```
+
+A client that wants `2026-07-28` uses the stateless path on `McpHttpServer`, which is the only transport that serves it. Under that revision every result carries `resultType`: `complete` for a final result, `input_required` for a Multi Round-Trip result, or `task` for a created task. Cacheable results (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `resources/read`, and `server/discover`) also carry `ttlMs` and `cacheScope`. Voltaic fills these in on the way out. Values a handler sets itself are kept, as are `ListCacheTtlMs` and `ListCacheScope` when configured. Otherwise the defaults are `ttlMs: 0` and `cacheScope: "private"`, which mean "do not cache; the result is specific to the caller". Handshake-era responses never include these fields.
+
+`server/discover` does not advertise `listChanged` or `resources.subscribe`. Under `2026-07-28` those notifications are delivered through `subscriptions/listen`, which Voltaic does not implement yet. Handshake-era sessions still advertise and deliver them over SSE.
+
+A method you register yourself with `RegisterMethod` gets the same treatment when it returns an `McpResult` subclass (for example `McpEmptyResult` or `McpToolCallResult`). A plain object, such as an anonymous type, is serialized unmodified, so a custom method that stateless clients call should return an `McpResult` subclass.
 
 ## A2A Endpoint Requirements
 
@@ -824,6 +851,8 @@ The default `McpHttpServer` listens on all three HTTP endpoints:
 
 Set `mcpPath: null` in the constructor if you want to disable the Streamable HTTP endpoint.
 
+The same `/mcp` endpoint serves both handshake-era clients (`initialize` plus a session) and stateless `2026-07-28` clients (`server/discover` plus per-request headers), such as Claude Code 2.1.x. No configuration is needed for either; see [Protocol version negotiation](#protocol-version-negotiation).
+
 ### MCP Client (HTTP)
 
 ```csharp
@@ -863,6 +892,8 @@ Console.WriteLine(result);
 ```
 
 `ConnectStreamableAsync()` establishes the session and POST endpoint. Call `StartSseAsync()` when you want the SSE notification stream to become active on the same `/mcp` endpoint.
+
+When `McpHttpClient` talks to a server over the stateless `2026-07-28` path, it treats a result with `resultType: "input_required"` as a Multi Round-Trip request and any other result as final. A result with no `resultType` is also treated as final, so the client keeps working against servers that predate the field.
 
 ### MCP Server (WebSocket)
 
@@ -974,6 +1005,8 @@ The following requests bypass authentication so infrastructure can validate conn
 - **Health check** (`GET /`) - returns `{"status":"Ok"}` for load balancer probes.
 - **Ping** (`ping` JSON-RPC method via any RPC endpoint) - returns `"pong"` for application-layer connectivity checks.
 - **CORS preflight** (`OPTIONS` requests) - returns `204` with CORS headers.
+
+Setting an `AuthenticationHandler` never changes protocol behavior. Once a request is authenticated (or bypasses authentication, like `ping`), it runs through exactly the same MCP pipeline as on a server without a handler: version resolution, stateless `2026-07-28` routing, the batching rules, session tracking, and the `resultType`/cache fields on stateless results. Before v1.1.0, authenticated requests took a separate path that skipped most of these, and stateless clients such as Claude Code could not list tools on an authenticated server.
 
 Full authorization flows, such as OAuth 2.1 from the MCP specification, remain the responsibility of the application. `AuthenticationHandler` is the hook for plugging in the scheme your product already uses.
 
@@ -1100,7 +1133,7 @@ Check out the `src/Test.*` projects for working examples:
 - **Sample.A2AServer**: A2A Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended-card sample
 - **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
 - **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
-- **Test.Shared**: Shared Touchstone descriptors and the central 337-case API/protocol matrix
+- **Test.Shared**: Shared Touchstone descriptors and the central 405-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -1176,7 +1209,7 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 337 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 405 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json

@@ -42,22 +42,22 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | A2A push notification config models | Covered | `A2A.Protocol.PushNotificationConfigCrud`, `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.OfficialRestPushConfigBodyAccepted`, `A2A.Compatibility.HttpJsonClientRoutesMatchOfficialSdk` |
 | `McpClient` | Covered | `PublicApi.Clients.Validation.McpClient*`, `McpStdio.Integration.*` |
 | `McpHttpClient` | Covered | `PublicApi.Clients.Validation.McpHttpClient*`, `McpHttp.Client.Matrix.*` |
-| `McpHttpServer` | Covered | `PublicApi.Servers.Validation.McpHttpServer*`, `McpHttp.Protocol.*`, `McpHttp.Streamable.Matrix.*`, `McpHttp.Registry.Matrix.*` |
-| `McpServer` | Covered | `McpServer.Api.*`, `PublicApi.Servers.Validation.McpServer*` |
+| `McpHttpServer` | Covered | `PublicApi.Servers.Validation.McpHttpServer*`, `McpHttp.Protocol.*`, `McpHttp.Streamable.Matrix.*`, `McpHttp.Registry.Matrix.*`, `McpHttp.Server.Negotiation.*` (`MaximumHandshakeProtocolVersion`), `McpHttp.Server.AuthParity.*` (authenticated and unauthenticated requests share one pipeline), `McpVersion.StatelessResults.*` |
+| `McpServer` | Covered | `McpServer.Api.*`, `PublicApi.Servers.Validation.McpServer*`, `McpStdio.*.InitializeRequesting20260728NegotiatesHandshake`, `McpHttp.Server.Negotiation.MaximumHandshakeProtocolVersionValidatedOnEveryServer` |
 | `McpTcpClient` | Covered | `PublicApi.Clients.Validation.McpTcpClientIsJsonRpcClient`, `McpTcp.Parity.*` |
-| `McpTcpServer` | Covered | `PublicApi.Servers.Validation.McpTcpServer*`, `McpTcp.Parity.*` |
+| `McpTcpServer` | Covered | `PublicApi.Servers.Validation.McpTcpServer*`, `McpTcp.Parity.*` (including `InitializeRequesting20260728NegotiatesHandshake` and `MaximumHandshakeProtocolVersionHonored`) |
 | `McpWebsocketsClient` | Covered | `PublicApi.Clients.Validation.McpWebsocketsClient*`, `McpWebSocket.Parity.*` |
-| `McpWebsocketsServer` | Covered | `PublicApi.Servers.Validation.McpWebsocketsServer*`, `McpWebSocket.Parity.*` |
+| `McpWebsocketsServer` | Covered | `PublicApi.Servers.Validation.McpWebsocketsServer*`, `McpWebSocket.Parity.*` (including `InitializeRequesting20260728NegotiatesHandshake` and `MaximumHandshakeProtocolVersionHonored`) |
 | `MessageFraming` | Covered | `MessageFraming.*`, `MessageFraming.Edge.*` |
 | `RequestSentEventArgs` | Covered | `ModelApi.Supporting.RequestSentEventArgs`, `JsonRpc.Tcp.Integration.ClientAndServerEvents`, `McpHttp.Client.Matrix.ResponseEvents` |
 | `ResponseReceivedEventArgs` | Covered | `ModelApi.Supporting.ResponseReceivedEventArgs`, `JsonRpc.Tcp.Integration.ClientAndServerEvents`, `McpHttp.Client.Matrix.ResponseEvents` |
 | `ToolDefinition` | Covered | `ModelApi.Supporting.ToolDefinitionDefaults`, `McpProtocol.Content.ToolDefinitionSerialization`, `ModelApi.Mcp.Matrix.ToolDefinitionOmittedOptionalFields`, `McpHttp.Registry.Matrix.ToolsListMetadata` |
-| `McpProtocol` | Covered | `McpProtocol.Models.*`, `ModelApi.Mcp.Matrix.Protocol*`, HTTP/TCP/WebSocket initialize suites |
+| `McpProtocol` | Covered | `McpProtocol.Models.*`, `ModelApi.Mcp.Matrix.Protocol*`, HTTP/TCP/WebSocket initialize suites, `McpHttp.Server.Negotiation.*` (`NegotiateHandshakeVersion`, `NewestHandshakeProtocolVersion`, `IsHandshakeVersion`) |
 | `McpProtocolException` | Covered | `ModelApi.Mcp.Matrix.ProtocolException*`, `JsonRpc.Tcp.Integration.McpProtocolExceptionMapsToProtocolError`, HTTP invalid-params suites |
 | `McpImplementation` | Covered | `McpProtocol.Models.ImplementationSerialization`, `ModelApi.Mcp.Matrix.ImplementationOmittedNulls` |
 | `McpIcon` | Covered | `McpProtocol.Models.ImplementationSerialization`, `ModelApi.Mcp.Matrix.IconAllFields` |
 | `McpAnnotations` | Covered | `McpProtocol.Content.ToolDefinitionSerialization`, `ModelApi.Mcp.Matrix.AnnotationsAllHints` |
-| `McpResult` | Covered | `ModelApi.Mcp.Matrix.ResultMeta`, result model suites |
+| `McpResult` | Covered | `ModelApi.Mcp.Matrix.ResultMeta`, result model suites, `McpVersion.StatelessResults.*` (`ResultType` stamping, preservation, and revert) |
 | `McpPaginatedResult` | Covered | `ModelApi.Mcp.Matrix.PaginatedResultNextCursor`, pagination protocol suites |
 | `McpListToolsResult` | Covered | `ModelApi.Mcp.Matrix.ListToolsResult`, `McpHttp.Registry.Matrix.ToolsListPagination` |
 | `McpListResourcesResult` | Covered | `ModelApi.Mcp.Matrix.ListResourcesResult`, `McpHttp.Registry.Matrix.ResourcesListPagination` |
@@ -71,6 +71,7 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | `McpImageContent` | Covered | `McpProtocol.Content.ContentSerialization`, `ModelApi.Mcp.Matrix.ImageContentAnnotations`, `McpHttp.Registry.Matrix.ToolsCallFullResult` |
 | `McpAudioContent` | Covered | `McpProtocol.Content.ContentSerialization`, `ModelApi.Mcp.Matrix.AudioContentDefaults` |
 | `McpEmbeddedResourceContent` | Covered | `McpProtocol.Content.ContentSerialization` |
+| `McpEmptyResult` | Covered | `McpVersion.StatelessResults.CustomMcpResultIsStamped`, `McpVersion.StatelessResults.HandshakeResultsOmitStatelessFields`, `McpVersion.StatelessResults.EveryBuiltInResultCarriesResultType` |
 | `McpResourceLinkContent` | Covered | `McpProtocol.Content.ContentSerialization` |
 | `McpResource` | Covered | `McpProtocol.Content.ResourceSerialization`, `ModelApi.Mcp.Matrix.ResourceFullMetadata`, HTTP/TCP resource suites |
 | `McpResourceTemplate` | Covered | `McpProtocol.Content.ResourceSerialization`, `ModelApi.Mcp.Matrix.ResourceTemplateFullMetadata`, HTTP/TCP template suites |

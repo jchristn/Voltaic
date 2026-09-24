@@ -132,6 +132,11 @@ namespace Sample.McpServer
 
             // Create all three server types
             McpHttpServer httpServer = new McpHttpServer(_Localhost, _HttpPort, "/rpc", "/events", includeDefaultMethods: true);
+
+            // initialize negotiates at most MaximumHandshakeProtocolVersion (default 2025-11-25). Stateless
+            // 2026-07-28 clients such as Claude Code 2.1.x use server/discover instead and need no setting.
+            // Uncomment to pin handshake clients to an older revision:
+            // httpServer.MaximumHandshakeProtocolVersion = McpProtocol.ProtocolVersion20250618;
             McpTcpServer tcpServer = new McpTcpServer(IPAddress.Parse(_Localhost), _TcpPort, includeDefaultMethods: true);
             McpWebsocketsServer wsServer = new McpWebsocketsServer(_Localhost, _WebsocketPort, "/mcp", includeDefaultMethods: true);
 

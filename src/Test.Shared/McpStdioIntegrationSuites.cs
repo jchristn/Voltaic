@@ -69,6 +69,17 @@ namespace Test.Shared
                         client.Shutdown();
                     }),
 
+                    Case(suiteId, "InitializeRequesting20260728NegotiatesHandshake", "The stdio server answers an initialize for 2026-07-28 with 2025-11-25", async ct =>
+                    {
+                        using McpClient client = new McpClient();
+                        await LaunchTestServerAsync(client, ct).ConfigureAwait(false);
+
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20260728 }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        TestAssert.Equal(McpProtocol.ProtocolVersion20251125, initialize.Get("protocolVersion").String(), "stdio initialize must not agree to the stateless revision.");
+
+                        client.Shutdown();
+                    }),
+
                     Case(suiteId, "InitializeToolsResourcesAndPrompts", "McpClient exercises MCP initialize, tools, resources, and prompts over stdio", async ct =>
                     {
                         using McpClient client = new McpClient();

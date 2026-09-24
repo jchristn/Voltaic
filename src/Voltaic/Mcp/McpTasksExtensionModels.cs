@@ -101,10 +101,13 @@ namespace Voltaic.Mcp
     public class McpCreateTaskResult : McpTask
     {
         /// <summary>
-        /// Gets or sets the result discriminator. Always <c>task</c>.
+        /// Initializes a new instance of the <see cref="McpCreateTaskResult"/> class with
+        /// <see cref="McpResult.ResultType"/> set to <c>task</c>.
         /// </summary>
-        [JsonPropertyName("resultType")]
-        public string ResultType { get; set; } = "task";
+        public McpCreateTaskResult()
+        {
+            ResultType = ResultTypeTask;
+        }
     }
 
     /// <summary>
@@ -133,9 +136,12 @@ namespace Voltaic.Mcp
     public class McpTaskAck : McpResult
     {
         /// <summary>
-        /// Gets or sets the result discriminator. Always <c>complete</c>.
+        /// Initializes a new instance of the <see cref="McpTaskAck"/> class with
+        /// <see cref="McpResult.ResultType"/> set to <c>complete</c>.
         /// </summary>
-        [JsonPropertyName("resultType")]
-        public string ResultType { get; set; } = "complete";
+        public McpTaskAck()
+        {
+            ResultType = ResultTypeComplete;
+        }
     }
 }

@@ -130,11 +130,39 @@ namespace Voltaic.Mcp
     public class McpResult
     {
         /// <summary>
+        /// The <c>resultType</c> value for a final result (2026-07-28+).
+        /// </summary>
+        public const string ResultTypeComplete = "complete";
+
+        /// <summary>
+        /// The <c>resultType</c> value for a Multi Round-Trip result that needs client input (2026-07-28+).
+        /// </summary>
+        public const string ResultTypeInputRequired = "input_required";
+
+        /// <summary>
+        /// The <c>resultType</c> value for a result that created a task (2026-07-28 tasks extension).
+        /// </summary>
+        public const string ResultTypeTask = "task";
+
+        /// <summary>
         /// Gets or sets protocol metadata.
         /// </summary>
         [JsonPropertyName("_meta")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public Dictionary<string, object?>? Meta { get; set; }
+
+        /// <summary>
+        /// Gets or sets the result discriminator required by stateless-era revisions (2026-07-28+):
+        /// <c>complete</c> (<see cref="ResultTypeComplete"/>) for a final result, <c>input_required</c>
+        /// (<see cref="ResultTypeInputRequired"/>) for a Multi Round-Trip result, or <c>task</c>
+        /// (<see cref="ResultTypeTask"/>) for a created task. Null by default, which omits the field from
+        /// the wire, as handshake-era revisions require. Voltaic servers set <c>complete</c> automatically
+        /// on built-in results served under a stateless-era revision when this value is null, and never
+        /// overwrite a value a handler has already set.
+        /// </summary>
+        [JsonPropertyName("resultType")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? ResultType { get; set; }
     }
 
     /// <summary>

@@ -48,9 +48,10 @@ namespace Test.Shared
         private readonly CancellationTokenSource _TokenSource;
         private readonly Task _ServerTask;
 
-        private HttpMcpTestServerFixture(McpHttpServer server, int port, CancellationTokenSource tokenSource, Task serverTask)
+        private HttpMcpTestServerFixture(McpHttpServer server, string hostname, int port, CancellationTokenSource tokenSource, Task serverTask)
         {
             Server = server;
+            Hostname = hostname;
             Port = port;
             _TokenSource = tokenSource;
             _ServerTask = serverTask;
@@ -59,11 +60,13 @@ namespace Test.Shared
 
         public McpHttpServer Server { get; }
 
+        public string Hostname { get; }
+
         public int Port { get; }
 
         public HttpClient Client { get; }
 
-        public string BaseUrl => $"http://localhost:{Port}";
+        public string BaseUrl => $"http://{Hostname}:{Port}";
 
         public static async Task<HttpMcpTestServerFixture> StartAsync(
             CancellationToken token,
@@ -83,7 +86,7 @@ namespace Test.Shared
             CancellationTokenSource tokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
             Task serverTask = Task.Run(() => server.StartAsync(tokenSource.Token), CancellationToken.None);
 
-            HttpMcpTestServerFixture fixture = new HttpMcpTestServerFixture(server, port, tokenSource, serverTask);
+            HttpMcpTestServerFixture fixture = new HttpMcpTestServerFixture(server, hostname, port, tokenSource, serverTask);
             await fixture.WaitUntilReadyAsync(token).ConfigureAwait(false);
             return fixture;
         }

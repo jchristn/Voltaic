@@ -12,10 +12,13 @@ namespace Voltaic.Mcp
     public class McpDiscoverResult : McpResult
     {
         /// <summary>
-        /// Gets or sets the result discriminator. Always <c>complete</c> for a discovery result.
+        /// Initializes a new instance of the <see cref="McpDiscoverResult"/> class with
+        /// <see cref="McpResult.ResultType"/> set to <c>complete</c>, the discriminator for a discovery result.
         /// </summary>
-        [JsonPropertyName("resultType")]
-        public string ResultType { get; set; } = "complete";
+        public McpDiscoverResult()
+        {
+            ResultType = ResultTypeComplete;
+        }
 
         /// <summary>
         /// Gets or sets the protocol versions the server supports. The client should choose one of

@@ -123,6 +123,7 @@ namespace Test.Shared
                             "Voltaic.Mcp.McpCompletionContext",
                             "Voltaic.Mcp.McpCompletionReference",
                             "Voltaic.Mcp.McpEmbeddedResourceContent",
+                            "Voltaic.Mcp.McpEmptyResult",
                             "Voltaic.Mcp.McpGetPromptResult",
                             "Voltaic.Mcp.McpHttpClient",
                             "Voltaic.Mcp.McpHttpServer",

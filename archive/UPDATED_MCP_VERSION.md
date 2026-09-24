@@ -1,5 +1,7 @@
 # Voltaic — Multi-Version MCP Support Plan (v0.6.0)
 
+> **Status note (2026-09-24, v1.1.0):** Handshake negotiation is now capped: `initialize` never agrees to the stateless `2026-07-28` revision and answers with `MaximumHandshakeProtocolVersion` (default `2025-11-25`) instead. Results served under `2026-07-28` now carry `resultType`, and cacheable results carry `ttlMs`/`cacheScope` (T-041 is done for list, read, and discover results). `server/discover` no longer advertises `listChanged`/`subscribe` because `subscriptions/listen` (T-036) is still not implemented. Authenticated `McpHttpServer` requests now share the unauthenticated pipeline. See `CHANGELOG.md` (v1.1.0).
+
 Target release: **v0.5.1 → v0.6.0** (minor, additive, backward compatible)
 Scope: MCP client **and** server, protocol models, transports, extensions, samples, tests, documentation.
 Authority: this plan is written against the live specification at `modelcontextprotocol.io/specification/*` and complies with `C:\code\agents\requirements` (`CODE_STYLE.md`, `REPOSITORY_REQUIREMENTS.md`, `BACKEND_TEST_ARCHITECTURE.md`, `WRITING_DOCUMENTS.md`, `AUTHENTICATION.md`).

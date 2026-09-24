@@ -109,13 +109,44 @@ namespace Voltaic.Mcp
         private volatile bool _IsStopping = false;
         private bool _IsDisposed = false;
         /// <summary>
-        /// Gets or sets the MCP protocol version.
-        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
+        /// Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
+        /// request names no version. It does not cap negotiation; see
+        /// <see cref="MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
+        /// <see cref="MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
+        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
         /// </summary>
         public string ProtocolVersion
         {
             get => _Endpoint.ProtocolVersion;
             set => _Endpoint.ProtocolVersion = value ?? McpProtocol.LatestProtocolVersion;
+        }
+
+        /// <summary>
+        /// Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
+        /// handshake. A client that requests a newer revision, or a stateless-era revision such as
+        /// <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
+        /// this value, following the MCP rule that a server responds with a version it supports.
+        /// Default is <see cref="McpProtocol.NewestHandshakeProtocolVersion"/> (currently <c>2025-11-25</c>).
+        /// Lower it to pin clients to an older revision. Setting null restores the default.
+        /// Set this before the server starts accepting requests; it is not synchronized with in-flight
+        /// handshakes.
+        /// </summary>
+        /// <exception cref="ArgumentException">Thrown when the value is not a supported handshake-era revision (for example <c>2026-07-28</c> or an unknown version).</exception>
+        public string MaximumHandshakeProtocolVersion
+        {
+            get => _Endpoint.MaximumHandshakeProtocolVersion;
+            set
+            {
+                string version = value ?? McpProtocol.NewestHandshakeProtocolVersion;
+                if (!McpProtocol.IsHandshakeVersion(version))
+                {
+                    throw new ArgumentException(
+                        $"'{version}' is not a supported handshake-era MCP protocol revision. Supported handshake-era revisions: {String.Join(", ", McpProtocol.SupportedVersions.Where(info => info.Era == McpProtocolEra.Handshake).Select(info => info.Version))}.",
+                        nameof(value));
+                }
+
+                _Endpoint.MaximumHandshakeProtocolVersion = version;
+            }
         }
 
         /// <summary>

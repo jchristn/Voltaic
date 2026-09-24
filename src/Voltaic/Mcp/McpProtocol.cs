@@ -179,9 +179,40 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets the newest handshake-era revision in the registry (currently <c>2025-11-25</c>). This is
+        /// the newest revision an <c>initialize</c> handshake can agree to, because stateless-era revisions
+        /// define no <c>initialize</c> request and no sessions. The value is derived from
+        /// <see cref="SupportedVersions"/>, so it moves automatically when a newer handshake-era revision
+        /// is registered. Never null.
+        /// </summary>
+        public static string NewestHandshakeProtocolVersion
+        {
+            get
+            {
+                return _Registry.Last(info => info.Era == McpProtocolEra.Handshake).Version;
+            }
+        }
+
+        /// <summary>
+        /// Determines whether the supplied version is a supported handshake-era revision, meaning it
+        /// can be negotiated through an <c>initialize</c> request.
+        /// </summary>
+        /// <param name="version">Protocol version to inspect. A null or blank value returns false.</param>
+        /// <returns>True when the version is supported and belongs to <see cref="McpProtocolEra.Handshake"/>.</returns>
+        public static bool IsHandshakeVersion(string? version)
+        {
+            McpProtocolVersionInfo? info = GetVersionInfo(version);
+            return info != null && info.Era == McpProtocolEra.Handshake;
+        }
+
+        /// <summary>
         /// Negotiates a protocol version from a client-requested version.
         /// When no version is requested, the default handshake version
         /// (<see cref="LatestProtocolVersion"/>) is returned for backward compatibility.
+        /// This method is era-agnostic: it returns any supported version unchanged, including the
+        /// stateless <c>2026-07-28</c> revision. Callers answering an <c>initialize</c> request should use
+        /// <see cref="NegotiateHandshakeVersion(string?, string)"/> instead, which never agrees to a
+        /// stateless-era revision.
         /// </summary>
         /// <param name="requestedVersion">The client-requested version. May be null or blank.</param>
         /// <returns>The version to use for the session.</returns>
@@ -199,6 +230,72 @@ namespace Voltaic.Mcp
             }
 
             throw new ArgumentException($"Unsupported MCP protocol version '{requestedVersion}'.", nameof(requestedVersion));
+        }
+
+        /// <summary>
+        /// Negotiates the protocol version for a session-based handshake (the <c>initialize</c> request).
+        /// A stateless-era revision cannot be negotiated through <c>initialize</c>, so a request for one is
+        /// answered with <paramref name="maximumHandshakeVersion"/>, the newest handshake-era revision the
+        /// server will speak. The rules are:
+        /// <list type="bullet">
+        /// <item><description>No version requested (null or blank): <see cref="LatestProtocolVersion"/>, lowered to the maximum when the maximum is older.</description></item>
+        /// <item><description>A handshake-era version at or below the maximum: that version.</description></item>
+        /// <item><description>A handshake-era version above the maximum: the maximum.</description></item>
+        /// <item><description>A stateless-era version (for example <c>2026-07-28</c>): the maximum.</description></item>
+        /// <item><description>An unknown version: <see cref="ArgumentException"/>.</description></item>
+        /// </list>
+        /// This method is stateless and thread-safe.
+        /// </summary>
+        /// <param name="requestedVersion">The client-requested version. May be null or blank.</param>
+        /// <param name="maximumHandshakeVersion">The newest handshake-era version to agree to. Must be a supported handshake-era revision; see <see cref="NewestHandshakeProtocolVersion"/> for the usual value.</param>
+        /// <returns>The handshake-era version to use for the session. Never null.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="requestedVersion"/> is not a supported version, or when <paramref name="maximumHandshakeVersion"/> is not a supported handshake-era revision.</exception>
+        public static string NegotiateHandshakeVersion(string? requestedVersion, string maximumHandshakeVersion)
+        {
+            if (!IsHandshakeVersion(maximumHandshakeVersion))
+            {
+                throw new ArgumentException(
+                    $"The maximum handshake protocol version '{maximumHandshakeVersion}' is not a supported handshake-era revision.",
+                    nameof(maximumHandshakeVersion));
+            }
+
+            if (String.IsNullOrWhiteSpace(requestedVersion))
+            {
+                return Older(LatestProtocolVersion, maximumHandshakeVersion);
+            }
+
+            McpProtocolVersionInfo? requested = GetVersionInfo(requestedVersion);
+            if (requested == null)
+            {
+                throw new ArgumentException($"Unsupported MCP protocol version '{requestedVersion}'.", nameof(requestedVersion));
+            }
+
+            if (requested.Era != McpProtocolEra.Handshake)
+            {
+                return maximumHandshakeVersion;
+            }
+
+            return Older(requested.Version, maximumHandshakeVersion);
+        }
+
+        private static string Older(string first, string second)
+        {
+            int firstIndex = IndexOf(first);
+            int secondIndex = IndexOf(second);
+            return firstIndex <= secondIndex ? first : second;
+        }
+
+        private static int IndexOf(string version)
+        {
+            for (int index = 0; index < _Registry.Count; index++)
+            {
+                if (StringComparer.Ordinal.Equals(_Registry[index].Version, version))
+                {
+                    return index;
+                }
+            }
+
+            return -1;
         }
     }
 }

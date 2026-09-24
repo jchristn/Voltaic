@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Voltaic is a JSON-RPC 2.0, Model Context Protocol (MCP), and Agent2Agent (A2A) implementation for .NET 8.0 and .NET 10.0. The library provides TCP JSON-RPC, MCP stdio/Streamable HTTP/TCP/WebSocket transports, and dependency-light A2A JSON-RPC/HTTP+JSON/gRPC/SSE hosting. Voltaic v0.6.0 recognizes five MCP protocol revisions — `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28` — via the `McpProtocol` version registry and `McpVersionResolver`. `McpProtocol.LatestProtocolVersion` remains `2025-11-25` as the default handshake version for backward compatibility; `McpProtocol.NewestProtocolVersion` is `2026-07-28`. A2A protocol version is `1.0`. The multi-version work is tracked in `archive/UPDATED_MCP_VERSION.md`.
+Voltaic is a JSON-RPC 2.0, Model Context Protocol (MCP), and Agent2Agent (A2A) implementation for .NET 8.0 and .NET 10.0. The library provides TCP JSON-RPC, MCP stdio/Streamable HTTP/TCP/WebSocket transports, and dependency-light A2A JSON-RPC/HTTP+JSON/gRPC/SSE hosting. Voltaic v1.1.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) via the `McpProtocol` version registry and `McpVersionResolver`. `McpProtocol.LatestProtocolVersion` remains `2025-11-25` as the default handshake version; `McpProtocol.NewestProtocolVersion` is `2026-07-28`. `initialize` negotiates at most `McpProtocol.NewestHandshakeProtocolVersion` (`2025-11-25`, configurable per server with `MaximumHandshakeProtocolVersion`); `2026-07-28` is reached only through the stateless HTTP path, where results carry `resultType` and cacheable results carry `ttlMs`/`cacheScope` (see `McpStatelessResultStamper`). Authenticated and unauthenticated `McpHttpServer` requests share one pipeline. A2A protocol version is `1.0`. The multi-version work is tracked in `archive/UPDATED_MCP_VERSION.md`.
 
 ## Solution Structure
 
@@ -65,7 +65,7 @@ dotnet test src/Test.Xunit/Test.Xunit.csproj -c Release --framework net10.0
 dotnet test src/Test.Nunit/Test.Nunit.csproj -c Release --framework net8.0
 dotnet test src/Test.Nunit/Test.Nunit.csproj -c Release --framework net10.0
 
-# The shared suite currently projects 352 deterministic cases through the console, xUnit, and NUnit runners.
+# The shared suite currently projects 405 deterministic cases through the console, xUnit, and NUnit runners.
 ```
 
 ## Running Interactive Test Applications

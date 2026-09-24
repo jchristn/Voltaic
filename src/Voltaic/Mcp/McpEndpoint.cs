@@ -24,6 +24,8 @@ namespace Voltaic.Mcp
 
         public string ProtocolVersion { get; set; } = McpProtocol.LatestProtocolVersion;
 
+        public string MaximumHandshakeProtocolVersion { get; set; } = McpProtocol.NewestHandshakeProtocolVersion;
+
         public string ServerName { get; set; }
 
         public string ServerVersion { get; set; } = "1.0.0";
@@ -61,13 +63,17 @@ namespace Voltaic.Mcp
 
         public object Initialize(RpcParameters? args)
         {
-            string clientProtocolVersion = ProtocolVersion;
+            // The configured default applies when the client requests no version. It is capped like a
+            // requested version so a stateless-era default can never be agreed through initialize.
+            string clientProtocolVersion = McpProtocol.IsSupportedVersion(ProtocolVersion)
+                ? McpProtocol.NegotiateHandshakeVersion(ProtocolVersion, MaximumHandshakeProtocolVersion)
+                : ProtocolVersion;
             McpInitializeParams? initialize = args?.Deserialize<McpInitializeParams>();
             if (initialize != null && !String.IsNullOrEmpty(initialize.ProtocolVersion))
             {
                 try
                 {
-                    clientProtocolVersion = McpProtocol.NegotiateVersion(initialize.ProtocolVersion);
+                    clientProtocolVersion = McpProtocol.NegotiateHandshakeVersion(initialize.ProtocolVersion, MaximumHandshakeProtocolVersion);
                 }
                 catch (ArgumentException)
                 {
@@ -92,12 +98,15 @@ namespace Voltaic.Mcp
         public object Initialized(RpcParameters? args)
         {
             State = McpSessionLifecycleState.Initialized;
-            return new { };
+            return new McpEmptyResult();
         }
 
         public McpDiscoverResult Discover(RpcParameters? args)
         {
-            McpServerCapabilities capabilities = BuildCapabilities();
+            // server/discover describes the stateless (2026-07-28) surface. Change notifications there are
+            // delivered only through subscriptions/listen, which Voltaic does not implement, so the stateless
+            // capabilities must not promise listChanged or resource subscriptions.
+            McpServerCapabilities capabilities = BuildCapabilities(includeChangeNotifications: false);
 
             McpDiscoverResult result = new McpDiscoverResult
             {
@@ -120,7 +129,7 @@ namespace Voltaic.Mcp
 
         public object Ping(RpcParameters? args)
         {
-            return new { };
+            return new McpEmptyResult();
         }
 
         public ToolDefinition RegisterTool(ToolDefinition definition, Func<RpcParameters?, CancellationToken, Task<object>> handler)
@@ -480,7 +489,7 @@ namespace Voltaic.Mcp
                 _ResourceSubscriptions.Add(uri);
             }
 
-            return new { };
+            return new McpEmptyResult();
         }
 
         public object UnsubscribeResource(RpcParameters? args)
@@ -491,7 +500,7 @@ namespace Voltaic.Mcp
                 _ResourceSubscriptions.Remove(uri);
             }
 
-            return new { };
+            return new McpEmptyResult();
         }
 
         public object SetLogLevel(RpcParameters? args)
@@ -509,12 +518,12 @@ namespace Voltaic.Mcp
             }
 
             MinimumLogLevel = level;
-            return new { };
+            return new McpEmptyResult();
         }
 
         public object Cancelled(RpcParameters? args)
         {
-            return new { };
+            return new McpEmptyResult();
         }
 
         public void Clear()
@@ -532,7 +541,7 @@ namespace Voltaic.Mcp
             State = McpSessionLifecycleState.Closed;
         }
 
-        private McpServerCapabilities BuildCapabilities()
+        private McpServerCapabilities BuildCapabilities(bool includeChangeNotifications = true)
         {
             bool hasTools;
             bool hasResources;
@@ -549,9 +558,13 @@ namespace Voltaic.Mcp
 
             McpServerCapabilities capabilities = new McpServerCapabilities
             {
-                Tools = hasTools ? new McpListChangedCapability { ListChanged = SupportsListChangedNotifications } : null,
-                Resources = hasResources ? new McpResourceCapability { ListChanged = SupportsListChangedNotifications, Subscribe = SupportsResourceSubscriptions } : null,
-                Prompts = hasPrompts ? new McpListChangedCapability { ListChanged = SupportsListChangedNotifications } : null,
+                Tools = hasTools ? new McpListChangedCapability { ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null } : null,
+                Resources = hasResources ? new McpResourceCapability
+                {
+                    ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null,
+                    Subscribe = includeChangeNotifications ? SupportsResourceSubscriptions : null
+                } : null,
+                Prompts = hasPrompts ? new McpListChangedCapability { ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null } : null,
                 Completions = hasCompletions ? new { } : null,
                 Logging = SupportsLogging ? new { } : null
             };
