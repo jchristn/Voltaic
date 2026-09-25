@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- Fixed the `McpHttpServer` JSON-RPC endpoint (`/rpc` by default) ignoring the stateless `2026-07-28` revision. `server/discover` advertises that revision on every endpoint, so a client such as Claude Code that chose it and sent requests to `/rpc` received results without `resultType` and rejected `tools/list`. The JSON-RPC endpoint now resolves the protocol version the same way as the MCP endpoint and serves stateless-era requests without a session. Requests without a protocol-version header or stateless routing headers keep the existing JSON-RPC behavior.
+- Added `McpVersion.StatelessResults` cases that replay the Claude Code 2.1.x sequence against the JSON-RPC endpoint with and without authentication, reject a stateless request missing `Mcp-Method` there, and confirm plain JSON-RPC requests are unchanged (409 cases in total).
+
 ## v1.1.0
 Fixes MCP clients on the stateless `2026-07-28` revision, such as Claude Code 2.1.x, seeing zero tools from Voltaic MCP servers. Confirmed end to end against Claude Code 2.1.281 over Streamable HTTP, with and without an `AuthenticationHandler`.
 

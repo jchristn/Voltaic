@@ -39,7 +39,7 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Send list-changed, resource-updated, progress, cancellation, and log-message notifications where the transport supports server-to-client notifications.
 - Host HTTP compatibility endpoints (`/rpc` and `/events`) alongside the current Streamable HTTP endpoint (`/mcp`).
 - Expose and consume A2A agents through dependency-light `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2AHttpServer`, and `A2AGrpcServer` classes without ASP.NET Core.
-- Run the same 405-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+- Run the same 409-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
 
 ## MCP Endpoint Requirements
 
@@ -1133,7 +1133,7 @@ Check out the `src/Test.*` projects for working examples:
 - **Sample.A2AServer**: A2A Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended-card sample
 - **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
 - **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
-- **Test.Shared**: Shared Touchstone descriptors and the central 405-case API/protocol matrix
+- **Test.Shared**: Shared Touchstone descriptors and the central 409-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -1209,7 +1209,7 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 405 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 409 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json

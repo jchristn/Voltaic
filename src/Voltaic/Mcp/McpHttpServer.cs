@@ -1282,32 +1282,8 @@ namespace Voltaic.Mcp
                 {
                 }
 
-                ExtractStatelessSignals(requestBody, out string? bodyName, out string? metaProtocolVersion);
-
-                McpResolvedVersion resolved;
-                try
+                if (await TryHandleStatelessPostAsync(context, incomingRequest, requestBody, token).ConfigureAwait(false))
                 {
-                    resolved = McpVersionResolver.Resolve(
-                        context.Request.Headers[McpProtocol.ProtocolVersionHeader],
-                        metaProtocolVersion,
-                        incomingRequest?.Method,
-                        !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.LegacySessionIdHeader]),
-                        !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.MethodHeader]) || !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.NameHeader]));
-                }
-                catch (McpProtocolException resolveError)
-                {
-                    await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, resolveError, token).ConfigureAwait(false);
-                    return;
-                }
-
-                // initialize is a handshake-era request by definition: stateless-era revisions define no
-                // initialize and no sessions. It always takes the handshake path, where negotiation is capped
-                // at MaximumHandshakeProtocolVersion, even when a stateless-era version header accompanies it.
-                bool isHandshakeRequest = incomingRequest != null && StringComparer.Ordinal.Equals(incomingRequest.Method, "initialize");
-
-                if (resolved.Era == McpProtocolEra.Stateless && !isHandshakeRequest)
-                {
-                    await HandleStatelessPostAsync(context, incomingRequest, requestBody, bodyName, resolved.Version, token).ConfigureAwait(false);
                     return;
                 }
 
@@ -1539,6 +1515,52 @@ namespace Voltaic.Mcp
                 context.Response.StatusCode = 405;
                 context.Response.Close();
             }
+        }
+
+        /// <summary>
+        /// Resolves the protocol version of a POST and, when it resolves to the stateless (2026-07-28) era,
+        /// serves it through <see cref="HandleStatelessPostAsync"/>. Both the MCP endpoint and the JSON-RPC
+        /// endpoint call this, because <c>server/discover</c> advertises the stateless revision on both, so a
+        /// client that chose it must get stateless results wherever it sends requests. Returns true when a
+        /// response was written, including a version-resolution error; false when the request belongs to
+        /// the handshake era and the caller should continue.
+        /// </summary>
+        private async Task<bool> TryHandleStatelessPostAsync(
+            HttpListenerContext context,
+            JsonRpcRequest? incomingRequest,
+            string requestBody,
+            CancellationToken token)
+        {
+            ExtractStatelessSignals(requestBody, out string? bodyName, out string? metaProtocolVersion);
+
+            McpResolvedVersion resolved;
+            try
+            {
+                resolved = McpVersionResolver.Resolve(
+                    context.Request.Headers[McpProtocol.ProtocolVersionHeader],
+                    metaProtocolVersion,
+                    incomingRequest?.Method,
+                    !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.LegacySessionIdHeader]),
+                    !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.MethodHeader]) || !String.IsNullOrEmpty(context.Request.Headers[McpProtocol.NameHeader]));
+            }
+            catch (McpProtocolException resolveError)
+            {
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, resolveError, token).ConfigureAwait(false);
+                return true;
+            }
+
+            // initialize is a handshake-era request by definition: stateless-era revisions define no
+            // initialize and no sessions. It always takes the handshake path, where negotiation is capped
+            // at MaximumHandshakeProtocolVersion, even when a stateless-era version header accompanies it.
+            bool isHandshakeRequest = incomingRequest != null && StringComparer.Ordinal.Equals(incomingRequest.Method, "initialize");
+
+            if (resolved.Era == McpProtocolEra.Stateless && !isHandshakeRequest)
+            {
+                await HandleStatelessPostAsync(context, incomingRequest, requestBody, bodyName, resolved.Version, token).ConfigureAwait(false);
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -1916,6 +1938,25 @@ namespace Voltaic.Mcp
                 return;
             }
 
+            // Read request body, unless the authentication step already read it
+            string requestBody = preReadBody ?? await ReadRequestBodyAsync(context).ConfigureAwait(false);
+
+            // A client that chose the stateless revision from server/discover gets stateless results here
+            // too, without a session. Requests without stateless signals keep the JSON-RPC behavior below.
+            JsonRpcRequest? incomingRequest = null;
+            try
+            {
+                incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+            }
+            catch (JsonException)
+            {
+            }
+
+            if (await TryHandleStatelessPostAsync(context, incomingRequest, requestBody, token).ConfigureAwait(false))
+            {
+                return;
+            }
+
             // Get or create session
             string sessionId = GetSessionId(context) ?? Guid.NewGuid().ToString();
             bool isNewSession = !_Sessions.ContainsKey(sessionId);
@@ -1930,9 +1971,6 @@ namespace Voltaic.Mcp
             {
                 RaiseClientConnected(connection);
             }
-
-            // Read request body, unless the authentication step already read it
-            string requestBody = preReadBody ?? await ReadRequestBodyAsync(context).ConfigureAwait(false);
 
             LogMessage($"RPC request from session {sessionId}: {requestBody}");
 

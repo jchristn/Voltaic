@@ -3440,6 +3440,16 @@
             This provides compatibility with the MCP Streamable HTTP transport specification.
             </summary>
         </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.TryHandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Resolves the protocol version of a POST and, when it resolves to the stateless (2026-07-28) era,
+            serves it through <see cref="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.String,System.Threading.CancellationToken)"/>. Both the MCP endpoint and the JSON-RPC
+            endpoint call this, because <c>server/discover</c> advertises the stateless revision on both, so a
+            client that chose it must get stateless results wherever it sends requests. Returns true when a
+            response was written, including a version-resolution error; false when the request belongs to
+            the handshake era and the caller should continue.
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.String,System.Threading.CancellationToken)">
             <summary>
             Handles a POST to the MCP endpoint that resolved to the stateless (2026-07-28) era.

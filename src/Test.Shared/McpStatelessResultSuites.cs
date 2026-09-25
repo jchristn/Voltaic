@@ -42,6 +42,42 @@ namespace Test.Shared
                         await AssertClaudeCodeSequenceAsync(true, ct).ConfigureAwait(false);
                     }),
 
+                    Case(suiteId, "ClaudeCodeSequenceOnRpcPathWithoutAuth", "The Claude Code 2.1.x sequence sent to the JSON-RPC path gets stateless results without authentication", async ct =>
+                    {
+                        await AssertClaudeCodeSequenceAsync(false, ct, "/rpc/").ConfigureAwait(false);
+                    }),
+
+                    Case(suiteId, "ClaudeCodeSequenceOnRpcPathWithAuth", "The Claude Code 2.1.x sequence sent to the JSON-RPC path gets stateless results with an AuthenticationHandler", async ct =>
+                    {
+                        await AssertClaudeCodeSequenceAsync(true, ct, "/rpc/").ConfigureAwait(false);
+                    }),
+
+                    Case(suiteId, "RpcPathStatelessRequiresRoutingHeaders", "A stateless request to the JSON-RPC path without Mcp-Method is rejected like one to the MCP path", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, RegisterSurface, ct).ConfigureAwait(false);
+
+                        Dictionary<string, string> headers = new Dictionary<string, string>
+                        {
+                            { McpProtocol.ProtocolVersionHeader, McpProtocol.ProtocolVersion20260728 }
+                        };
+                        RpcResult list = await McpHttpTestRequests.SendAsync(
+                            fixture, McpHttpTestRequests.BuildBody("tools/list", 1, null), headers, false, ct, "/rpc/").ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.BadRequest, list.StatusCode, $"A stateless request without Mcp-Method is rejected. Body: {list.Body}");
+                        TestAssert.Null(list.SessionId, "A rejected stateless request carries no session id.");
+                    }),
+
+                    Case(suiteId, "RpcPathWithoutVersionHeaderUnchanged", "A plain JSON-RPC request to the JSON-RPC path keeps its session and gets no stateless fields", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, RegisterSurface, ct).ConfigureAwait(false);
+
+                        RpcResult list = await McpHttpTestRequests.SendAsync(
+                            fixture, McpHttpTestRequests.BuildBody("tools/list", 1, null), new Dictionary<string, string>(), false, ct, "/rpc/").ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.OK, list.StatusCode, $"tools/list should succeed. Body: {list.Body}");
+                        TestAssert.NotNull(list.SessionId, "The JSON-RPC path still issues a session id.");
+                        TestAssert.False(list.Result.Has("resultType"), "Handshake-era results carry no resultType.");
+                        TestAssert.True(list.Result.Get("tools").EnumerateArray().Any(tool => tool.Get("name").String() == "echo-tool"), "tools/list returns the registered tools.");
+                    }),
+
                     Case(suiteId, "DiscoverOmitsUndeliverableChangeNotifications", "server/discover does not advertise listChanged or subscribe, which need subscriptions/listen", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, RegisterSurface, ct).ConfigureAwait(false);
@@ -255,7 +291,7 @@ namespace Test.Shared
                 });
         }
 
-        private static async Task AssertClaudeCodeSequenceAsync(bool withAuth, CancellationToken token)
+        private static async Task AssertClaudeCodeSequenceAsync(bool withAuth, CancellationToken token, string path = "/mcp/")
         {
             string? observedPrincipal = null;
             await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(withAuth, server =>
@@ -271,14 +307,14 @@ namespace Test.Shared
             int sessionsBefore = fixture.Server.GetActiveSessions().Count;
 
             // 1. server/discover: the first request Claude Code 2.1.x sends; it never calls initialize.
-            RpcResult discover = await McpHttpTestRequests.SendStatelessAsync(fixture, "server/discover", "server-discover-probe-1", null, null, authorization, token).ConfigureAwait(false);
+            RpcResult discover = await McpHttpTestRequests.SendStatelessAsync(fixture, "server/discover", "server-discover-probe-1", null, null, authorization, token, path).ConfigureAwait(false);
             TestAssert.Equal(HttpStatusCode.OK, discover.StatusCode, $"server/discover should succeed. Body: {discover.Body}");
             TestAssert.Equal("complete", discover.Result.Get("resultType").String(), "server/discover carries resultType complete.");
             TestAssert.True(discover.Result.Get("supportedVersions").EnumerateArray().Any(version => version.String() == McpProtocol.ProtocolVersion20260728), "The stateless revision is offered.");
             TestAssert.Null(discover.SessionId, "Stateless responses carry no session id.");
 
             // 2. tools/list: this failed before v1.1.0 (missing resultType, then missing ttlMs/cacheScope).
-            RpcResult tools = await McpHttpTestRequests.SendStatelessAsync(fixture, "tools/list", 0, null, null, authorization, token).ConfigureAwait(false);
+            RpcResult tools = await McpHttpTestRequests.SendStatelessAsync(fixture, "tools/list", 0, null, null, authorization, token, path).ConfigureAwait(false);
             TestAssert.Equal(HttpStatusCode.OK, tools.StatusCode, $"tools/list should succeed. Body: {tools.Body}");
             TestAssert.Equal("complete", tools.Result.Get("resultType").String(), "tools/list carries resultType complete.");
             TestAssert.Equal(0L, tools.Result.Get("ttlMs").Long(), "tools/list carries a numeric ttlMs.");
@@ -287,7 +323,7 @@ namespace Test.Shared
 
             // 3. tools/call
             RpcResult call = await McpHttpTestRequests.SendStatelessAsync(
-                fixture, "tools/call", 1, new Dictionary<string, object?> { { "name", "whoami" }, { "arguments", new { } } }, "whoami", authorization, token).ConfigureAwait(false);
+                fixture, "tools/call", 1, new Dictionary<string, object?> { { "name", "whoami" }, { "arguments", new { } } }, "whoami", authorization, token, path).ConfigureAwait(false);
             TestAssert.Equal(HttpStatusCode.OK, call.StatusCode, $"tools/call should succeed. Body: {call.Body}");
             TestAssert.Equal("complete", call.Result.Get("resultType").String(), "tools/call carries resultType complete.");
             TestAssert.Equal(withAuth ? "caller:test-user" : "caller:none", call.Result.Get("content")[0].Get("text").String(), "The caller context reaches the stateless tool handler.");

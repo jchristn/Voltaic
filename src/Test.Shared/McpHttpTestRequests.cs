@@ -45,7 +45,8 @@ namespace Test.Shared
         /// <summary>
         /// Sends a stateless 2026-07-28 request with the protocol-version and <c>Mcp-Method</c> headers,
         /// and <c>Mcp-Name</c> when <paramref name="nameHeader"/> is supplied. The <c>_meta</c> block is
-        /// added to <paramref name="parameters"/>.
+        /// added to <paramref name="parameters"/>. The request goes to <c>/mcp/</c> unless
+        /// <paramref name="path"/> names another endpoint path.
         /// </summary>
         public static Task<RpcResult> SendStatelessAsync(
             HttpMcpTestServerFixture fixture,
@@ -54,7 +55,8 @@ namespace Test.Shared
             Dictionary<string, object?>? parameters,
             string? nameHeader,
             string? authorization,
-            CancellationToken token)
+            CancellationToken token,
+            string path = "/mcp/")
         {
             Dictionary<string, object?> withMeta = parameters != null
                 ? new Dictionary<string, object?>(parameters)
@@ -77,7 +79,7 @@ namespace Test.Shared
                 headers["Authorization"] = authorization;
             }
 
-            return SendAsync(fixture, BuildBody(method, id, withMeta), headers, true, token);
+            return SendAsync(fixture, BuildBody(method, id, withMeta), headers, true, token, path);
         }
 
         /// <summary>
@@ -114,17 +116,18 @@ namespace Test.Shared
         }
 
         /// <summary>
-        /// Sends a raw body to <c>/mcp/</c> with the supplied headers. When <paramref name="mcpAccept"/>
-        /// is true the Streamable HTTP <c>Accept</c> header is added.
+        /// Sends a raw body to <c>/mcp/</c>, or to <paramref name="path"/> when supplied, with the supplied
+        /// headers. When <paramref name="mcpAccept"/> is true the Streamable HTTP <c>Accept</c> header is added.
         /// </summary>
         public static async Task<RpcResult> SendAsync(
             HttpMcpTestServerFixture fixture,
             string body,
             IDictionary<string, string> headers,
             bool mcpAccept,
-            CancellationToken token)
+            CancellationToken token,
+            string path = "/mcp/")
         {
-            using HttpRequestMessage message = new HttpRequestMessage(HttpMethod.Post, $"{fixture.BaseUrl}/mcp/")
+            using HttpRequestMessage message = new HttpRequestMessage(HttpMethod.Post, $"{fixture.BaseUrl}{path}")
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
             };
