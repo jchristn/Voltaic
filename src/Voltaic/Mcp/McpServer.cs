@@ -539,7 +539,7 @@ namespace Voltaic.Mcp
         public async Task RunAsync(CancellationToken token = default)
         {
             using StreamReader stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
-            using StreamWriter stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
+            using StreamWriter stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
             // The server must not write anything to stdout that is not an MCP message, so console output from
             // application code goes to stderr while the server runs.

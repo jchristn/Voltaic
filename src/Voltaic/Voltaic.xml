@@ -4161,10 +4161,11 @@
             party may send and the receiver must answer). Shared by every Voltaic client transport. Thread-safe.
             </summary>
         </member>
-        <member name="F:Voltaic.Core.ClientRequestDispatcher._Running">
+        <member name="P:Voltaic.Core.ClientRequestDispatcher.AnswersPing">
             <summary>
-            Gets or sets whether <c>ping</c> is answered with an empty object (<c>{}</c>) and reserved, as the MCP
-            specification requires of every party. Plain JSON-RPC clients leave it off.
+            Gets or sets whether MCP rules apply: <c>ping</c> is answered with an empty object (<c>{}</c>) and reserved,
+            as the MCP specification requires of every party; a request with a null ID gets <c>-32600</c>; and a
+            handler result that is not a JSON object gets <c>-32603</c>. Plain JSON-RPC clients leave it off.
             </summary>
         </member>
         <member name="M:Voltaic.Core.ClientRequestDispatcher.TryHandleCancellation(Voltaic.Core.JsonRpcRequest)">
@@ -4191,8 +4192,15 @@
         </member>
         <member name="M:Voltaic.Core.ClientRequestDispatcher.ParseRequest(System.String)">
             <summary>
-            Returns the message as a request when it is a JSON object with a string <c>method</c> and a non-null
-            <c>id</c>; otherwise null (responses, notifications, and malformed input).
+            Returns the message as a request when it is a JSON object with a string <c>method</c> and an <c>id</c>
+            member; otherwise null (responses, notifications, and malformed input). A request whose <c>id</c> is null is
+            returned with a null <see cref="P:Voltaic.Core.JsonRpcRequest.Id"/>, so <see cref="M:Voltaic.Core.ClientRequestDispatcher.DispatchAsync(Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken)"/> can answer it.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.ClientRequestDispatcher.RefuseBatch">
+            <summary>
+            Returns the error to send for a batch from the server when the governing revision allows no batches
+            (MCP 2025-06-18 and later), or null when the batch is to be processed.
             </summary>
         </member>
         <member name="M:Voltaic.Core.ClientRequestDispatcher.DispatchAsync(Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken)">
@@ -5770,7 +5778,7 @@
             Builds the client capabilities for the request handlers a client has registered.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpClientHandshake.ToElement(System.Object)">
+        <member name="M:Voltaic.Mcp.McpClientHandshake.AllowsBatches(System.String)">
             <summary>
             Converts a call result (whatever object the client deserialized) to a JSON element.
             </summary>
@@ -7023,12 +7031,15 @@
             <summary>
             Gets or sets the OAuth 2.0 Protected Resource Metadata (RFC 9728) document the server publishes.
             The MCP authorization specification requires servers that use OAuth to publish it so clients can find
-            the authorization server. When set, a GET to <see cref="F:Voltaic.Mcp.McpProtocol.ProtectedResourceMetadataPath"/>
-            (<c>/.well-known/oauth-protected-resource</c>) or to that path followed by the MCP endpoint path (for
-            example <c>/.well-known/oauth-protected-resource/mcp</c>) returns the document as JSON, without calling
-            <see cref="P:Voltaic.Mcp.McpHttpServer.AuthenticationHandler"/>; the loopback and origin checks still apply. Point clients at it
-            from a 401 with <see cref="M:Voltaic.Core.AuthenticationResult.BearerChallenge(System.String,System.String,System.String,System.String)"/>. Default is null, which serves
-            nothing at those paths (HTTP 404).
+            the authorization server. When set, a GET to the well-known URL derived from
+            <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.Resource"/> (RFC 9728 section 3.3: <see cref="F:Voltaic.Mcp.McpProtocol.ProtectedResourceMetadataPath"/>
+            followed by the resource's path, for example <c>/.well-known/oauth-protected-resource/mcp</c> for
+            <c>https://host/mcp</c>, or the bare path for a resource without one) returns the document as JSON, without
+            calling <see cref="P:Voltaic.Mcp.McpHttpServer.AuthenticationHandler"/>; the loopback and origin checks still apply. Other forms of the
+            path are not served, because a client must reject a document whose resource does not match the URL it
+            fetched. Every Bearer challenge the server sends that lacks <c>resource_metadata</c> gets that URL added, so
+            pass null as the URL to <see cref="M:Voltaic.Core.AuthenticationResult.BearerChallenge(System.String,System.String,System.String,System.String)"/>.
+            Default is null, which serves nothing at those paths (HTTP 404).
             </summary>
             <exception cref="T:System.ArgumentException">Thrown when the value has an empty <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.Resource"/> or no <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
         </member>
@@ -7085,6 +7096,14 @@
             Gets or sets the server name for MCP serverInfo.
             Default is "Voltaic.Mcp.HttpServer".
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.MaxResumableStreamsPerSession">
+            <summary>
+            Gets or sets how many SSE streams (GET streams and POST response streams) each session keeps for
+            resumption with <c>Last-Event-ID</c>. When more are opened, the oldest is forgotten and can no longer be
+            resumed. Default is 8. Minimum is 1; maximum is 1000. Applies to sessions created afterwards.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 1 to 1000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.EnableLegacyEndpoints">
             <summary>
@@ -8968,6 +8987,44 @@
             Adds the annotations of a subschema that validated the same instance.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpSchemaKeywords">
+            <summary>
+            The JSON Schema keywords Voltaic recognizes, by dialect: which keywords hold subschemas (so references,
+            anchors, and embedded resources are found only where a schema can be), and the structural rules each keyword's
+            value must follow for a schema to be accepted at registration.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaKeywords.Applies(System.String,System.Boolean)">
+            <summary>
+            Returns true when the keyword belongs to the dialect (keywords of the other dialect are unknown keywords there).
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaKeywords.Subschemas(System.Text.Json.JsonElement,System.Boolean)">
+            <summary>
+            Returns the subschemas a schema object holds under the dialect's applicator keywords. Values of unknown
+            keywords and of <c>enum</c>, <c>const</c>, <c>default</c>, and <c>examples</c> are data, not schemas.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaKeywords.FindMalformed(System.Text.Json.JsonElement,System.String,System.Boolean,System.Func{System.String,System.Boolean},System.Int32)">
+            <summary>
+            Describes the first structural problem in a schema (a keyword value of the wrong type, an unknown type
+            name, a pattern that is not a regular expression, a subschema that is not an object or boolean), or
+            returns null when the schema is well formed. Unknown keywords are ignored.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpSchemaPattern">
+            <summary>
+            Translates an ECMA-262 regular expression (the dialect JSON Schema <c>pattern</c> uses) into a .NET pattern with
+            the same meaning whichever .NET options run it: <c>$</c> matches only at the end of the input, <c>.</c> excludes
+            the four ECMA-262 line terminators, <c>\d</c> and <c>\w</c> are ASCII, and <c>\s</c> is the ECMA-262 white
+            space and line terminator set.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaPattern.Translate(System.String)">
+            <summary>
+            Returns the .NET equivalent of an ECMA-262 pattern.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpSchemaReference">
             <summary>
             A <c>$ref</c> or <c>$dynamicRef</c> found in a schema, with the resource it appears in, so it can be checked
@@ -9065,8 +9122,10 @@
         <member name="M:Voltaic.Mcp.McpSchemaValidator.CheckSchema(System.Object)">
             <summary>
             Checks that a schema can be validated as written: its <c>$schema</c> dialect is supported (JSON Schema
-            2020-12, the default, or draft-07) and every <c>$ref</c> and <c>$dynamicRef</c> resolves within it.
-            Returns a description of the first problem, or null when the schema is usable.
+            2020-12, the default, or draft-07), it is well formed for that dialect (known keywords have values of the
+            right type, <c>type</c> names are JSON Schema types, patterns are regular expressions, and subschemas are
+            objects or booleans), and every <c>$ref</c> and <c>$dynamicRef</c> resolves within it. Unknown keywords are
+            ignored. Returns a description of the first problem, or null when the schema is usable. Thread-safe.
             </summary>
             <param name="schema">The schema: a <see cref="T:System.Text.Json.JsonElement"/>, a JSON string, or any serializable object.</param>
         </member>
@@ -10368,7 +10427,11 @@
         </member>
         <member name="P:Voltaic.Mcp.McpToolCallResult.StructuredContent">
             <summary>
-            Gets or sets structured content returned by the tool.
+            Gets or sets structured content returned by the tool. Null (the default) omits <c>structuredContent</c>
+            from the result; to send JSON <c>null</c> (allowed from MCP 2026-07-28), use
+            <see cref="M:Voltaic.Mcp.McpToolCallResult.FromStructured(System.Object)"/> with null or assign a <see cref="T:System.Text.Json.JsonElement"/> of kind
+            <see cref="F:System.Text.Json.JsonValueKind.Null"/>. Before 2026-07-28 a value that is not a JSON object is sent as text
+            instead, and a tool with an output schema must return an object.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpToolCallResult.IsError">

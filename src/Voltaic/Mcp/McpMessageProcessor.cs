@@ -83,6 +83,9 @@ namespace Voltaic.Mcp
                 {
                     string? json = await HandleAndSerializeAsync(envelope, session, null, false, notify, token, send).ConfigureAwait(false);
                     if (json != null) await SafeSendAsync(send, json, token).ConfigureAwait(false);
+
+                    // Server notifications may follow only once the initialize response is on the wire.
+                    if (envelope.Method == "initialize") session.MarkNotificationsReady();
                 });
                 return;
             }
@@ -135,9 +138,10 @@ namespace Voltaic.Mcp
             }
             finally
             {
-                // Every request that was answered (or rejected) is finished: a cancellation for its ID that arrives
-                // later is ignored, so it can never cancel a later request that reuses the ID.
-                if (envelope.Kind == McpEnvelopeKind.Request && envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
+                // Every request that was answered (or rejected, including a malformed one whose ID could be read) is
+                // finished: a cancellation for its ID that arrives later is ignored, so it can never cancel a later
+                // request that reuses the ID.
+                if (envelope.Kind != McpEnvelopeKind.Response && envelope.Kind != McpEnvelopeKind.Notification && envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
             }
         }
 
@@ -259,6 +263,8 @@ namespace Voltaic.Mcp
             McpInFlightRequest? inFlight = session.TryBeginRequest(envelope.IdKey!, method, progressToken, token);
             if (inFlight == null)
             {
+                // The rejected initialize never ran, so the client may still send one.
+                if (claimedInitialize) session.ReleaseInitializeClaim();
                 return Respond(request, Error(envelope, -32600, $"A request with ID {envelope.IdKey} is already in progress; request IDs must be unique."), session, statelessVersion);
             }
 
@@ -372,7 +378,7 @@ namespace Voltaic.Mcp
             return node?.ToJsonString() ?? json;
         }
 
-        private static bool NamesStatelessVersion(McpEnvelope envelope)
+        internal static bool NamesStatelessVersion(McpEnvelope envelope)
         {
             try
             {
@@ -417,6 +423,7 @@ namespace Voltaic.Mcp
                 if (envelope.Method == "initialize")
                 {
                     // initialize must not be part of a JSON-RPC batch (2025-03-26).
+                    if (envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
                     pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest("initialize must not be part of a JSON-RPC batch.") })));
                     continue;
                 }
@@ -426,6 +433,7 @@ namespace Voltaic.Mcp
                 {
                     if (envelope.Kind == McpEnvelopeKind.Request)
                     {
+                        if (envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
                         pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest($"Protocol version {McpProtocol.ProtocolVersion20260728} does not allow JSON-RPC batches; send the request on its own.") })));
                     }
 

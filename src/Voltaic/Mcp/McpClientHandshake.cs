@@ -82,6 +82,14 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Converts a call result (whatever object the client deserialized) to a JSON element.
         /// </summary>
+        // Whether a server may send this client a JSON-RPC batch: 2025-03-26 defines batching, and 2024-11-05 is plain
+        // JSON-RPC 2.0 (the server accepts batches there too); 2025-06-18 and later removed it.
+        internal static bool AllowsBatches(string protocolVersion)
+        {
+            return StringComparer.Ordinal.Equals(protocolVersion, McpProtocol.ProtocolVersion20241105)
+                || McpProtocol.GetVersionInfo(protocolVersion)?.SupportsBatching == true;
+        }
+
         internal static JsonElement ToElement(object? result)
         {
             if (result is JsonElement element) return element;

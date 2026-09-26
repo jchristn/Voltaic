@@ -4,6 +4,7 @@ namespace Voltaic.Mcp
     using System.Collections.Generic;
     using System.Linq;
     using System.Text;
+    using System.Text.Json;
     using System.Text.Json.Nodes;
 
     /// <summary>
@@ -211,7 +212,7 @@ namespace Voltaic.Mcp
 
         // True for a typeless schema whose keywords all apply to objects, so adding "type": "object" does not change
         // which structured results it describes for older clients.
-        private static bool DescribesOnlyObjects(JsonObject schema)
+        internal static bool DescribesOnlyObjects(JsonObject schema)
         {
             string[] objectKeywords = { "properties", "required", "additionalProperties", "patternProperties", "propertyNames", "minProperties", "maxProperties", "dependentRequired", "dependentSchemas" };
             string[] annotationKeywords = { "$schema", "$id", "$defs", "definitions", "title", "description", "$comment", "examples", "default" };
@@ -225,8 +226,36 @@ namespace Voltaic.Mcp
             return hasObjectKeyword;
         }
 
+        // True when a typeless output schema is advertised to handshake-era sessions as "type": "object" (see
+        // DowngradeTool), so structured content sent under it must be an object on those sessions.
+        internal static bool IsObjectOnlyBeforeStateless(object outputSchema)
+        {
+            JsonObject? schema = outputSchema as JsonObject ?? JsonSerializer.SerializeToNode(outputSchema) as JsonObject;
+            return schema != null && !schema.ContainsKey("type") && DescribesOnlyObjects(schema);
+        }
+
+        // Before 2026-07-28 the tool schemas' properties map to objects ({ [key: string]: object }), so boolean
+        // subschemas are given their object form: true is {} and false is {"not": {}}. The meaning is unchanged.
+        private static void ObjectifyBooleanProperties(JsonNode? schema)
+        {
+            if (schema is not JsonObject obj || obj["properties"] is not JsonObject properties) return;
+            foreach (string name in properties.Select(member => member.Key).ToList())
+            {
+                if (properties[name] is JsonValue value && value.TryGetValue(out bool allowed))
+                {
+                    properties[name] = allowed ? new JsonObject() : new JsonObject { ["not"] = new JsonObject() };
+                }
+            }
+        }
+
         private static void DowngradeTool(JsonObject tool, int revision)
         {
+            if (IsHandshakeRevision(revision))
+            {
+                ObjectifyBooleanProperties(tool["inputSchema"]);
+                ObjectifyBooleanProperties(tool["outputSchema"]);
+            }
+
             if (revision < _Rev20250618)
             {
                 // title, outputSchema, and _meta were added in 2025-06-18. In 2025-03-26 the display title can
@@ -280,7 +309,7 @@ namespace Voltaic.Mcp
                 tool.Remove("execution");
             }
 
-            // inputSchema is a JSON Schema document and is deliberately left untouched.
+            // Otherwise inputSchema is a JSON Schema document and is left as written.
         }
 
         private static void DowngradeCallToolResult(JsonObject result, int revision)

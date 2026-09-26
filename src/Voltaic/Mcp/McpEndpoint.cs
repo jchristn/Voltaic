@@ -407,6 +407,7 @@ namespace Voltaic.Mcp
                 if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent != null)
                 {
                     ValidateOutput(tool.Definition.OutputSchema, toolCallResult.StructuredContent, $"Tool '{toolName}' structured output");
+                    RequireObjectForHandshake(tool.Definition.OutputSchema, toolCallResult.StructuredContent, statelessVersion, toolName);
                 }
 
                 return toolCallResult;
@@ -415,6 +416,7 @@ namespace Voltaic.Mcp
             if (tool.Definition.OutputSchema != null)
             {
                 ValidateOutput(tool.Definition.OutputSchema, result, $"Tool '{toolName}' output");
+                RequireObjectForHandshake(tool.Definition.OutputSchema, result, statelessVersion, toolName);
                 return McpToolCallResult.FromStructured(result);
             }
 
@@ -424,6 +426,18 @@ namespace Voltaic.Mcp
             }
 
             return McpToolCallResult.FromText(JsonSerializer.Serialize(result));
+        }
+
+        // Handshake-era sessions see a typeless object-only output schema as "type": "object" (McpVersionCompatibility),
+        // so the structured content they receive must be an object; anything else would break the advertised schema.
+        private static void RequireObjectForHandshake(object outputSchema, object structuredContent, string? statelessVersion, string toolName)
+        {
+            if (statelessVersion != null || !McpVersionCompatibility.IsObjectOnlyBeforeStateless(outputSchema)) return;
+            JsonElement value = structuredContent is JsonElement element ? element : JsonSerializer.SerializeToElement(structuredContent);
+            if (value.ValueKind != JsonValueKind.Object)
+            {
+                throw new McpProtocolException(-32603, $"Tool '{toolName}' structured output must be an object on protocol versions before {McpProtocol.ProtocolVersion20260728}, where its output schema is advertised with \"type\": \"object\".");
+            }
         }
 
         // A result that violates the tool's own output schema is a server fault, reported as an internal error.
@@ -867,8 +881,8 @@ namespace Voltaic.Mcp
                 throw new ArgumentException($"Tool '{toolName}' {kind} schema must be a JSON object.");
             }
 
-            // The schema must be one the validator can enforce as written: a supported dialect, and references that
-            // resolve within it (an unresolvable reference would otherwise validate permissively).
+            // The schema must be one the validator can enforce as written: a supported dialect, well-formed keyword
+            // values, and references that resolve within it (anything else would otherwise validate permissively).
             string? problem = McpSchemaValidator.CheckSchema(element);
             if (problem != null)
             {

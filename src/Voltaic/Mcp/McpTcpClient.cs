@@ -36,6 +36,7 @@ namespace Voltaic.Mcp
             : base()
         {
             AnswerPingRequests();
+            RequestDispatcher.AcceptsBatches = () => McpClientHandshake.AllowsBatches(_ProtocolVersion);
             NewlineFraming = true;
         }
 

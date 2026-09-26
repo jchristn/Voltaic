@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.1.9
+Resolves every finding of a four-part review of v2.1.8 against the MCP specification, and corrects COMPATIBILITY.md where it overstated or misstated v2.1.8.
+
+### Security-relevant
+- **Protected resource metadata is served only at the URL derived from its resource identifier** (RFC 9728 section 3.3). For `https://host/mcp` that is `/.well-known/oauth-protected-resource/mcp`; the root form is served only for a resource without a path. Before, the root and `/mcp` forms were always served, and a client that checks the `resource` value against the URL it fetched could reject them. Every Bearer challenge that lacks `resource_metadata` names the served URL; an `AuthenticationHandler` that passed the root URL to `BearerChallenge` (as the README example did) should pass null instead. The README example and the `ProtectedResourceMetadata` documentation are corrected.
+- The README's Multi Round-Trip example now checks that `requestState` names the same path before acting on the confirmation, and explains that `requestState` and `inputResponses` come from the client and need integrity protection when a handler relies on them.
+
+### Schemas
+- **`pattern` follows ECMA-262 fully.** `$` matches only at the end of the string (not before a final newline), `.` excludes `\r`, ` `, and ` `, `\s` is the ECMA-262 white space set (including ` ` and `﻿`), also inside character classes and their negations, and `[]` and `[^]` behave as in ECMA-262.
+- **Schemas with malformed keyword values are rejected at registration**: an unknown `type` name or a repeated one, a non-numeric `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`, a `multipleOf` that is not positive, a negative or fractional count, a `pattern` (or `patternProperties` key) that is not a regular expression, a subschema that is not an object or boolean, and so on. They were ignored keyword by keyword. Unknown keywords are still ignored, as are keywords of the other dialect.
+- **Only applicator keywords hold subschemas.** A property named `enum`, `const`, `default`, or `examples` is now indexed as a schema (its references are checked and its anchors resolve), and `$ref` or `$id` inside an unknown keyword is no longer treated as part of the schema. In draft-07, `$ref` hides every sibling, including `$id`.
+- Before 2026-07-28, boolean property subschemas are sent as `{}` and `{"not": {}}`, since those revisions' tool schemas map properties to objects.
+- On handshake sessions, a tool whose typeless output schema is advertised as an object schema must return an object; anything else is `-32603`.
+
+### Lifecycle
+- **Server notifications never precede the `initialize` response.** A `list_changed` raised while a connection was initializing could be written before the response.
+- A cancellation for a request the server rejected as malformed (with a readable ID) or refused in a batch is ignored, and a cancellation that arrived before such a rejection is discarded with it, so neither can cancel a later request reusing the ID. Clients now track the server requests they answered the same way.
+- A server whose ping times out sends `notifications/cancelled` for it.
+- Clients answer a request with a `null` ID with `-32600` (ID `null`), answer a `RegisterRequestHandler` result that is not a JSON object with `-32603`, and refuse a batch from the server with one `-32600` on 2025-06-18 and later.
+- An `initialize` refused because its ID was in use no longer prevents a later `initialize`.
+- The stdio server ends messages with `\n` on every platform (it wrote `\r\n` on Windows).
+
+### HTTP
+- The Voltaic-specific `/events` stream ends when its session is deleted or expires; before, it kept the connection open and spun.
+- A request naming 2026-07-28 inside an HTTP batch gets `-32600`, as on the stream transports.
+- Stateless routing signals are read with `JsonDocument`, so a params member of an unexpected type (for example `"uri": 5` on `tools/call`) no longer hides the protocol version and name.
+- New `MaxResumableStreamsPerSession` (default 8) sets how many streams each session keeps for `Last-Event-ID` resumption.
+- `McpHttpClient` in stateless mode: `CallAsync<T>` sends stateless requests (it sent sessionless handshake requests), each call's `timeoutMs` is honored, a response body that breaks off is re-issued once with a new ID, and `Disconnect` leaves stateless mode, so a later `ConnectAsync` or `ConnectStreamableAsync` performs a handshake.
+
+### Documentation
+- COMPATIBILITY.md: `-32021` is not applicable to 2025-11-25 (insufficient scope is 403 there), 2025-03-26 authorization is marked as conforming (the authorization server is the application's, as in later revisions), the batching row covers HTTP, the handling of a missing `resultType` is listed as specified behavior rather than a relaxation, and the session-plus-stateless-header behavior and the resumable stream limit are disclosed.
+- README: conformance and upgrade notes for all of the above; `StructuredContent` documents null versus JSON `null`.
+
+### Tests
+- New suites `Mcp.SchemaRigor` (4), `McpStreams.Rigor` (7), and `McpHttp.Rigor` (8), plus `Mcp.SchemaKeywords.MalformedKeywordsAreRejectedAtRegistration` and `McpStreams.Conformance.ClientsRefuseBatchesWithoutBatching`. Each new behavior case fails against v2.1.8 (722 in total).
+
 ## v2.1.8
 Resolves every finding of a four-part review of v2.1.7 against the MCP specification, and corrects COMPATIBILITY.md, which overstated v2.1.7.
 

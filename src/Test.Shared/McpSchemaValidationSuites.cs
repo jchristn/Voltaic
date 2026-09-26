@@ -340,23 +340,69 @@ namespace Test.Shared
                             ct).ConfigureAwait(false);
                     }),
 
-                    Case(suiteId, "MalformedKeywordsAreIgnoredIndividually", "Malformed or unknown keywords are ignored one by one and never disable the rest of the schema", async ct =>
+                    Case(suiteId, "MalformedKeywordsAreIgnoredIndividually", "Unknown keywords (and their contents) are ignored and never disable the rest of the schema", async ct =>
                     {
                         const string schema = """
-                            {"type":"object","unknownKeyword":[1,2],"x-custom":{"a":1},
+                            {"type":"object","unknownKeyword":[1,2],"x-custom":{"a":1,"$ref":"#/nowhere"},
                              "properties":{
-                               "n":{"type":"integer","minimum":"zero","maxLength":-1,"format":"weird","description":"a number","enum":"not-an-array"},
-                               "s":{"type":["string","unknown-type"],"pattern":"[","title":"S","examples":["a"]},
-                               "t":{"type":42,"minLength":2}},
+                               "n":{"type":"integer","format":"weird","description":"a number","x-unit":{"pattern":"["}},
+                               "s":{"type":["string","null"],"title":"S","examples":["a"]},
+                               "t":{"minLength":2,"futureKeyword":true}},
                              "required":["n"]}
                             """;
 
                         await AssertSchemaAsync(
                             schema,
-                            new[] { """{"n":1}""", """{"n":-5,"s":"anything"}""", """{"n":1,"t":"ab"}""" },
+                            new[] { """{"n":1}""", """{"n":-5,"s":"anything"}""", """{"n":1,"t":"ab"}""", """{"n":1,"s":null}""" },
                             new[] { """{}""", """{"n":"x"}""", """{"n":1,"s":5}""", """{"n":1,"t":"a"}""" },
                             "arguments",
                             ct).ConfigureAwait(false);
+                    }),
+
+                    Case(suiteId, "MalformedKeywordsAreRejectedAtRegistration", "A schema whose known keywords have malformed values is rejected at registration, naming the location", ct =>
+                    {
+                        string[][] malformed =
+                        {
+                            new[] { """{"type":"object","properties":{"n":{"type":"integer","minimum":"zero"}}}""", "#/properties/n/minimum must be a number" },
+                            new[] { """{"type":"object","properties":{"n":{"type":"integer","maxLength":-1}}}""", "#/properties/n/maxLength must be a non-negative integer" },
+                            new[] { """{"type":"object","properties":{"n":{"enum":"not-an-array"}}}""", "#/properties/n/enum must be an array" },
+                            new[] { """{"type":"object","properties":{"s":{"type":["string","unknown-type"]}}}""", "is not a JSON Schema type" },
+                            new[] { """{"type":"object","properties":{"s":{"type":42}}}""", "#/properties/s/type must be a type name" },
+                            new[] { """{"type":"object","properties":{"s":{"type":["string","string"]}}}""", "must not repeat a type" },
+                            new[] { """{"type":"object","properties":{"s":{"type":"string","pattern":"["}}}""", "is not a valid regular expression" },
+                            new[] { """{"type":"object","patternProperties":{"(":{}}}""", "is not a valid regular expression" },
+                            new[] { """{"type":"object","properties":{"a":5}}""", "#/properties/a must be a schema" },
+                            new[] { """{"type":"object","properties":[]}""", "#/properties must be an object" },
+                            new[] { """{"type":"object","required":["a","a"]}""", "#/required must be an array of unique strings" },
+                            new[] { """{"type":"object","allOf":[]}""", "#/allOf must be a non-empty array of schemas" },
+                            new[] { """{"type":"object","properties":{"n":{"multipleOf":0}}}""", "#/properties/n/multipleOf must be a number greater than 0" },
+                            new[] { """{"type":"object","properties":{"n":{"exclusiveMinimum":true}}}""", "#/properties/n/exclusiveMinimum must be a number" },
+                            new[] { """{"type":"object","not":"x"}""", "#/not must be a schema" },
+                            new[] { """{"type":"object","properties":{"a":{"uniqueItems":"yes"}}}""", "#/properties/a/uniqueItems must be a boolean" },
+                        };
+
+                        foreach (string[] entry in malformed)
+                        {
+                            using McpHttpServer server = new McpHttpServer("127.0.0.1", 0);
+                            ArgumentException? error = null;
+                            try
+                            {
+                                server.RegisterTool("bad", "Bad schema", Json(entry[0]), _ => "ok");
+                            }
+                            catch (ArgumentException rejected)
+                            {
+                                error = rejected;
+                            }
+
+                            TestAssert.True(error != null, $"Rejected: {entry[0]}");
+                            TestAssert.True(error!.Message.Contains(entry[1], StringComparison.Ordinal), $"The message names the problem ({entry[1]}): {error.Message}");
+                        }
+
+                        // A keyword of the other dialect is an unknown keyword there, and is not checked.
+                        using McpHttpServer lenient = new McpHttpServer("127.0.0.1", 0);
+                        lenient.RegisterTool("draft07", "draft-07 ignores 2020-12 keywords", Json("""{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","prefixItems":5,"minContains":-1}"""), _ => "ok");
+                        lenient.RegisterTool("modern", "2020-12 ignores draft-07 keywords", Json("""{"type":"object","dependencies":7,"additionalItems":"x"}"""), _ => "ok");
+                        return Task.CompletedTask;
                     }),
 
                     Case(suiteId, "OutputSchemaViolationIsInternalError", "Structured content that violates the output schema (with a type array) is a -32603 error; valid output succeeds", async ct =>

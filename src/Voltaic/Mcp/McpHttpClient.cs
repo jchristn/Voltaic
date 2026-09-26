@@ -482,7 +482,7 @@ namespace Voltaic.Mcp
         /// <exception cref="Exception">Thrown when the remote method returns an error.</exception>
         public async Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
         {
-            JsonRpcResponse response = await ExchangeAsync(method, parameters, timeoutMs, token).ConfigureAwait(false);
+            JsonRpcResponse response = await CallAsync(method, parameters, timeoutMs, token).ConfigureAwait(false);
             if (response.Error != null)
             {
                 throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
@@ -532,7 +532,7 @@ namespace Voltaic.Mcp
         public Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
         {
             // In stateless mode (2026-07-28) every request carries its own _meta and routing headers.
-            if (_Stateless) return SendStatelessAsync(method, ToParameterMap(parameters), null, token);
+            if (_Stateless) return SendStatelessAsync(method, ToParameterMap(parameters), null, timeoutMs, token);
             return ExchangeAsync(method, parameters, timeoutMs, token);
         }
 
@@ -756,11 +756,16 @@ namespace Voltaic.Mcp
         /// <returns>The JSON-RPC response.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null or empty.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized.</exception>
-        public async Task<JsonRpcResponse> SendStatelessAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token = default)
+        public Task<JsonRpcResponse> SendStatelessAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token = default)
+        {
+            return SendStatelessAsync(method, parameters, name, 0, token);
+        }
+
+        private async Task<JsonRpcResponse> SendStatelessAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, int timeoutMs, CancellationToken token)
         {
             if (String.IsNullOrEmpty(method)) throw new ArgumentNullException(nameof(method));
 
-            JsonRpcResponse response = await SendStatelessCoreAsync(method, parameters, name, token).ConfigureAwait(false);
+            JsonRpcResponse response = await SendStatelessCoreAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
             if (response.Error != null && response.Error.Code == -32022 && _AutoNegotiate)
             {
                 // The server no longer supports the version in use: switch to one it lists and send the request again.
@@ -769,7 +774,7 @@ namespace Voltaic.Mcp
                 {
                     LogMessage($"The server does not support {_ProtocolVersion}; retrying {method} with {fallback}");
                     _ProtocolVersion = fallback;
-                    response = await SendStatelessCoreAsync(method, parameters, name, token).ConfigureAwait(false);
+                    response = await SendStatelessCoreAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
                 }
             }
 
@@ -777,13 +782,13 @@ namespace Voltaic.Mcp
             {
                 LogMessage($"tools/call was rejected with HeaderMismatch ({response.Error.Message}); refreshing tool definitions and retrying once");
                 await RefreshToolDefinitionsAsync(token).ConfigureAwait(false);
-                response = await SendStatelessCoreAsync(method, parameters, name, token).ConfigureAwait(false);
+                response = await SendStatelessCoreAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
             }
 
             return response;
         }
 
-        private async Task<JsonRpcResponse> SendStatelessCoreAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token, bool reissued = false)
+        private async Task<JsonRpcResponse> SendStatelessCoreAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, int timeoutMs, CancellationToken token, bool reissued = false)
         {
             if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
                 throw new InvalidOperationException("Client not initialized. Call ConnectStatelessAsync first.");
@@ -803,7 +808,7 @@ namespace Voltaic.Mcp
 
             using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                cts.CancelAfter(_RequestTimeoutMs);
+                cts.CancelAfter(timeoutMs > 0 ? timeoutMs : _RequestTimeoutMs);
 
                 using HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
                 httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
@@ -823,7 +828,18 @@ namespace Voltaic.Mcp
                 }
 
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-                string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
+                string responseJson;
+                try
+                {
+                    responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
+                }
+                catch (Exception broken) when (!reissued && !cts.IsCancellationRequested && (broken is IOException || broken is HttpRequestException))
+                {
+                    // The connection broke before the response arrived; 2026-07-28 clients must re-issue with a new ID.
+                    LogMessage($"The response for {method} broke off ({broken.Message}); re-issuing the request");
+                    return await SendStatelessCoreAsync(method, parameters, name, timeoutMs, token, true).ConfigureAwait(false);
+                }
+
                 LogMessage($"Received stateless response ({(int)httpResponse.StatusCode}): {responseJson}");
 
                 if (String.IsNullOrEmpty(responseJson))
@@ -832,7 +848,7 @@ namespace Voltaic.Mcp
                     if (!reissued && StringComparer.OrdinalIgnoreCase.Equals(httpResponse.Content.Headers.ContentType?.MediaType, "text/event-stream"))
                     {
                         LogMessage($"The response stream for {method} ended without a response; re-issuing the request");
-                        return await SendStatelessCoreAsync(method, parameters, name, token, true).ConfigureAwait(false);
+                        return await SendStatelessCoreAsync(method, parameters, name, timeoutMs, token, true).ConfigureAwait(false);
                     }
 
                     throw new McpProtocolException(-32603, $"Empty stateless response (HTTP {(int)httpResponse.StatusCode}).");
@@ -1023,6 +1039,7 @@ namespace Voltaic.Mcp
             previousRequests.Dispose();
 
             _HandshakeComplete = false;
+            _Stateless = false;
             if (!String.IsNullOrEmpty(SessionId))
             {
                 StopSse();
@@ -1369,7 +1386,7 @@ namespace Voltaic.Mcp
             for (int page = 0; page < 100; page++)
             {
                 Dictionary<string, object?>? parameters = cursor == null ? null : new Dictionary<string, object?>(StringComparer.Ordinal) { { "cursor", cursor } };
-                JsonRpcResponse listed = await SendStatelessCoreAsync("tools/list", parameters, null, token).ConfigureAwait(false);
+                JsonRpcResponse listed = await SendStatelessCoreAsync("tools/list", parameters, null, 0, token).ConfigureAwait(false);
                 if (listed.Error != null || listed.Result == null) return;
 
                 JsonElement result = listed.Result is JsonElement element ? element : JsonSerializer.SerializeToElement(listed.Result);

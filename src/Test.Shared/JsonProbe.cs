@@ -58,6 +58,11 @@ namespace Test.Shared
         /// <summary>Gets a value indicating whether this node is a JSON array.</summary>
         public bool IsArray => _Kind == ProbeKind.Array;
 
+        /// <summary>
+        /// Gets whether the value is JSON null (also true for a member that is absent; check <see cref="Has"/> first).
+        /// </summary>
+        public bool IsNull => _Kind == ProbeKind.Null;
+
         /// <summary>Parses raw JSON into a navigable probe.</summary>
         public static JsonProbe Parse(string json)
         {

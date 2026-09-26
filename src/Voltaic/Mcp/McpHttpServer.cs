@@ -175,12 +175,15 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Gets or sets the OAuth 2.0 Protected Resource Metadata (RFC 9728) document the server publishes.
         /// The MCP authorization specification requires servers that use OAuth to publish it so clients can find
-        /// the authorization server. When set, a GET to <see cref="McpProtocol.ProtectedResourceMetadataPath"/>
-        /// (<c>/.well-known/oauth-protected-resource</c>) or to that path followed by the MCP endpoint path (for
-        /// example <c>/.well-known/oauth-protected-resource/mcp</c>) returns the document as JSON, without calling
-        /// <see cref="AuthenticationHandler"/>; the loopback and origin checks still apply. Point clients at it
-        /// from a 401 with <see cref="AuthenticationResult.BearerChallenge(string?, string?, string?, string?)"/>. Default is null, which serves
-        /// nothing at those paths (HTTP 404).
+        /// the authorization server. When set, a GET to the well-known URL derived from
+        /// <see cref="McpProtectedResourceMetadata.Resource"/> (RFC 9728 section 3.3: <see cref="McpProtocol.ProtectedResourceMetadataPath"/>
+        /// followed by the resource's path, for example <c>/.well-known/oauth-protected-resource/mcp</c> for
+        /// <c>https://host/mcp</c>, or the bare path for a resource without one) returns the document as JSON, without
+        /// calling <see cref="AuthenticationHandler"/>; the loopback and origin checks still apply. Other forms of the
+        /// path are not served, because a client must reject a document whose resource does not match the URL it
+        /// fetched. Every Bearer challenge the server sends that lacks <c>resource_metadata</c> gets that URL added, so
+        /// pass null as the URL to <see cref="AuthenticationResult.BearerChallenge(string?, string?, string?, string?)"/>.
+        /// Default is null, which serves nothing at those paths (HTTP 404).
         /// </summary>
         /// <exception cref="ArgumentException">Thrown when the value has an empty <see cref="McpProtectedResourceMetadata.Resource"/> or no <see cref="McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
         public McpProtectedResourceMetadata? ProtectedResourceMetadata
@@ -287,6 +290,22 @@ namespace Voltaic.Mcp
         {
             get => _Endpoint.ServerName;
             set => _Endpoint.ServerName = value ?? "Voltaic.Mcp.HttpServer";
+        }
+
+        /// <summary>
+        /// Gets or sets how many SSE streams (GET streams and POST response streams) each session keeps for
+        /// resumption with <c>Last-Event-ID</c>. When more are opened, the oldest is forgotten and can no longer be
+        /// resumed. Default is 8. Minimum is 1; maximum is 1000. Applies to sessions created afterwards.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 1 to 1000.</exception>
+        public int MaxResumableStreamsPerSession
+        {
+            get => _MaxResumableStreamsPerSession;
+            set
+            {
+                if (value < 1 || value > 1000) throw new ArgumentOutOfRangeException(nameof(value), "MaxResumableStreamsPerSession must be between 1 and 1000.");
+                _MaxResumableStreamsPerSession = value;
+            }
         }
 
         /// <summary>
@@ -452,7 +471,7 @@ namespace Voltaic.Mcp
         private int _SseReplayBufferSize = 100;
         private int _SseRetryIntervalMs = 1000;
         private readonly ConcurrentDictionary<string, SseSessionStreams> _SseStreams = new ConcurrentDictionary<string, SseSessionStreams>(StringComparer.Ordinal);
-        private const int MaxSseStreamsPerSession = 8;
+        private int _MaxResumableStreamsPerSession = 8;
         private bool _EnableCors = true;
         private Dictionary<string, string> _CorsHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1592,7 +1611,7 @@ namespace Voltaic.Mcp
             if (hasSession && statelessVersion == null && _SseReplayBufferSize > 0)
             {
                 string streamSessionId = connection.SessionId;
-                openLog = () => _SseStreams.GetOrAdd(streamSessionId, _ => new SseSessionStreams(MaxSseStreamsPerSession)).OpenRequestStream(_SseReplayBufferSize);
+                openLog = () => _SseStreams.GetOrAdd(streamSessionId, _ => new SseSessionStreams(_MaxResumableStreamsPerSession)).OpenRequestStream(_SseReplayBufferSize);
                 string? negotiated = state.NegotiatedVersion;
                 prime = negotiated != null && String.CompareOrdinal(negotiated, McpProtocol.ProtocolVersion20251125) >= 0;
             }
@@ -1764,6 +1783,9 @@ namespace Voltaic.Mcp
             connection.Caller = RpcCallContext.Current;
             if (_Sessions.TryAdd(connection.SessionId, connection))
             {
+                // The client learns the session ID from the initialize response, and only then can open a stream that
+                // carries notifications, so they cannot overtake the response.
+                StateOf(connection).MarkNotificationsReady();
                 RaiseClientConnected(connection);
                 LogMessage($"MCP session created: {connection.SessionId}");
             }
@@ -1942,7 +1964,7 @@ namespace Voltaic.Mcp
 
                 // Resumability (2025-03-26 and later): a Last-Event-ID naming one of this session's streams resumes
                 // that stream with the events the client missed; anything else opens a new stream.
-                SseSessionStreams sessionStreams = _SseStreams.GetOrAdd(sessionId, _ => new SseSessionStreams(MaxSseStreamsPerSession));
+                SseSessionStreams sessionStreams = _SseStreams.GetOrAdd(sessionId, _ => new SseSessionStreams(_MaxResumableStreamsPerSession));
                 SseStreamLog streamLog = sessionStreams.Open(context.Request.Headers["Last-Event-ID"], _SseReplayBufferSize, out long resumeAfter);
 
                 LogMessage(resumeAfter >= 0
@@ -2398,19 +2420,28 @@ namespace Voltaic.Mcp
 
             try
             {
-                StatelessSignalEnvelope? envelope = JsonSerializer.Deserialize<StatelessSignalEnvelope>(requestBody);
-                if (envelope != null && envelope.Params != null)
+                using (JsonDocument document = JsonDocument.Parse(requestBody))
                 {
+                    JsonElement root = document.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("params", out JsonElement parameters) || parameters.ValueKind != JsonValueKind.Object) return;
+
                     // The Mcp-Name source field depends on the method: params.uri for resources/read, params.name for
-                    // tools/call and prompts/get. Other methods have none.
-                    name = envelope.Method switch
+                    // tools/call and prompts/get. Other methods have none. Members of other types are simply absent.
+                    string? method = root.TryGetProperty("method", out JsonElement methodElement) && methodElement.ValueKind == JsonValueKind.String ? methodElement.GetString() : null;
+                    string? field = method switch
                     {
-                        "resources/read" => envelope.Params.Uri,
-                        "tools/call" => envelope.Params.Name,
-                        "prompts/get" => envelope.Params.Name,
+                        "resources/read" => "uri",
+                        "tools/call" => "name",
+                        "prompts/get" => "name",
                         _ => null
                     };
-                    protocolVersion = envelope.Params.Meta?.ProtocolVersion;
+                    if (field != null && parameters.TryGetProperty(field, out JsonElement nameElement) && nameElement.ValueKind == JsonValueKind.String) name = nameElement.GetString();
+
+                    if (parameters.TryGetProperty("_meta", out JsonElement meta) && meta.ValueKind == JsonValueKind.Object
+                        && meta.TryGetProperty(McpProtocol.MetaProtocolVersionKey, out JsonElement version) && version.ValueKind == JsonValueKind.String)
+                    {
+                        protocolVersion = version.GetString();
+                    }
                 }
             }
             catch (JsonException)
@@ -2572,6 +2603,7 @@ namespace Voltaic.Mcp
                 McpEnvelope envelope = McpEnvelope.Parse(element);
                 if (envelope.Method == "initialize")
                 {
+                    if (envelope.IdKey != null) state.RecordFinished(envelope.IdKey);
                     pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse
                     {
                         Id = envelope.ResponseId,
@@ -2581,6 +2613,23 @@ namespace Voltaic.Mcp
                 }
 
                 if (IsRejectedNotification(envelope)) rejectedNotification = true;
+
+                // A request that names the stateless revision follows its rules, which allow no batches.
+                if (envelope.Kind != McpEnvelopeKind.Invalid && envelope.Method != null && McpMessageProcessor.NamesStatelessVersion(envelope))
+                {
+                    if (envelope.Kind == McpEnvelopeKind.Request)
+                    {
+                        if (envelope.IdKey != null) state.RecordFinished(envelope.IdKey);
+                        pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse
+                        {
+                            Id = envelope.ResponseId,
+                            Error = new JsonRpcError { Code = -32600, Message = $"Invalid Request: protocol version {McpProtocol.ProtocolVersion20260728} does not allow JSON-RPC batches; send the request on its own." }
+                        })));
+                    }
+
+                    continue;
+                }
+
                 pending.Add(HandleBatchElementAsync(envelope, state, scope => requiredScope ??= scope, token));
             }
 
@@ -2703,23 +2752,22 @@ namespace Voltaic.Mcp
             context.Response.Close();
         }
 
+        // The metadata is served only at the well-known URL derived from the configured resource identifier (RFC 9728
+        // section 3.3: the resource in the document must match the URL it was fetched from). Without a configured
+        // document, both the root and the MCP-path forms are recognized so they answer 404.
         private bool IsProtectedResourceMetadataPath(string path)
         {
             string trimmed = path.Length > 1 ? path.TrimEnd('/') : path;
-            if (StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath)) return true;
-
-            string mcpPath = _McpPath.TrimEnd('/');
-            if (!String.IsNullOrEmpty(mcpPath) && StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + mcpPath)) return true;
-
-            // The path derived from the configured resource identifier, which a challenge advertises.
             McpProtectedResourceMetadata? metadata = _ProtectedResourceMetadata;
             if (metadata != null && Uri.TryCreate(metadata.Resource, UriKind.Absolute, out Uri? resource))
             {
                 string resourcePath = resource.AbsolutePath.TrimEnd('/');
-                if (resourcePath.Length > 0 && StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + resourcePath)) return true;
+                return StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + resourcePath);
             }
 
-            return false;
+            if (StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath)) return true;
+            string mcpPath = _McpPath.TrimEnd('/');
+            return !String.IsNullOrEmpty(mcpPath) && StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + mcpPath);
         }
 
         private async Task HandleProtectedResourceMetadataAsync(HttpListenerContext context, CancellationToken token)
@@ -2865,14 +2913,18 @@ namespace Voltaic.Mcp
 
             LogMessage($"SSE connection established for session {sessionId}");
 
+            // The stream ends when the server stops or the session ends (terminated or expired).
+            using CancellationTokenSource streamSource = CancellationTokenSource.CreateLinkedTokenSource(token, StateOf(connection).Closed);
+            CancellationToken streamToken = streamSource.Token;
+
             try
             {
                 await SendSsePreludeAsync(context.Response, token).ConfigureAwait(false);
 
                 // Keep connection alive and send notifications
-                while (!token.IsCancellationRequested)
+                while (!streamToken.IsCancellationRequested && _Sessions.ContainsKey(sessionId))
                 {
-                    using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                    using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(streamToken))
                     {
                         timeoutCts.CancelAfter(_SseHeartbeatInterval);
 
@@ -2885,13 +2937,13 @@ namespace Voltaic.Mcp
                                 await SendSseNotificationAsync(context.Response, notification, token).ConfigureAwait(false);
                             }
                         }
-                        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                        catch (OperationCanceledException) when (!streamToken.IsCancellationRequested)
                         {
                             // An open stream is activity: keep the session from idle expiry.
                             connection.MarkActivity();
                             await SendSseKeepAliveAsync(context.Response, token).ConfigureAwait(false);
                         }
-                        catch (OperationCanceledException) when (token.IsCancellationRequested)
+                        catch (OperationCanceledException) when (streamToken.IsCancellationRequested)
                         {
                             break;
                         }

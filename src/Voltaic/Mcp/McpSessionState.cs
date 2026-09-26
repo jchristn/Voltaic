@@ -3,6 +3,7 @@ namespace Voltaic.Mcp
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
+    using System.IO;
     using System.Linq;
     using System.Text.Json;
     using System.Threading;
@@ -37,6 +38,7 @@ namespace Voltaic.Mcp
         private bool _IsInitialized;
         private bool _ClientInitialized;
         private int _InitializeClaimed;
+        private int _NotificationsReady;
 
         /// <param name="requireInitialize">True when requests other than <c>initialize</c> and <c>ping</c> must wait for the handshake (MCP connections); false for Voltaic's sessionless <c>/rpc</c> endpoint.</param>
         internal McpSessionState(bool requireInitialize = true)
@@ -109,6 +111,15 @@ namespace Voltaic.Mcp
                 _ClientCapabilities = clientCapabilities;
                 return true;
             }
+        }
+
+        // True once the initialize response has been sent (or, on HTTP, the session exists), so server notifications
+        // can no longer overtake it.
+        internal bool NotificationsReady => Volatile.Read(ref _NotificationsReady) == 1;
+
+        internal void MarkNotificationsReady()
+        {
+            if (IsInitialized) Interlocked.Exchange(ref _NotificationsReady, 1);
         }
 
         // Claims the right to run initialize; false when one already ran or is running.
@@ -184,6 +195,10 @@ namespace Voltaic.Mcp
         internal void RecordFinished(string idKey)
         {
             if (_InFlight.ContainsKey(idKey)) return;
+
+            // A cancellation that arrived for this ID before it was rejected is spent; it must not cancel a later
+            // request that reuses the ID.
+            _EarlyCancels.TryRemove(idKey, out DateTime _);
             _Completed[idKey] = DateTime.UtcNow;
             Prune(_Completed, _MaxFinished);
         }
@@ -253,6 +268,19 @@ namespace Voltaic.Mcp
             {
                 await push("{\"jsonrpc\":\"2.0\",\"id\":" + idKey + ",\"method\":\"ping\"}", token).ConfigureAwait(false);
                 Task finished = await Task.WhenAny(answered.Task, Task.Delay(timeoutMs, token)).ConfigureAwait(false);
+                if (finished != answered.Task && !token.IsCancellationRequested)
+                {
+                    // The ping timed out: tell the client to stop working on it (the cancellation utility asks the
+                    // sender to cancel a request it no longer waits for). The connection may stay open when
+                    // PingFailureThreshold allows further failures.
+                    try
+                    {
+                        await push("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":" + idKey + ",\"reason\":\"ping timed out\"}}", token).ConfigureAwait(false);
+                    }
+                    catch (Exception sendError) when (sendError is IOException || sendError is ObjectDisposedException || sendError is InvalidOperationException || sendError is OperationCanceledException)
+                    {
+                    }
+                }
 
                 // Only a result answers a ping; an error response or no response in time is a failure.
                 return finished == answered.Task && answered.Task.Result;

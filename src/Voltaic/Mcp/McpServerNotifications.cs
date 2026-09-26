@@ -22,7 +22,7 @@ namespace Voltaic.Mcp
         internal static Task ListChangedAsync(IEnumerable<McpSessionState> sessions, string method, CancellationToken token)
         {
             JsonRpcRequest notification = new JsonRpcRequest { Method = method };
-            return SendAsync(sessions.Where(session => session.IsInitialized), notification, token);
+            return SendAsync(sessions.Where(session => session.NotificationsReady), notification, token);
         }
 
         /// <summary>
@@ -32,7 +32,7 @@ namespace Voltaic.Mcp
         {
             if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
             JsonRpcRequest notification = new JsonRpcRequest { Method = "notifications/resources/updated", Params = new { uri } };
-            return SendAsync(sessions.Where(session => session.IsInitialized && session.IsSubscribed(uri)), notification, token);
+            return SendAsync(sessions.Where(session => session.NotificationsReady && session.IsSubscribed(uri)), notification, token);
         }
 
         /// <summary>
@@ -48,7 +48,7 @@ namespace Voltaic.Mcp
                 Params = new McpLogMessageNotification { Level = level, Logger = logger, Data = data }
             };
 
-            return SendAsync(sessions.Where(session => session.IsInitialized && McpLogLevels.Passes(level, session.LogLevel)), notification, token);
+            return SendAsync(sessions.Where(session => session.NotificationsReady && McpLogLevels.Passes(level, session.LogLevel)), notification, token);
         }
 
         /// <summary>
@@ -101,7 +101,7 @@ namespace Voltaic.Mcp
             if (String.IsNullOrWhiteSpace(method)) throw new ArgumentNullException(nameof(method));
             JsonRpcRequest notification = new JsonRpcRequest { Method = method, Params = parameters };
             return SendAsync(
-                sessions.Where(session => session.IsInitialized
+                sessions.Where(session => session.NotificationsReady
                     && (session.NegotiatedVersion == null || McpVersionCompatibility.IsServerNotificationDefined(method, session.NegotiatedVersion))),
                 notification,
                 token);

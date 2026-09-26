@@ -124,8 +124,10 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Checks that a schema can be validated as written: its <c>$schema</c> dialect is supported (JSON Schema
-        /// 2020-12, the default, or draft-07) and every <c>$ref</c> and <c>$dynamicRef</c> resolves within it.
-        /// Returns a description of the first problem, or null when the schema is usable.
+        /// 2020-12, the default, or draft-07), it is well formed for that dialect (known keywords have values of the
+        /// right type, <c>type</c> names are JSON Schema types, patterns are regular expressions, and subschemas are
+        /// objects or booleans), and every <c>$ref</c> and <c>$dynamicRef</c> resolves within it. Unknown keywords are
+        /// ignored. Returns a description of the first problem, or null when the schema is usable. Thread-safe.
         /// </summary>
         /// <param name="schema">The schema: a <see cref="JsonElement"/>, a JSON string, or any serializable object.</param>
         public static string? CheckSchema(object? schema)
@@ -143,9 +145,10 @@ namespace Voltaic.Mcp
                 return $"the JSON Schema dialect '{dialect}' is not supported (supported: {McpSchemaDocument.Draft202012}, the default, and draft-07).";
             }
 
-            if (!document.IsDraft07 && HasArrayItems(document.Root, 0))
+            string? malformed = McpSchemaKeywords.FindMalformed(document.Root, "#", document.IsDraft07, pattern => GetRegex(pattern) != null, 0);
+            if (malformed != null)
             {
-                return "the array form of 'items' is not valid in JSON Schema 2020-12; use 'prefixItems' (or declare draft-07).";
+                return malformed;
             }
 
             string? unresolved = document.FindUnresolvedReference();
@@ -155,21 +158,6 @@ namespace Voltaic.Mcp
             }
 
             return null;
-        }
-
-        private static bool HasArrayItems(JsonElement element, int depth)
-        {
-            if (depth > 256) return false;
-            if (element.ValueKind == JsonValueKind.Array) return element.EnumerateArray().Any(item => HasArrayItems(item, depth + 1));
-            if (element.ValueKind != JsonValueKind.Object) return false;
-            foreach (JsonProperty member in element.EnumerateObject())
-            {
-                if (member.Name == "enum" || member.Name == "const" || member.Name == "default" || member.Name == "examples") continue;
-                if (member.Name == "items" && member.Value.ValueKind == JsonValueKind.Array) return true;
-                if (HasArrayItems(member.Value, depth + 1)) return true;
-            }
-
-            return false;
         }
 
         private static bool TryGetSchemaElement(object schema, out JsonElement root)
@@ -1164,12 +1152,13 @@ namespace Voltaic.Mcp
                 return cached;
             }
 
+            // JSON Schema patterns are ECMA-262 regular expressions. The translation gives $, ., \d, \w, and \s their
+            // ECMA-262 meaning whichever .NET options compile it. Matching is bounded by the match timeout.
+            string translated = McpSchemaPattern.Translate(pattern);
             Regex? regex = null;
             try
             {
-                // JSON Schema patterns are ECMA-262 regular expressions: ECMAScript mode gives \d, \w, and \s their
-                // ASCII meaning. Matching is bounded by the match timeout.
-                regex = new Regex(pattern, RegexOptions.ECMAScript, _RegexTimeout);
+                regex = new Regex(translated, RegexOptions.ECMAScript, _RegexTimeout);
             }
             catch (ArgumentException)
             {
@@ -1177,13 +1166,13 @@ namespace Voltaic.Mcp
                 // ECMA-262 allows with the u flag): the .NET engine runs it, linear-time where possible.
                 try
                 {
-                    regex = new Regex(pattern, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, _RegexTimeout);
+                    regex = new Regex(translated, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, _RegexTimeout);
                 }
                 catch (Exception nonBacktrackingError) when (nonBacktrackingError is NotSupportedException || nonBacktrackingError is ArgumentException)
                 {
                     try
                     {
-                        regex = new Regex(pattern, RegexOptions.CultureInvariant, _RegexTimeout);
+                        regex = new Regex(translated, RegexOptions.CultureInvariant, _RegexTimeout);
                     }
                     catch (ArgumentException)
                     {

@@ -212,13 +212,13 @@ namespace Test.Shared
                         TestAssert.True(await WaitUntilAsync(() => probe.Cancelled, ct).ConfigureAwait(false), "The server cancelled the handler after the client's notification.");
                     }),
 
-                    Case(suiteId, "ClientsAnswerBatchesFromTheServer", "A batch of server requests is answered with one array; notifications in it are raised", async ct =>
+                    Case(suiteId, "ClientsAnswerBatchesFromTheServer", "On 2025-03-26 a batch of server requests is answered with one array; notifications in it are raised", async ct =>
                     {
                         TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
                         listener.Start();
                         try
                         {
-                            using McpTcpClient client = new McpTcpClient { AutoInitialize = false };
+                            using McpTcpClient client = new McpTcpClient { AutoInitialize = false, ProtocolVersion = McpProtocol.ProtocolVersion20250326 };
                             List<string> notifications = new List<string>();
                             client.NotificationReceived += (sender, notification) => { lock (notifications) notifications.Add(notification.Method); };
                             Task<TcpClient> accepting = listener.AcceptTcpClientAsync(ct).AsTask();
@@ -235,6 +235,38 @@ namespace Test.Shared
                             JsonProbe answers = TestJson.ParseRoot(answer!);
                             TestAssert.Equal(2, answers.Length, $"Both requests are answered in one array: {answer}");
                             TestAssert.True(await WaitUntilAsync(() => { lock (notifications) return notifications.Contains("notifications/hello"); }, ct).ConfigureAwait(false), "The notification is raised.");
+                        }
+                        finally
+                        {
+                            listener.Stop();
+                        }
+                    }),
+
+                    Case(suiteId, "ClientsRefuseBatchesWithoutBatching", "On 2025-06-18 and later a batch from the server gets one -32600 error (id null) and none of its requests run", async ct =>
+                    {
+                        TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+                        listener.Start();
+                        try
+                        {
+                            using McpTcpClient client = new McpTcpClient { AutoInitialize = false, ProtocolVersion = McpProtocol.ProtocolVersion20250618 };
+                            int handled = 0;
+                            client.RegisterRequestHandler("custom/work", (_, _) => { Interlocked.Increment(ref handled); return Task.FromResult<object?>(new { }); });
+                            Task<TcpClient> accepting = listener.AcceptTcpClientAsync(ct).AsTask();
+                            TestAssert.True(await client.ConnectAsync("127.0.0.1", ((IPEndPoint)listener.LocalEndpoint).Port, ct).ConfigureAwait(false), "The client connects.");
+                            using TcpClient server = await accepting.ConfigureAwait(false);
+                            NetworkStream stream = server.GetStream();
+                            byte[] batch = Encoding.UTF8.GetBytes("[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"custom/work\"},{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}]\n");
+                            await stream.WriteAsync(batch, 0, batch.Length, ct).ConfigureAwait(false);
+
+                            using StreamReader reader = new StreamReader(stream);
+                            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                            timeout.CancelAfter(_Wait);
+                            string? answer = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
+                            JsonProbe refusal = TestJson.ParseRoot(answer!);
+                            TestAssert.Equal(-32600, refusal.Get("error").Get("code").Int(), $"The batch is refused: {answer}");
+                            TestAssert.True(refusal.Has("id") && refusal.Get("id").IsNull, "The refusal carries a null id.");
+                            await Task.Delay(200, ct).ConfigureAwait(false);
+                            TestAssert.Equal(0, Volatile.Read(ref handled), "No request in the refused batch runs.");
                         }
                         finally
                         {

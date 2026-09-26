@@ -138,7 +138,7 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.OK, result.StatusCode, $"Body: {result.Body}");
                     }),
 
-                    Case(suiteId, "ProtectedResourceMetadataIsServedWithoutAuth", "ProtectedResourceMetadata is served at both RFC 9728 paths without calling the AuthenticationHandler", async ct =>
+                    Case(suiteId, "ProtectedResourceMetadataIsServedWithoutAuth", "ProtectedResourceMetadata is served only at the well-known URL derived from its resource (RFC 9728 section 3.3), without calling the AuthenticationHandler", async ct =>
                     {
                         bool authCalled = false;
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
@@ -152,22 +152,23 @@ namespace Test.Shared
                             server.AuthenticationHandler = _ =>
                             {
                                 authCalled = true;
-                                return Task.FromResult(AuthenticationResult.BearerChallenge($"http://localhost{McpProtocol.ProtectedResourceMetadataPath}"));
+                                return Task.FromResult(AuthenticationResult.BearerChallenge($"http://localhost{McpProtocol.ProtectedResourceMetadataPath}/mcp"));
                             };
                         }).ConfigureAwait(false);
 
-                        using HttpResponseMessage root = await fixture.Client.GetAsync($"{fixture.BaseUrl}{McpProtocol.ProtectedResourceMetadataPath}", ct).ConfigureAwait(false);
                         using HttpResponseMessage scoped = await fixture.Client.GetAsync($"{fixture.BaseUrl}{McpProtocol.ProtectedResourceMetadataPath}/mcp", ct).ConfigureAwait(false);
-                        JsonProbe document = JsonProbe.Parse(await root.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+                        JsonProbe document = JsonProbe.Parse(await scoped.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+                        bool authCalledForMetadata = authCalled;
+                        using HttpResponseMessage root = await fixture.Client.GetAsync($"{fixture.BaseUrl}{McpProtocol.ProtectedResourceMetadataPath}", ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.OK, root.StatusCode);
-                        TestAssert.Equal(HttpStatusCode.OK, scoped.StatusCode, "The path-scoped form is served too.");
-                        TestAssert.Equal("application/json", root.Content.Headers.ContentType?.MediaType);
+                        TestAssert.Equal(HttpStatusCode.OK, scoped.StatusCode, "The URL derived from the resource https://mcp.example.com/mcp is served.");
+                        TestAssert.True(root.StatusCode != HttpStatusCode.OK, $"The root form would not match the resource identifier, so it is not served (got {(int)root.StatusCode}).");
+                        TestAssert.Equal("application/json", scoped.Content.Headers.ContentType?.MediaType);
                         TestAssert.Equal("https://mcp.example.com/mcp", document.Get("resource").String());
                         TestAssert.Equal("https://auth.example.com", document.Get("authorization_servers")[0].String());
                         TestAssert.Equal("tools:read", document.Get("scopes_supported")[0].String());
                         TestAssert.False(document.Has("resource_name"), "Null fields are omitted.");
-                        TestAssert.False(authCalled, "The metadata never requires authentication.");
+                        TestAssert.False(authCalledForMetadata, "The metadata never requires authentication.");
                     }),
 
                     Case(suiteId, "ProtectedResourceMetadataAbsentOrInvalid", "Without metadata the paths return 404; invalid metadata is rejected; POST gets 405; a disallowed origin gets 403", async ct =>

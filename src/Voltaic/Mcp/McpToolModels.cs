@@ -1,9 +1,9 @@
 namespace Voltaic.Mcp
 {
-    using Voltaic.Core;
     using System.Collections.Generic;
     using System.Text.Json;
     using System.Text.Json.Serialization;
+    using Voltaic.Core;
 
     /// <summary>
     /// Result returned by tools/call.
@@ -17,7 +17,11 @@ namespace Voltaic.Mcp
         public List<object> Content { get; set; } = new List<object>();
 
         /// <summary>
-        /// Gets or sets structured content returned by the tool.
+        /// Gets or sets structured content returned by the tool. Null (the default) omits <c>structuredContent</c>
+        /// from the result; to send JSON <c>null</c> (allowed from MCP 2026-07-28), use
+        /// <see cref="FromStructured(object?)"/> with null or assign a <see cref="JsonElement"/> of kind
+        /// <see cref="JsonValueKind.Null"/>. Before 2026-07-28 a value that is not a JSON object is sent as text
+        /// instead, and a tool with an output schema must return an object.
         /// </summary>
         [JsonPropertyName("structuredContent")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

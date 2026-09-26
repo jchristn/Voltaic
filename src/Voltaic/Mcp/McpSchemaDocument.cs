@@ -196,16 +196,20 @@ namespace Voltaic.Mcp
 
         // Records resources, anchors, and references. Keywords that hold instance values (enum, const, default,
         // examples) are not schemas and are skipped.
+        // Walks the schema through its applicator keywords only (McpSchemaKeywords.Subschemas), so values of data
+        // keywords (enum, const, default, examples) and of unknown keywords are never read as schemas, while a property
+        // that happens to be named like one of those keywords still is.
         private void Index(JsonElement element, McpSchemaResource resource, int depth, bool isResourceRoot)
         {
             if (depth > 256) return;
-            if (element.ValueKind == JsonValueKind.Array)
+            if (element.ValueKind != JsonValueKind.Object) return;
+
+            // draft-07: every keyword beside $ref is ignored, including $id.
+            if (IsDraft07 && element.TryGetProperty("$ref", out JsonElement draft07Reference) && draft07Reference.ValueKind == JsonValueKind.String)
             {
-                foreach (JsonElement item in element.EnumerateArray()) Index(item, resource, depth + 1, false);
+                _References.Add(new McpSchemaReference(draft07Reference.GetString()!, resource, false));
                 return;
             }
-
-            if (element.ValueKind != JsonValueKind.Object) return;
 
             if (!isResourceRoot && TryGetResourceId(element, out string? id) && Uri.TryCreate(resource.BaseUri, id, out Uri? resolved))
             {
@@ -236,14 +240,12 @@ namespace Voltaic.Mcp
                     case "$dynamicRef" when member.Value.ValueKind == JsonValueKind.String && !IsDraft07:
                         _References.Add(new McpSchemaReference(member.Value.GetString()!, resource, true));
                         continue;
-                    case "enum":
-                    case "const":
-                    case "default":
-                    case "examples":
-                        continue;
                 }
+            }
 
-                Index(member.Value, resource, depth + 1, false);
+            foreach (JsonElement subschema in McpSchemaKeywords.Subschemas(element, IsDraft07))
+            {
+                Index(subschema, resource, depth + 1, false);
             }
         }
 

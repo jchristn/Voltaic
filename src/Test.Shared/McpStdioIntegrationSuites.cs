@@ -199,7 +199,7 @@ namespace Test.Shared
             }
         }
 
-        private static string[] TestServerArguments()
+        internal static string[] TestServerArguments()
         {
             string? builtServer = FindBuiltServerDll();
             if (builtServer != null)

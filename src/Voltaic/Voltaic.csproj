@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>2.1.8</Version>
+		<Version>2.1.9</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -21,7 +21,7 @@
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
-		<PackageReleaseNotes>v2.1.8: Fixes every finding of a review of v2.1.7 against the MCP specification (Mcp-Name source, stdio UTF-8, dialect-exact schemas, ping failures). See CHANGELOG.md and COMPATIBILITY.md.</PackageReleaseNotes>
+		<PackageReleaseNotes>v2.1.9: Fixes every finding of a review of v2.1.8 against the MCP specification (ECMA-262 patterns, schema checks, lifecycle ordering, stateless client). See CHANGELOG.md and COMPATIBILITY.md.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>

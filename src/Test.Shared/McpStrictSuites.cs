@@ -349,25 +349,25 @@ namespace Test.Shared
             return new TestCaseDescriptor(suiteId, caseId, displayName, executeAsync, new[] { "mcp", "strict", "conformance" });
         }
 
-        private static JsonElement Schema(string json)
+        internal static JsonElement Schema(string json)
         {
             using JsonDocument document = JsonDocument.Parse(json);
             return document.RootElement.Clone();
         }
 
-        private static string Meta(string capabilities)
+        internal static string Meta(string capabilities)
         {
             return "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientInfo\":{\"name\":\"t\",\"version\":\"1\"},\"io.modelcontextprotocol/clientCapabilities\":" + capabilities + "}";
         }
 
-        private static async Task<RawLineClient> InitializedAsync(TcpJsonRpcFixture fixture, CancellationToken token)
+        internal static async Task<RawLineClient> InitializedAsync(TcpJsonRpcFixture fixture, CancellationToken token)
         {
             RawLineClient client = await RawLineClient.ConnectAsync(fixture.Port, token).ConfigureAwait(false);
             await client.InitializeAsync("2025-11-25", token).ConfigureAwait(false);
             return client;
         }
 
-        private static async Task<bool> IsErrorAsync(RawLineClient client, string tool, string arguments)
+        internal static async Task<bool> IsErrorAsync(RawLineClient client, string tool, string arguments)
         {
             int id = Interlocked.Increment(ref _NextId);
             await client.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"tools/call\",\"params\":{\"name\":\"" + tool + "\",\"arguments\":" + arguments + "}}").ConfigureAwait(false);
@@ -375,7 +375,7 @@ namespace Test.Shared
             return result.Has("isError") && result.Get("isError").Bool();
         }
 
-        private static JsonProbe Next(RawLineClient client)
+        internal static JsonProbe Next(RawLineClient client)
         {
             string? line = client.Receive(_Wait);
             if (line == null) throw new TimeoutException("No message arrived.");

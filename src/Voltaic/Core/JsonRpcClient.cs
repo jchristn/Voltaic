@@ -478,6 +478,25 @@ namespace Voltaic.Core
         // answered together in one array.
         private void ProcessBatch(string batchJson)
         {
+            JsonRpcResponse? refused = _RequestDispatcher.RefuseBatch();
+            if (refused != null)
+            {
+                // The negotiated revision has no batches: the whole batch is answered with one Invalid Request error.
+                LogMessage("Refusing a JSON-RPC batch from the server; the negotiated protocol version does not allow batches.");
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await SendJsonAsync(JsonSerializer.Serialize(refused), _TokenSource?.Token ?? CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogMessage($"Could not refuse a batch: {ex.Message}");
+                    }
+                });
+                return;
+            }
+
             List<JsonRpcRequest> requests = new List<JsonRpcRequest>();
             try
             {

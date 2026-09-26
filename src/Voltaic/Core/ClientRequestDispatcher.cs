@@ -3,6 +3,7 @@ namespace Voltaic.Core
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
@@ -18,16 +19,25 @@ namespace Voltaic.Core
         private readonly ConcurrentDictionary<string, Func<RpcParameters?, CancellationToken, Task<object?>>> _Handlers =
             new ConcurrentDictionary<string, Func<RpcParameters?, CancellationToken, Task<object?>>>(StringComparer.Ordinal);
 
-        /// <summary>
-        /// Gets or sets whether <c>ping</c> is answered with an empty object (<c>{}</c>) and reserved, as the MCP
-        /// specification requires of every party. Plain JSON-RPC clients leave it off.
-        /// </summary>
         // Requests from the server that are running, by ID, so notifications/cancelled can stop them.
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _Running = new ConcurrentDictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
         // Cancellations that arrived before their request started, kept briefly.
         private readonly ConcurrentDictionary<string, DateTime> _EarlyCancels = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        // IDs of requests answered recently: a cancellation for one of them arrived too late and is ignored, so it can
+        // never cancel a later request that reuses the ID.
+        private readonly ConcurrentDictionary<string, DateTime> _Finished = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly TimeSpan _EntryLifetime = TimeSpan.FromSeconds(30);
+        private const int _MaxFinished = 4096;
 
+        /// <summary>
+        /// Gets or sets whether MCP rules apply: <c>ping</c> is answered with an empty object (<c>{}</c>) and reserved,
+        /// as the MCP specification requires of every party; a request with a null ID gets <c>-32600</c>; and a
+        /// handler result that is not a JSON object gets <c>-32603</c>. Plain JSON-RPC clients leave it off.
+        /// </summary>
         internal bool AnswersPing { get; set; }
+
+        // Returns whether the governing protocol revision allows JSON-RPC batches, or null to accept them (plain JSON-RPC).
+        internal Func<bool>? AcceptsBatches { get; set; }
 
         // Receives diagnostic messages, such as the reason the server gave for cancelling a request.
         internal Action<string>? Log { get; set; }
@@ -59,6 +69,12 @@ namespace Voltaic.Core
 
             if (idKey == null) return true;
             Log?.Invoke($"The server cancelled request {idKey} (reason: {reason}).");
+            if (_Finished.ContainsKey(idKey) && !_Running.ContainsKey(idKey))
+            {
+                // Already answered: the cancellation crossed the response and is ignored.
+                return true;
+            }
+
             if (_Running.TryGetValue(idKey, out CancellationTokenSource? running))
             {
                 try
@@ -81,6 +97,19 @@ namespace Voltaic.Core
             }
 
             return true;
+        }
+
+        private static bool IsJsonObject(object value)
+        {
+            try
+            {
+                JsonElement element = value is JsonElement json ? json : JsonSerializer.SerializeToElement(value);
+                return element.ValueKind == JsonValueKind.Object;
+            }
+            catch (Exception serializeError) when (serializeError is JsonException || serializeError is NotSupportedException)
+            {
+                return false;
+            }
         }
 
         private static string? IdKey(object? id)
@@ -124,8 +153,9 @@ namespace Voltaic.Core
         }
 
         /// <summary>
-        /// Returns the message as a request when it is a JSON object with a string <c>method</c> and a non-null
-        /// <c>id</c>; otherwise null (responses, notifications, and malformed input).
+        /// Returns the message as a request when it is a JSON object with a string <c>method</c> and an <c>id</c>
+        /// member; otherwise null (responses, notifications, and malformed input). A request whose <c>id</c> is null is
+        /// returned with a null <see cref="JsonRpcRequest.Id"/>, so <see cref="DispatchAsync"/> can answer it.
         /// </summary>
         internal static JsonRpcRequest? ParseRequest(string json)
         {
@@ -138,7 +168,7 @@ namespace Voltaic.Core
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object) return null;
                     if (!root.TryGetProperty("method", out JsonElement method) || method.ValueKind != JsonValueKind.String) return null;
-                    if (!root.TryGetProperty("id", out JsonElement id) || id.ValueKind == JsonValueKind.Null) return null;
+                    if (!root.TryGetProperty("id", out JsonElement _)) return null;
                 }
 
                 return JsonSerializer.Deserialize<JsonRpcRequest>(json);
@@ -150,6 +180,19 @@ namespace Voltaic.Core
         }
 
         /// <summary>
+        /// Returns the error to send for a batch from the server when the governing revision allows no batches
+        /// (MCP 2025-06-18 and later), or null when the batch is to be processed.
+        /// </summary>
+        internal JsonRpcResponse? RefuseBatch()
+        {
+            Func<bool>? accepts = AcceptsBatches;
+            if (accepts == null || accepts()) return null;
+            JsonRpcError error = JsonRpcError.InvalidRequest();
+            error.Message = "Invalid Request: JSON-RPC batches are not supported in the negotiated protocol version.";
+            return new JsonRpcResponse { Id = null, Error = error };
+        }
+
+        /// <summary>
         /// Runs the handler for a request and returns the response to send back. Unknown methods get
         /// <c>-32601</c>; a handler exception that implements <see cref="IJsonRpcErrorProvider"/> supplies its own
         /// error; any other exception becomes <c>-32603</c> without its details.
@@ -157,6 +200,48 @@ namespace Voltaic.Core
         internal async Task<JsonRpcResponse?> DispatchAsync(JsonRpcRequest request, CancellationToken token)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
+            string? idKey = IdKey(request.Id);
+            if (idKey != null) _Finished.TryRemove(idKey, out DateTime _);
+            try
+            {
+                return await DispatchCoreAsync(request, idKey, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (idKey != null) RecordFinished(idKey);
+            }
+        }
+
+        private void RecordFinished(string idKey)
+        {
+            if (_Running.ContainsKey(idKey)) return;
+            _EarlyCancels.TryRemove(idKey, out DateTime _);
+            DateTime now = DateTime.UtcNow;
+            _Finished[idKey] = now;
+            if (_Finished.Count < _MaxFinished) return;
+            foreach (KeyValuePair<string, DateTime> entry in _Finished)
+            {
+                if (now - entry.Value > _EntryLifetime) _Finished.TryRemove(entry.Key, out DateTime _);
+            }
+
+            if (_Finished.Count >= _MaxFinished * 2)
+            {
+                foreach (KeyValuePair<string, DateTime> oldest in _Finished.OrderBy(entry => entry.Value).Take(_Finished.Count - _MaxFinished).ToList())
+                {
+                    _Finished.TryRemove(oldest.Key, out DateTime _);
+                }
+            }
+        }
+
+        private async Task<JsonRpcResponse?> DispatchCoreAsync(JsonRpcRequest request, string? idKey, CancellationToken token)
+        {
+            if (AnswersPing && request.Id == null)
+            {
+                // MCP request IDs must not be null.
+                JsonRpcError nullId = JsonRpcError.InvalidRequest();
+                nullId.Message = "Invalid Request: MCP request IDs must be a string or an integer, not null.";
+                return new JsonRpcResponse { Id = null, Error = nullId };
+            }
 
             if (AnswersPing && StringComparer.Ordinal.Equals(request.Method, PingMethod))
             {
@@ -170,7 +255,6 @@ namespace Voltaic.Core
                 return new JsonRpcResponse { Id = request.Id, Error = notFound };
             }
 
-            string? idKey = IdKey(request.Id);
             using CancellationTokenSource running = CancellationTokenSource.CreateLinkedTokenSource(token);
             if (idKey != null)
             {
@@ -184,6 +268,13 @@ namespace Voltaic.Core
                 RpcParameters? parameters = request.Params == null ? null : RpcParameters.FromObject(request.Params);
                 object? result = await handler(parameters, running.Token).ConfigureAwait(false);
                 if (running.IsCancellationRequested && !token.IsCancellationRequested) return null;
+                if (AnswersPing && result != null && !IsJsonObject(result))
+                {
+                    // MCP results are always JSON objects.
+                    Log?.Invoke($"The handler for {request.Method} returned a result that is not a JSON object; answering with an internal error.");
+                    return new JsonRpcResponse { Id = request.Id, Error = JsonRpcError.InternalError() };
+                }
+
                 return new JsonRpcResponse { Id = request.Id, Result = result ?? new Dictionary<string, object?>() };
             }
             catch (OperationCanceledException) when (running.IsCancellationRequested && !token.IsCancellationRequested)
