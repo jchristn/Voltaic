@@ -3,7 +3,7 @@
 This document records how Voltaic conforms to each published MCP specification revision: which transports are supported, the status of every requirement area, the relaxations made deliberately to simplify integration, and the optional features not implemented. It is updated with every release.
 
 - **Voltaic version:** 2.1.7
-- **Last reviewed:** 2026-09-26, by a line-by-line review of the MUST, MUST NOT, SHOULD, and SHOULD NOT requirements of each revision against the source
+- **Last reviewed:** 2026-09-26. The v2.1.6 source was reviewed line by line against every MUST, MUST NOT, SHOULD, and SHOULD NOT requirement of each revision; v2.1.7 resolves each finding, and each resolution is covered by tests. A fresh review of v2.1.7 is pending.
 - **Revisions covered:** `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, `2026-07-28`
 - **Interoperability verified with:** MCP Inspector CLI 2.8.0, the official Python MCP SDK 2.2.0 (as client and server), Claude Code 2.1.281, the official A2A Python SDK 1.1.5
 
