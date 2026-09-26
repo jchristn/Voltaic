@@ -129,7 +129,9 @@ namespace Voltaic.Mcp
         /// response stream of the call (on HTTP the response becomes an SSE stream). Does nothing when the client sent
         /// no progress token or the transport cannot deliver notifications for the call. Progress must increase with
         /// every notification. Updates are rate-limited by the server's <c>ProgressIntervalMs</c>: one that follows the
-        /// previous one sooner is not sent, except the final one (progress equal to the total).
+        /// previous one sooner is held back, and only the latest held-back update is sent, just before the response
+        /// (unless a later update is sent first), so the last update always arrives. An update with progress equal to the
+        /// total is always sent at once.
         /// </summary>
         /// <param name="progress">The progress so far. Must be greater than the previous value.</param>
         /// <param name="total">The total, when known, or null.</param>
@@ -149,8 +151,6 @@ namespace Voltaic.Mcp
                 throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
             }
 
-            if (!request.ShouldSendProgress(progress, total)) return Task.CompletedTask;
-
             JsonRpcRequest notification = new JsonRpcRequest
             {
                 Method = "notifications/progress",
@@ -162,6 +162,12 @@ namespace Voltaic.Mcp
                     Message = message
                 }
             };
+
+            if (!request.ShouldSendProgress(progress, total))
+            {
+                request.DeferProgress(notification);
+                return Task.CompletedTask;
+            }
 
             return _Scope.Notify(notification, token);
         }
@@ -188,6 +194,9 @@ namespace Voltaic.Mcp
             string? minimum = _Scope.StatelessVersion != null ? _Scope.RequestLogLevel : _Scope.Session.LogLevel;
             if (_Scope.StatelessVersion != null && minimum == null) return Task.CompletedTask;
             if (!McpLogLevels.Passes(level, minimum)) return Task.CompletedTask;
+
+            // Log messages are rate-limited per client (MCP logging utility).
+            if (!_Scope.Session.TryConsumeLog()) return Task.CompletedTask;
 
             JsonRpcRequest notification = new JsonRpcRequest
             {

@@ -83,6 +83,7 @@ namespace Voltaic.Mcp
         private readonly Dictionary<string, string> _RequestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private readonly object _RequestHeadersLock = new object();
         private string _ProtocolVersion = McpProtocol.LatestProtocolVersion;
+        private string _RequestedProtocolVersion = McpProtocol.LatestProtocolVersion;
         private string _ClientName = "Voltaic.Mcp.WebsocketsClient";
         private string _ClientVersion = "1.0.0";
         private JsonElement? _InitializeResult;
@@ -229,7 +230,8 @@ namespace Voltaic.Mcp
                 Id = id
             };
 
-            TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>();
+            // Continuations run off the receive loop, so code after an awaited call never blocks reading (and answering pings).
+            TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
             ClientPendingRequest pendingRequest = new ClientPendingRequest(id, request, tcs);
             _PendingRequests[id] = pendingRequest;
             _ProgressTracker.Track(parameters);
@@ -306,7 +308,7 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-        /// the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+        /// the server negotiated; each new handshake requests the version last set again. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
         /// client must request a version it can negotiate. Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
         /// Setting null or whitespace restores the default.
         /// </summary>
@@ -323,6 +325,7 @@ namespace Voltaic.Mcp
                 }
 
                 _ProtocolVersion = version;
+                _RequestedProtocolVersion = version;
             }
         }
 
@@ -359,8 +362,9 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
-        /// <see cref="NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
-        /// total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+        /// <see cref="NotificationReceived"/>; faster updates are held back, and the latest held-back update is raised just
+        /// before the request's response, so the last update always arrives. An update with progress equal to the total
+        /// always passes. Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
         /// every update. Maximum is 60000.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
@@ -472,6 +476,9 @@ namespace Voltaic.Mcp
 
         private async Task InitializeCoreAsync(int timeoutMs, CancellationToken token)
         {
+            // Every handshake requests the version the application set (the latest by default), never one negotiated
+            // with an earlier server.
+            _ProtocolVersion = _RequestedProtocolVersion;
             McpInitializeOutcome outcome = await McpClientHandshake.RunAsync(
                 async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
                 ct => NotifyAsync("notifications/initialized", null, ct),
@@ -642,7 +649,9 @@ namespace Voltaic.Mcp
             }
             finally
             {
-                _IsConnected = false;
+                // A loop stopped by Disconnect (its token cancelled) leaves the flag to Disconnect, so it never clears the
+                // flag of a connection made right after.
+                if (!token.IsCancellationRequested) _IsConnected = false;
             }
         }
 
@@ -774,6 +783,24 @@ namespace Voltaic.Mcp
             }
         }
 
+        // Raises NotificationReceived, isolating each handler's exceptions.
+        private void RaiseNotificationReceived(JsonRpcRequest notification)
+        {
+            EventHandler<JsonRpcRequest>? handlers = NotificationReceived;
+            if (handlers == null) return;
+            foreach (Delegate handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    ((EventHandler<JsonRpcRequest>)handler)(this, notification);
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"Error in NotificationReceived handler: {ex.Message}");
+                }
+            }
+        }
+
         private void ProcessResponse(string responseString)
         {
             try
@@ -809,6 +836,10 @@ namespace Voltaic.Mcp
 
                     if (_PendingRequests.TryRemove(lookupKey, out ClientPendingRequest? pendingRequest))
                     {
+                        // The latest progress update the rate limit held back arrives before the response.
+                        JsonRpcRequest? heldProgress = _ProgressTracker.TakePending(pendingRequest.Request.Params);
+                        if (heldProgress != null) RaiseNotificationReceived(heldProgress);
+
                         RaiseResponseReceived(pendingRequest, response);
                         pendingRequest.TaskCompletionSource.SetResult(response);
                     }

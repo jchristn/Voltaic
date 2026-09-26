@@ -29,8 +29,8 @@ namespace Voltaic.Mcp
             string? metaVersion = ExtractMetaProtocolVersion(requestJson);
             if (String.IsNullOrWhiteSpace(metaVersion))
             {
-                // A request carrying the per-request client fields of the stateless revision is a stateless request;
-                // without a protocol version it is missing a required field.
+                // A request (not a notification) carrying the per-request client fields of the stateless revision is a
+                // stateless request; without a protocol version it is missing a required field.
                 if (HasStatelessMetaWithoutVersion(requestJson))
                 {
                     throw new McpProtocolException(-32602, $"params._meta[\"{McpProtocol.MetaProtocolVersionKey}\"] is required and must be a string naming a protocol version.");
@@ -70,6 +70,10 @@ namespace Voltaic.Mcp
                 {
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object) return false;
+
+                    // Only a request can be malformed this way; a notification's _meta is open (for example a
+                    // cancellation that carries clientInfo) and is never rejected for it.
+                    if (!root.TryGetProperty("id", out JsonElement _)) return false;
                     if (!root.TryGetProperty("params", out JsonElement parameters) || parameters.ValueKind != JsonValueKind.Object) return false;
                     if (!parameters.TryGetProperty("_meta", out JsonElement meta) || meta.ValueKind != JsonValueKind.Object) return false;
                     bool hasClientFields = meta.TryGetProperty(McpProtocol.MetaClientCapabilitiesKey, out JsonElement _) || meta.TryGetProperty(McpProtocol.MetaClientInfoKey, out JsonElement _);

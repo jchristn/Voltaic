@@ -84,8 +84,9 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
-        /// <see cref="NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
-        /// total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+        /// <see cref="NotificationReceived"/>; faster updates are held back, and the latest held-back update is raised just
+        /// before the request's response, so the last update always arrives. An update with progress equal to the total
+        /// always passes. Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
         /// every update. Maximum is 60000.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
@@ -567,7 +568,9 @@ namespace Voltaic.Mcp
             _ProgressTracker.Track(parameters);
             try
             {
-                return await ExchangeCoreAsync(method, parameters, timeoutMs, token).ConfigureAwait(false);
+                JsonRpcResponse response = await ExchangeCoreAsync(method, parameters, timeoutMs, token).ConfigureAwait(false);
+                RaiseHeldProgress(parameters);
+                return response;
             }
             finally
             {
@@ -793,7 +796,9 @@ namespace Voltaic.Mcp
             _ProgressTracker.Track(parameters);
             try
             {
-                return await SendStatelessTrackedAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
+                JsonRpcResponse response = await SendStatelessTrackedAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
+                RaiseHeldProgress(parameters);
+                return response;
             }
             finally
             {
@@ -1794,6 +1799,25 @@ namespace Voltaic.Mcp
                 {
                     SessionId = sessionHeader;
                     break;
+                }
+            }
+        }
+
+        // Delivers the latest progress update the rate limit held back for a request, before its response is returned.
+        private void RaiseHeldProgress(object? parameters)
+        {
+            JsonRpcRequest? held = _ProgressTracker.TakePending(parameters);
+            EventHandler<JsonRpcRequest>? handlers = NotificationReceived;
+            if (held == null || handlers == null) return;
+            foreach (Delegate handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    ((EventHandler<JsonRpcRequest>)handler)(this, held);
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"Error in NotificationReceived handler: {ex.Message}");
                 }
             }
         }

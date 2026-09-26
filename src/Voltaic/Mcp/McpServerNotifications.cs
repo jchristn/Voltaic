@@ -48,7 +48,7 @@ namespace Voltaic.Mcp
                 Params = new McpLogMessageNotification { Level = level, Logger = logger, Data = data }
             };
 
-            return SendAsync(sessions.Where(session => session.NotificationsReady && McpLogLevels.Passes(level, session.LogLevel)), notification, token);
+            return SendAsync(sessions.Where(session => session.NotificationsReady && McpLogLevels.Passes(level, session.LogLevel) && session.TryConsumeLog()), notification, token);
         }
 
         /// <summary>
@@ -84,14 +84,18 @@ namespace Voltaic.Mcp
                 throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
             }
 
-            // Coalesced by the rate limit: accepted, but not sent.
-            if (!request.ShouldSendProgress(progress, total)) return true;
-
             JsonRpcRequest notification = new JsonRpcRequest
             {
                 Method = "notifications/progress",
                 Params = new McpProgressNotification { ProgressToken = request.ProgressToken!.Value, Progress = progress, Total = total, Message = message }
             };
+
+            // Coalesced by the rate limit: held back and sent before the response unless a later update goes first.
+            if (!request.ShouldSendProgress(progress, total))
+            {
+                request.DeferProgress(notification);
+                return true;
+            }
 
             await request.Notify(notification, token).ConfigureAwait(false);
             return true;

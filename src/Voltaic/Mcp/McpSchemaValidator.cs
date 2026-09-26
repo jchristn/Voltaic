@@ -36,10 +36,9 @@ namespace Voltaic.Mcp
         private static readonly int _EvaluationBudget = 1000000;
         private static readonly int _MaximumCachedPatterns = 512;
         private static readonly int _MaximumMessageValueLength = 200;
-        private static readonly TimeSpan _RegexTimeout = TimeSpan.FromSeconds(1);
         private static readonly JsonDocumentOptions _DocumentOptions = new JsonDocumentOptions { MaxDepth = 256 };
         private static readonly JsonElement _EmptyObject = CreateEmptyObject();
-        private static readonly ConcurrentDictionary<string, Regex?> _RegexCache = new ConcurrentDictionary<string, Regex?>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, McpEcmaRegex?> _RegexCache = new ConcurrentDictionary<string, McpEcmaRegex?>(StringComparer.Ordinal);
         private static readonly string[] _KnownTypes = new[] { "object", "array", "string", "number", "integer", "boolean", "null" };
 
         /// <summary>
@@ -143,6 +142,11 @@ namespace Voltaic.Mcp
             if (!McpSchemaDocument.IsSupportedDialect(dialect))
             {
                 return $"the JSON Schema dialect '{dialect}' is not supported (supported: {McpSchemaDocument.Draft202012}, the default, and draft-07).";
+            }
+
+            if (document.UnsupportedEmbeddedDialect != null)
+            {
+                return $"the JSON Schema dialect '{document.UnsupportedEmbeddedDialect}' of an embedded resource is not supported (supported: {McpSchemaDocument.Draft202012}, the default, and draft-07).";
             }
 
             string? malformed = McpSchemaKeywords.FindMalformed(document.Root, "#", document.IsDraft07, pattern => GetRegex(pattern) != null, 0);
@@ -1036,38 +1040,23 @@ namespace Voltaic.Mcp
             return exponent - fractionDigits + trailingZeros >= 0;
         }
 
+        // JSON numbers are compared exactly, whatever their precision or range.
         private static int? CompareNumbers(JsonElement left, JsonElement right)
         {
-            if (left.TryGetDecimal(out decimal leftDecimal) && right.TryGetDecimal(out decimal rightDecimal))
-            {
-                return Decimal.Compare(leftDecimal, rightDecimal);
-            }
-
-            if (left.TryGetDouble(out double leftDouble) && right.TryGetDouble(out double rightDouble))
-            {
-                return leftDouble.CompareTo(rightDouble);
-            }
-
-            return null;
+            if (left.ValueKind != JsonValueKind.Number || right.ValueKind != JsonValueKind.Number) return null;
+            McpJsonNumber? leftNumber = McpJsonNumber.Parse(left.GetRawText());
+            McpJsonNumber? rightNumber = McpJsonNumber.Parse(right.GetRawText());
+            if (leftNumber == null || rightNumber == null) return null;
+            return McpJsonNumber.Compare(leftNumber, rightNumber);
         }
 
         private static bool? IsMultipleOf(JsonElement value, JsonElement divisor)
         {
-            if (value.TryGetDecimal(out decimal valueDecimal) && divisor.TryGetDecimal(out decimal divisorDecimal))
-            {
-                if (divisorDecimal <= 0m) return null;
-                return valueDecimal % divisorDecimal == 0m;
-            }
-
-            if (value.TryGetDouble(out double valueDouble) && divisor.TryGetDouble(out double divisorDouble))
-            {
-                if (divisorDouble <= 0 || Double.IsNaN(divisorDouble)) return null;
-                double quotient = valueDouble / divisorDouble;
-                if (Double.IsInfinity(quotient) || Double.IsNaN(quotient)) return null;
-                return Math.Abs(quotient - Math.Round(quotient)) <= 1e-9 * Math.Max(1.0, Math.Abs(quotient));
-            }
-
-            return null;
+            if (value.ValueKind != JsonValueKind.Number || divisor.ValueKind != JsonValueKind.Number) return null;
+            McpJsonNumber? valueNumber = McpJsonNumber.Parse(value.GetRawText());
+            McpJsonNumber? divisorNumber = McpJsonNumber.Parse(divisor.GetRawText());
+            if (valueNumber == null || divisorNumber == null) return null;
+            return McpJsonNumber.IsMultipleOf(valueNumber, divisorNumber);
         }
 
         // Reads a non-negative integral keyword value (such as minLength); a malformed value is ignored.
@@ -1124,73 +1113,43 @@ namespace Voltaic.Mcp
         }
 
         // Returns true or false for a match, or null when the pattern is not a valid regular expression (the keyword
-        // is then ignored). timedOut reports a match that exceeded the time limit, which callers treat as a failure.
+        // is then ignored). timedOut reports a match that exceeded the step budget, which callers treat as a failure.
         private static bool? MatchPattern(string pattern, string input, out bool timedOut)
         {
             timedOut = false;
-            Regex? regex = GetRegex(pattern);
+            McpEcmaRegex? regex = GetRegex(pattern);
             if (regex == null)
             {
                 return null;
             }
 
-            try
-            {
-                return regex.IsMatch(input);
-            }
-            catch (RegexMatchTimeoutException)
+            bool? matched = regex.IsMatch(input);
+            if (matched == null)
             {
                 timedOut = true;
                 return null;
             }
+
+            return matched;
         }
 
-        private static Regex? GetRegex(string pattern)
+        // JSON Schema patterns are ECMA-262 regular expressions, run with the u-flag semantics JSON Schema recommends by
+        // Voltaic's own engine (McpEcmaRegex), so every construct means exactly what it means in ECMA-262.
+        private static McpEcmaRegex? GetRegex(string pattern)
         {
-            if (_RegexCache.TryGetValue(pattern, out Regex? cached))
+            if (_RegexCache.TryGetValue(pattern, out McpEcmaRegex? cached))
             {
                 return cached;
             }
 
-            // JSON Schema patterns are ECMA-262 regular expressions. The translation gives $, ., \d, \w, \s, \u{...},
-            // and \p{...} their ECMA-262 meaning whichever .NET options compile it, and rejects syntax ECMA-262 does not
-            // define. Matching is bounded by the match timeout.
-            string translated;
+            McpEcmaRegex? regex;
             try
             {
-                translated = McpSchemaPattern.Translate(pattern);
+                regex = McpEcmaRegex.Compile(pattern);
             }
             catch (ArgumentException)
             {
-                _RegexCache[pattern] = null;
-                return null;
-            }
-
-            Regex? regex = null;
-            try
-            {
-                regex = new Regex(translated, RegexOptions.ECMAScript, _RegexTimeout);
-            }
-            catch (ArgumentException)
-            {
-                // A construct .NET's ECMAScript mode does not accept (such as a named group or a lookbehind): the .NET
-                // engine runs the translated pattern, linear-time where possible.
-                try
-                {
-                    regex = new Regex(translated, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, _RegexTimeout);
-                }
-                catch (Exception nonBacktrackingError) when (nonBacktrackingError is NotSupportedException || nonBacktrackingError is ArgumentException)
-                {
-                    try
-                    {
-                        regex = new Regex(translated, RegexOptions.CultureInvariant, _RegexTimeout);
-                    }
-                    catch (ArgumentException)
-                    {
-                        // Not a valid regular expression: the keyword that uses it is ignored.
-                        regex = null;
-                    }
-                }
+                regex = null;
             }
 
             if (_RegexCache.Count >= _MaximumCachedPatterns)

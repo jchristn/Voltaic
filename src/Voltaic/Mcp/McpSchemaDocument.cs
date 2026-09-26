@@ -40,15 +40,16 @@ namespace Voltaic.Mcp
                 ? declared.GetString()
                 : null;
             Dialect = dialect;
-            IsDraft07 = dialect != null && _Draft07.Contains(dialect.TrimEnd('#'), StringComparer.Ordinal);
+            bool rootIsDraft07 = IsDraft07Dialect(dialect);
 
+            // A relative root $id is resolved against the placeholder base, so references that name it resolve.
             Uri rootUri = _PlaceholderBase;
-            if (root.ValueKind == JsonValueKind.Object && TryGetResourceId(root, out string? rootId) && Uri.TryCreate(rootId, UriKind.Absolute, out Uri? absolute))
+            if (root.ValueKind == JsonValueKind.Object && TryGetResourceId(root, out string? rootId) && Uri.TryCreate(_PlaceholderBase, rootId, out Uri? absolute))
             {
                 rootUri = WithoutFragment(absolute);
             }
 
-            _RootResource = new McpSchemaResource(rootUri, root);
+            _RootResource = new McpSchemaResource(rootUri, root, rootIsDraft07);
             _Resources[rootUri.AbsoluteUri] = _RootResource;
             Index(root, _RootResource, 0, true);
             _Scope.Add(_RootResource);
@@ -65,10 +66,25 @@ namespace Voltaic.Mcp
         internal string? Dialect { get; }
 
         /// <summary>
-        /// Gets whether the schema is draft-07: <c>$ref</c> then overrides its sibling keywords, and 2019-09/2020-12
-        /// keywords (such as <c>prefixItems</c> or <c>unevaluatedProperties</c>) are not keywords.
+        /// Gets whether the schema being evaluated is draft-07 (the dialect of the current resource, so an embedded
+        /// resource with its own <c>$schema</c> is evaluated in that dialect): <c>$ref</c> then overrides its sibling
+        /// keywords, and 2019-09/2020-12 keywords (such as <c>prefixItems</c> or <c>unevaluatedProperties</c>) are not
+        /// keywords.
         /// </summary>
-        internal bool IsDraft07 { get; }
+        internal bool IsDraft07 => _Scope.Count > 0 ? _Scope[_Scope.Count - 1].IsDraft07 : _RootResource.IsDraft07;
+
+        /// <summary>
+        /// Gets the first embedded resource's <c>$schema</c> that names an unsupported dialect, or null.
+        /// </summary>
+        internal string? UnsupportedEmbeddedDialect { get; private set; }
+
+        /// <summary>
+        /// Returns true for a draft-07 <c>$schema</c> value.
+        /// </summary>
+        internal static bool IsDraft07Dialect(string? dialect)
+        {
+            return dialect != null && _Draft07.Contains(dialect.TrimEnd('#'), StringComparer.Ordinal);
+        }
 
         /// <summary>
         /// Returns true when <paramref name="dialect"/> (a <c>$schema</c> value, or null for the default) is a dialect
@@ -207,10 +223,10 @@ namespace Voltaic.Mcp
             // draft-07: every keyword beside $ref is ignored, including $id, so this object defines no resource or
             // anchor. Its sibling subschemas (typically definitions) can still be reached by JSON pointer, so their
             // references are indexed and checked.
-            if (IsDraft07 && element.TryGetProperty("$ref", out JsonElement draft07Reference) && draft07Reference.ValueKind == JsonValueKind.String)
+            if (resource.IsDraft07 && element.TryGetProperty("$ref", out JsonElement draft07Reference) && draft07Reference.ValueKind == JsonValueKind.String)
             {
                 _References.Add(new McpSchemaReference(draft07Reference.GetString()!, resource, false));
-                foreach (JsonElement sibling in McpSchemaKeywords.Subschemas(element, IsDraft07))
+                foreach (JsonElement sibling in McpSchemaKeywords.Subschemas(element, true))
                 {
                     Index(sibling, resource, depth + 1, false);
                 }
@@ -221,7 +237,16 @@ namespace Voltaic.Mcp
             if (!isResourceRoot && TryGetResourceId(element, out string? id) && Uri.TryCreate(resource.BaseUri, id, out Uri? resolved))
             {
                 // A subschema with its own $id is a new resource: its references and anchors are scoped to it.
-                McpSchemaResource embedded = new McpSchemaResource(WithoutFragment(resolved), element);
+                // An embedded resource may declare its own dialect; without one it keeps the enclosing resource's.
+                bool embeddedIsDraft07 = resource.IsDraft07;
+                if (element.TryGetProperty("$schema", out JsonElement embeddedDialect) && embeddedDialect.ValueKind == JsonValueKind.String)
+                {
+                    string declaredDialect = embeddedDialect.GetString()!;
+                    if (!IsSupportedDialect(declaredDialect) && UnsupportedEmbeddedDialect == null) UnsupportedEmbeddedDialect = declaredDialect;
+                    embeddedIsDraft07 = IsDraft07Dialect(declaredDialect);
+                }
+
+                McpSchemaResource embedded = new McpSchemaResource(WithoutFragment(resolved), element, embeddedIsDraft07);
                 _Resources[embedded.BaseUri.AbsoluteUri] = embedded;
                 resource = embedded;
             }
@@ -230,27 +255,27 @@ namespace Voltaic.Mcp
             {
                 switch (member.Name)
                 {
-                    case "$anchor" when member.Value.ValueKind == JsonValueKind.String && !IsDraft07:
+                    case "$anchor" when member.Value.ValueKind == JsonValueKind.String && !resource.IsDraft07:
                         resource.Anchors.TryAdd(member.Value.GetString()!, element);
                         continue;
-                    case "$dynamicAnchor" when member.Value.ValueKind == JsonValueKind.String && !IsDraft07:
+                    case "$dynamicAnchor" when member.Value.ValueKind == JsonValueKind.String && !resource.IsDraft07:
                         resource.Anchors.TryAdd(member.Value.GetString()!, element);
                         resource.DynamicAnchors.TryAdd(member.Value.GetString()!, element);
                         continue;
-                    case "$id" when member.Value.ValueKind == JsonValueKind.String && IsDraft07 && member.Value.GetString()!.StartsWith("#", StringComparison.Ordinal):
+                    case "$id" when member.Value.ValueKind == JsonValueKind.String && resource.IsDraft07 && member.Value.GetString()!.StartsWith("#", StringComparison.Ordinal):
                         // draft-07: an $id that is only a fragment is a plain-name anchor.
                         resource.Anchors.TryAdd(member.Value.GetString()!.Substring(1), element);
                         continue;
                     case "$ref" when member.Value.ValueKind == JsonValueKind.String:
                         _References.Add(new McpSchemaReference(member.Value.GetString()!, resource, false));
                         continue;
-                    case "$dynamicRef" when member.Value.ValueKind == JsonValueKind.String && !IsDraft07:
+                    case "$dynamicRef" when member.Value.ValueKind == JsonValueKind.String && !resource.IsDraft07:
                         _References.Add(new McpSchemaReference(member.Value.GetString()!, resource, true));
                         continue;
                 }
             }
 
-            foreach (JsonElement subschema in McpSchemaKeywords.Subschemas(element, IsDraft07))
+            foreach (JsonElement subschema in McpSchemaKeywords.Subschemas(element, resource.IsDraft07))
             {
                 Index(subschema, resource, depth + 1, false);
             }

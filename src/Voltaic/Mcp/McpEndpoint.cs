@@ -74,6 +74,16 @@ namespace Voltaic.Mcp
 
         public int ProgressIntervalMs { get; set; } = 20;
 
+        public McpRateLimits RateLimits { get; } = new McpRateLimits();
+
+        private readonly McpRateLimiter _RateLimiter = new McpRateLimiter();
+
+        // The client a request belongs to, for the rate limits.
+        private static string RateLimitClient()
+        {
+            return McpRequestScope.Current?.Session.RateLimitKey ?? "local";
+        }
+
         public int PingTimeoutMs { get; set; } = 10000;
 
         public int PingFailureThreshold { get; set; } = 1;
@@ -334,6 +344,14 @@ namespace Voltaic.Mcp
             if (tool == null)
             {
                 throw McpProtocolException.InvalidParams($"Tool '{toolName}' was not found.");
+            }
+
+            // Tool invocations are rate-limited per client (MCP security considerations); the model can back off.
+            if (!_RateLimiter.TryAcquire(RateLimitClient(), "tools", RateLimits.ToolCallsPerSecond))
+            {
+                McpToolCallResult limited = McpToolCallResult.FromText($"Tool '{toolName}' was not run: the rate limit of {RateLimits.ToolCallsPerSecond} tool calls per second was exceeded. Try again shortly.");
+                limited.IsError = true;
+                return limited;
             }
 
             // Input validation failures are tool execution errors, not protocol errors: the MCP specification
@@ -731,6 +749,12 @@ namespace Voltaic.Mcp
 
             ValidateCompletionRequest(request);
             EnsureCompletionReferenceExists(request);
+
+            // Completions are rate-limited per client (MCP completion utility): over the limit there are no suggestions.
+            if (!_RateLimiter.TryAcquire(RateLimitClient(), "completions", RateLimits.CompletionsPerSecond))
+            {
+                return new McpCompleteResult();
+            }
 
             string? referenceId = request.Ref.Type == "ref/prompt" ? request.Ref.Name : request.Ref.Uri;
             CompletionRegistration? provider;

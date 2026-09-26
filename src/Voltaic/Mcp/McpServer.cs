@@ -131,6 +131,13 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets the per-client rate limits for tool calls, completions, and log messages (MCP requires servers to
+        /// rate-limit tool invocations and completions). Change its properties to adjust them; 0 disables a limit.
+        /// Never null.
+        /// </summary>
+        public McpRateLimits RateLimits => _Endpoint.RateLimits;
+
+        /// <summary>
         /// Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
         /// (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
         /// the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.

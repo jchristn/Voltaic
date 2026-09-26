@@ -195,6 +195,24 @@ namespace Voltaic.Mcp
             }
         }
 
+        private readonly McpTokenBucket _LogBucket = new McpTokenBucket();
+
+        // Identifies the client for McpRateLimits: unique per session unless the transport names a shared client (for
+        // example the remote address of sessionless HTTP requests).
+        internal string RateLimitKey { get; set; } = Guid.NewGuid().ToString("N");
+
+        // The log message rate limit, set from McpRateLimits for every request the session makes.
+        internal int LogRatePerSecond { get; set; } = 200;
+
+        // Takes one log message from the session's rate limit; false when over it.
+        internal bool TryConsumeLog()
+        {
+            return _LogBucket.TryTake(LogRatePerSecond);
+        }
+
+        // True while any request of this session is running (a running request keeps the session alive).
+        internal bool HasRequestsInFlight => !_InFlight.IsEmpty;
+
         internal void EndRequest(McpInFlightRequest request)
         {
             request.MarkCompleted();

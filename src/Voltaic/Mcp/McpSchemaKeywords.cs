@@ -108,6 +108,12 @@ namespace Voltaic.Mcp
             if (schema.ValueKind == JsonValueKind.True || schema.ValueKind == JsonValueKind.False) return null;
             if (schema.ValueKind != JsonValueKind.Object) return $"{location} must be a schema (an object or a boolean).";
 
+            // An embedded resource ($id) with its own $schema is checked in that dialect.
+            if (depth > 0 && schema.TryGetProperty("$id", out JsonElement _) && schema.TryGetProperty("$schema", out JsonElement dialect) && dialect.ValueKind == JsonValueKind.String)
+            {
+                draft07 = McpSchemaDocument.IsDraft07Dialect(dialect.GetString());
+            }
+
             if (draft07 && schema.TryGetProperty("$ref", out JsonElement reference))
             {
                 // draft-07 ignores every keyword beside $ref, so only the reference is checked, plus the subschemas in

@@ -1,5 +1,52 @@
 # Changelog
 
+## v2.1.11
+Resolves every finding of a four-part review of v2.1.10 against the MCP specification.
+
+### Schemas
+- **`pattern` runs on Voltaic's own ECMA-262 engine.** It no longer translates to .NET regular expressions, which work on UTF-16 units rather than code points. The engine follows the syntax and semantics of the `u` flag that JSON Schema recommends:
+  - Matching works on code points: an emoji or a supplementary-plane letter is one character to `.`, negated classes, `\S`, `\p{L}`, quantifiers, and classes.
+  - `\p{...}` takes general categories by short or long name (`LC` and `Cased_Letter` are cased letters only), plus `Any`, `ASCII`, and `Assigned`.
+  - Backreferences follow ECMA-262: a forward reference matches empty, and captures are reset on every repetition. Lookbehind matches right to left.
+  - Named groups may contain `$`.
+  - Escaped backslashes and hyphens keep their meaning in classes (`[\\-\w]`, `[\--0]`).
+  - It is an iterative backtracking machine, so a long input cannot overflow the stack. A step budget stops catastrophic backtracking, and the value then fails validation.
+  - Three unambiguous Annex B forms are also accepted: identity escapes such as `\_`, a literal `{`, `}`, or `]`, and `[\w-.]`.
+  - Other syntax that is not ECMA-262, and script or binary Unicode properties, are rejected at registration.
+- An embedded resource (`$id`) is validated in the dialect its own `$schema` declares, and an unsupported embedded dialect is rejected at registration.
+- A relative root `$id` resolves against the document.
+- Numbers are compared exactly, whatever their precision or range (`minimum`, `maximum`, the exclusive bounds, `multipleOf`, and `enum`/`const` equality). `0.3` is a multiple of `0.1`.
+- **Rate limits** (new `RateLimits` on every server), per client. A client is a session, or the principal and remote address of an HTTP request without one:
+  - Tool calls: 100 per second. A call over the limit gets an `isError` result.
+  - Completions: 100 per second. A request over the limit gets no suggestions.
+  - Log messages: 200 per second. Messages over the limit are not sent.
+
+### Clients
+- Each connection requests the configured protocol version. Clients used to request the version negotiated with the previous server.
+- Code that runs after an awaited call no longer runs on the client's receive loop. Blocking there used to stop the client from reading responses and answering pings.
+- `Disconnect` followed at once by `ConnectAsync` works. The old receive loop could mark the new connection as disconnected.
+- The last progress update always arrives. An update held back by the rate limit is sent by the server just before the response, and the client delivers the last one it held back before completing the call.
+
+### Stream transports and 2026-07-28
+- A `notifications/cancelled` whose `_meta` carries `clientInfo` is honored again. v2.1.10 dropped it. The missing-version `-32602` rule now applies to requests only, and a batch element with a malformed `_meta` gets that `-32602` rather than a stateless refusal.
+
+### HTTP
+- A session with a request still running is never expired, however long the request takes. Sessions are checked every half timeout, between 5 and 60 seconds.
+- With `SseReplayBufferSize = 0`, POST response streams keep their event IDs and priming event; only replay is off.
+
+### Documentation
+- COMPATIBILITY.md:
+  - The late insufficient-scope 403 is disclosed for 2025-03-26 and 2025-06-18 too.
+  - The section 3 introduction no longer calls every trade-off configurable.
+  - The pattern rows describe the new engine.
+  - The rate-limit row is new.
+  - The stateless `-32602` rule is scoped to the stream transports.
+- README: the metadata path, health check, session expiry, progress wording, `initialize` without a version (`-32602`), and server requests on HTTP streams are corrected.
+- XML docs: `AuthenticationHandler`, `SessionTimeoutSeconds`, and `SseReplayBufferSize` are corrected.
+
+### Tests
+- New suites `Mcp.RegexEngine` (6), `McpClients.Hardening` (5), and `McpServers.Hardening` (5).
+
 ## v2.1.10
 Resolves every finding of a four-part review of v2.1.9 against the MCP specification.
 

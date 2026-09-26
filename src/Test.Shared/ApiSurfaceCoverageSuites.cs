@@ -146,6 +146,7 @@ namespace Test.Shared
                             "Voltaic.Mcp.McpProtectedResourceMetadata",
                             "Voltaic.Mcp.McpProtocol",
                             "Voltaic.Mcp.McpProtocolException",
+                            "Voltaic.Mcp.McpRateLimits",
                             "Voltaic.Mcp.McpReadResourceResult",
                             "Voltaic.Mcp.McpResource",
                             "Voltaic.Mcp.McpResourceCapability",

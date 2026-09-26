@@ -4981,8 +4981,9 @@
             <summary>
             Tracks the progress tokens of a client's requests in flight and decides which <c>notifications/progress</c>
             messages reach the application: only those for an active token (MCP: receivers should track active progress
-            tokens), and no more often than <see cref="P:Voltaic.Core.ProgressTracker.MinIntervalMs"/> per token, except the final one (MCP: both parties
-            should rate-limit progress). Thread-safe.
+            tokens), and no more often than <see cref="P:Voltaic.Core.ProgressTracker.MinIntervalMs"/> per token (MCP: both parties should rate-limit
+            progress). An update with progress equal to the total always passes, and the latest held-back update is delivered
+            before the request's response, so the last update is never lost. Thread-safe.
             </summary>
         </member>
         <member name="P:Voltaic.Core.ProgressTracker.Enabled">
@@ -5010,6 +5011,12 @@
             <summary>
             Returns whether a notification reaches the application. Anything other than <c>notifications/progress</c>
             always does.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.ProgressTracker.TakePending(System.Object)">
+            <summary>
+            Returns, and forgets, the latest progress update held back for the token a request's parameters carry, so it
+            can be delivered before that request's response; null when none is held back.
             </summary>
         </member>
         <member name="T:Voltaic.Core.RequestSentEventArgs">
@@ -5661,7 +5668,7 @@
         <member name="P:Voltaic.Mcp.McpClient.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-            the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+            the server negotiated; each new handshake requests the version last set again. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
             client must request a version it can negotiate. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
             Setting null or whitespace restores the default.
             </summary>
@@ -5703,8 +5710,9 @@
         <member name="P:Voltaic.Mcp.McpClient.ProgressIntervalMs">
             <summary>
             Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
-            <see cref="E:Voltaic.Mcp.McpClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
-            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            <see cref="E:Voltaic.Mcp.McpClient.NotificationReceived"/>; faster updates are held back, and the latest held-back update is raised just
+            before the request's response, so the last update always arrives. An update with progress equal to the total
+            always passes. Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
             every update. Maximum is 60000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
@@ -6340,6 +6348,34 @@
             <c>additionalProperties</c>). Other keywords are ignored.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpEcmaRegex">
+            <summary>
+            An ECMA-262 regular expression, the dialect JSON Schema <c>pattern</c> and <c>patternProperties</c> use, with the
+            semantics of the <c>u</c> (Unicode) flag that JSON Schema recommends: matching works on code points, <c>.</c>
+            excludes line terminators, <c>^</c> and <c>$</c> are the input's ends, <c>\d</c> and <c>\w</c> are ASCII,
+            <c>\s</c> is the ECMA-262 white space set, <c>\p{...}</c> takes general categories (short or long names) and
+            <c>Any</c>, <c>ASCII</c>, and <c>Assigned</c>, and captures are reset on every repetition. The pattern is
+            searched for anywhere in the input, as <c>pattern</c> requires. Immutable and thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpEcmaRegex.MaxSteps">
+            <summary>
+            Gets or sets the step budget of one match: a match that needs more steps (catastrophic backtracking) stops,
+            and <see cref="M:Voltaic.Mcp.McpEcmaRegex.IsMatch(System.String)"/> reports it as exhausted. Default is 5,000,000.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpEcmaRegex.Compile(System.String)">
+            <summary>
+            Compiles a pattern.
+            </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the pattern is not a valid ECMA-262 regular expression or uses a construct this engine does not support.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpEcmaRegex.IsMatch(System.String)">
+            <summary>
+            Returns true when the pattern matches somewhere in <paramref name="input"/>, false when it does not, and null
+            when the step budget ran out before an answer.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpEmptyResult">
             <summary>
             An MCP result with no payload, returned by requests whose success carries no data, such as
@@ -6601,8 +6637,9 @@
         <member name="P:Voltaic.Mcp.McpHttpClient.ProgressIntervalMs">
             <summary>
             Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
-            <see cref="E:Voltaic.Mcp.McpHttpClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
-            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            <see cref="E:Voltaic.Mcp.McpHttpClient.NotificationReceived"/>; faster updates are held back, and the latest held-back update is raised just
+            before the request's response, so the last update always arrives. An update with progress equal to the total
+            always passes. Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
             every update. Maximum is 60000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
@@ -7013,9 +7050,10 @@
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.SessionTimeoutSeconds">
             <summary>
-            Gets or sets the session timeout in seconds.
-            Sessions that have been inactive for longer than this will be expired.
-            Default is 300 seconds (5 minutes). Minimum is 10 seconds.
+            Gets or sets the session timeout in seconds. A session with no request, open stream, or other activity for
+            longer than this, and no request still running, is expired (checked every half timeout, between 5 and 60
+            seconds); a long-running request
+            keeps its session alive. Default is 300 seconds (5 minutes). Minimum is 10 seconds.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.MaxQueueSize">
@@ -7182,6 +7220,13 @@
             Default is "Voltaic.Mcp.HttpServer".
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.RateLimits">
+            <summary>
+            Gets the per-client rate limits for tool calls, completions, and log messages (MCP requires servers to
+            rate-limit tool invocations and completions). Change its properties to adjust them; 0 disables a limit.
+            Never null.
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.ProgressIntervalMs">
             <summary>
             Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
@@ -7261,9 +7306,10 @@
             and origin checks.
             The handler receives the full <see cref="T:System.Net.HttpListenerRequest"/> so it can inspect headers, query strings,
             client certificates, or any other request property needed for authentication.
-            The handler is not called for the health check endpoint (<c>/</c>), CORS preflight (<c>OPTIONS</c>), and
-            <see cref="P:Voltaic.Mcp.McpHttpServer.ProtectedResourceMetadata"/> at <see cref="F:Voltaic.Mcp.McpProtocol.ProtectedResourceMetadataPath"/>, so
-            clients can check connectivity and discover the authorization server. Every other request, including
+            The handler is not called for the health check endpoint (<c>/</c>, unless an endpoint is mounted there), CORS
+            preflight (<c>OPTIONS</c>), and <see cref="P:Voltaic.Mcp.McpHttpServer.ProtectedResourceMetadata"/> at the well-known URL derived from its
+            resource identifier (for example <c>/.well-known/oauth-protected-resource/mcp</c>), so clients can check
+            connectivity and discover the authorization server. Every other request, including
             <c>ping</c>, must authenticate, as MCP authorization requires (since v2.1.4; earlier versions answered
             a <c>ping</c> that failed authentication).
             Authenticated requests run through exactly the same MCP protocol pipeline as unauthenticated
@@ -7745,7 +7791,7 @@
             created it, so another caller cannot adopt it).
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.CreateProvisionalConnection(System.Boolean)">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RateLimitClientFor(System.Net.HttpListenerContext)">
             <summary>
             Creates a connection that is not registered as a session. It becomes a session only if
             <see cref="M:Voltaic.Mcp.McpHttpServer.RegisterSession(Voltaic.Core.ClientConnection)"/> is called after the request succeeds.
@@ -7964,6 +8010,30 @@
         <member name="P:Voltaic.Mcp.McpInsufficientScopeException.RequiredScope">
             <summary>
             Gets the scope the operation requires. Never null.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpJsonNumber">
+            <summary>
+            An exact JSON number: sign, digits, and a decimal exponent, parsed from the number's text so no precision is
+            lost (JSON numbers have arbitrary precision and range). Used by JSON Schema's numeric keywords. Immutable and
+            thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpJsonNumber.Parse(System.String)">
+            <summary>
+            Parses the text of a JSON number, or returns null when it is not one.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpJsonNumber.Compare(Voltaic.Mcp.McpJsonNumber,Voltaic.Mcp.McpJsonNumber)">
+            <summary>
+            Compares two numbers exactly: negative, zero, or positive as <paramref name="left"/> is below, equal to, or
+            above <paramref name="right"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpJsonNumber.IsMultipleOf(Voltaic.Mcp.McpJsonNumber,Voltaic.Mcp.McpJsonNumber)">
+            <summary>
+            Returns whether <paramref name="value"/> divided by <paramref name="divisor"/> is an integer, exactly; null when
+            the divisor is not positive.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpJsonValueKind">
@@ -8748,6 +8818,251 @@
             <param name="usesHeaderRouting">Whether the stateless header-routing model applies.</param>
             <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="version"/> is null or empty.</exception>
         </member>
+        <member name="T:Voltaic.Mcp.McpRateLimiter">
+            <summary>
+            Token buckets per client and operation kind, for <see cref="T:Voltaic.Mcp.McpRateLimits"/>. Buckets idle for a minute are
+            dropped when the table grows. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpRateLimiter.TryAcquire(System.String,System.String,System.Int32)">
+            <summary>
+            Takes one operation of <paramref name="kind"/> for <paramref name="clientKey"/>; false when over the rate.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRateLimits">
+            <summary>
+            The rate limits an MCP server applies per client (MCP: servers must rate-limit tool invocations and
+            completions, and should rate-limit log messages). A client is a session, or, for HTTP requests without a
+            session, the authenticated principal and remote address. Each limit allows that many operations per second, with
+            a burst of the same size. A tool call over the limit gets a tool result with <c>isError: true</c> (so the model
+            can back off), a completion request gets no suggestions, and a log message is not sent. Changes take effect
+            immediately. Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpRateLimits.ToolCallsPerSecond">
+            <summary>
+            Gets or sets how many <c>tools/call</c> requests one client may make per second. Default is 100. 0 disables
+            the limit. Maximum is 1000000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 1000000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpRateLimits.CompletionsPerSecond">
+            <summary>
+            Gets or sets how many <c>completion/complete</c> requests one client may make per second. Default is 100. 0
+            disables the limit. Maximum is 1000000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 1000000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpRateLimits.LogMessagesPerSecond">
+            <summary>
+            Gets or sets how many <c>notifications/message</c> log messages the server sends one client per second.
+            Default is 200. 0 disables the limit. Maximum is 1000000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 1000000.</exception>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexBacktrack">
+            <summary>
+            One entry on the backtracking stack of the ECMA-262 regular expression matcher.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexBacktrackKind">
+            <summary>
+            The kinds of entry on the backtracking stack of the ECMA-262 regular expression matcher.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexBacktrackKind.Branch">
+            <summary>An untried alternative: resume at the entry's instruction and position.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexBacktrackKind.RestoreCapture">
+            <summary>Undo a capture slot change.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexBacktrackKind.RestoreRegister">
+            <summary>Undo a repetition register change.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexBacktrackKind.GreedyStep">
+            <summary>A greedy character-set loop gives back one code point.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexBacktrackKind.LazyStep">
+            <summary>A lazy character-set loop takes one more code point.</summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexCharSet">
+            <summary>
+            An immutable set of Unicode code points (0 to U+10FFFF), stored as sorted, non-overlapping ranges. Used by the
+            ECMA-262 regular expression engine for character classes, escapes, and Unicode properties. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpRegexCharSet.Category(System.String)">
+            <summary>
+            Returns the code points of a Unicode general category, by its two-letter code (such as <c>Lu</c>) or its
+            one-letter group (<c>L</c>, <c>M</c>, <c>N</c>, <c>P</c>, <c>S</c>, <c>Z</c>, <c>C</c>), or <c>LC</c> (cased
+            letters). Null for an unknown code. Uses the Unicode data of the running .NET version.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexClassAtom">
+            <summary>
+            One side of a character class range while an ECMA-262 pattern is parsed: a single code point, or the set of a
+            class escape such as <c>\w</c>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexCompiler">
+            <summary>
+            Compiles a parsed ECMA-262 regular expression into <see cref="T:Voltaic.Mcp.McpRegexProgram"/> instructions. Lookbehind bodies
+            are compiled to match right to left, as ECMA-262 specifies. Every general repetition gets its own two registers
+            (iteration count and iteration start).
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpRegexCompiler.RegisterCount">
+            <summary>
+            Gets the number of repetition registers the compiled programs use.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexInstruction">
+            <summary>
+            One instruction of a compiled ECMA-262 regular expression. The meaning of the operands depends on
+            <see cref="P:Voltaic.Mcp.McpRegexInstruction.Op"/>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexMatcher">
+            <summary>
+            Runs a compiled ECMA-262 regular expression against one input. A backtracking virtual machine with an explicit
+            stack, so the input length never limits the call stack; captures and repetition registers are restored through
+            undo entries on the same stack. Matching works on code points (the <c>u</c> flag): a surrogate pair is one
+            character. A step budget bounds the work (catastrophic backtracking stops instead of running away). Not
+            thread-safe; create one per match.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpRegexMatcher.Search(Voltaic.Mcp.McpRegexProgram)">
+            <summary>
+            Searches the input: true when the pattern matches starting at some code point boundary, false when it does
+            not, and null when the step budget ran out first.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexNode">
+            <summary>
+            A node of a parsed ECMA-262 regular expression.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexNodeKind">
+            <summary>
+            The kinds of node in a parsed ECMA-262 regular expression.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Empty">
+            <summary>Matches the empty string.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.CharSet">
+            <summary>Matches one code point in <see cref="P:Voltaic.Mcp.McpRegexNode.Set"/>.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Sequence">
+            <summary>Matches its children in order.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Alternation">
+            <summary>Matches the first child that leads to an overall match.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Group">
+            <summary>A group; capturing when <see cref="P:Voltaic.Mcp.McpRegexNode.CaptureIndex"/> is 1 or more.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Quantifier">
+            <summary>Repeats its child from <see cref="P:Voltaic.Mcp.McpRegexNode.Min"/> to <see cref="P:Voltaic.Mcp.McpRegexNode.Max"/> times.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Start">
+            <summary>The start of the input (<c>^</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.End">
+            <summary>The end of the input (<c>$</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.WordBoundary">
+            <summary>A word boundary (<c>\b</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.NotWordBoundary">
+            <summary>Not a word boundary (<c>\B</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Lookaround">
+            <summary>A lookahead or lookbehind assertion.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexNodeKind.Backreference">
+            <summary>A backreference to capture group <see cref="P:Voltaic.Mcp.McpRegexNode.CaptureIndex"/>.</summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexOp">
+            <summary>
+            The instructions of the ECMA-262 regular expression virtual machine.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Match">
+            <summary>The pattern matched.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Char">
+            <summary>Consume one code point in the set (backward in a lookbehind).</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Jump">
+            <summary>Continue at <see cref="P:Voltaic.Mcp.McpRegexInstruction.A"/>.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Split">
+            <summary>Try <see cref="P:Voltaic.Mcp.McpRegexInstruction.A"/> first, then <see cref="P:Voltaic.Mcp.McpRegexInstruction.B"/>.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Save">
+            <summary>Record the position in capture slot <see cref="P:Voltaic.Mcp.McpRegexInstruction.A"/>.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Start">
+            <summary>Assert the start of the input.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.End">
+            <summary>Assert the end of the input.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.WordBoundary">
+            <summary>Assert a word boundary.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.NotWordBoundary">
+            <summary>Assert no word boundary.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Backreference">
+            <summary>Match the text of capture group <see cref="P:Voltaic.Mcp.McpRegexInstruction.A"/> again.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.Lookaround">
+            <summary>Run a lookahead or lookbehind sub-program.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.RepeatInit">
+            <summary>Reset the iteration counter of a general repetition.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.RepeatLoop">
+            <summary>Decide whether a general repetition iterates again.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.RepeatEnter">
+            <summary>Start one iteration: remember its start and reset the captures inside.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.RepeatContinue">
+            <summary>End one iteration: reject an empty one past the minimum, count it, and loop.</summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexOp.SetLoop">
+            <summary>A repetition of a single character set, run without per-iteration bookkeeping.</summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexParser">
+            <summary>
+            Parses an ECMA-262 regular expression with the syntax of the <c>u</c> (Unicode) flag, which JSON Schema
+            recommends for <c>pattern</c>, into a tree of <see cref="T:Voltaic.Mcp.McpRegexNode"/>. Three forms that only Annex B (the
+            non-Unicode syntax) allows are also accepted, because they are common and unambiguous: an identity escape of any
+            character that is not an ASCII letter or digit (such as <c>\_</c>), a literal <c>{</c>, <c>}</c>, or <c>]</c>
+            outside a quantifier or class, and a class escape at either end of a class range (<c>[\w-.]</c>, where the hyphen
+            is literal). Anything else that is not valid ECMA-262 throws <see cref="T:System.ArgumentException"/>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpRegexParser.CaptureCount">
+            <summary>
+            Gets the number of capturing groups in the parsed pattern.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpRegexParser.Parse(System.String,System.Int32@)">
+            <summary>
+            Parses a pattern. Returns the root node and the capture count through <paramref name="captureCount"/>.
+            </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the pattern is not a valid ECMA-262 regular expression, or uses a construct this engine does not support (a Unicode property other than a general category, Any, ASCII, or Assigned).</exception>
+        </member>
+        <member name="T:Voltaic.Mcp.McpRegexProgram">
+            <summary>
+            A compiled ECMA-262 regular expression (or one of its lookaround bodies): its instructions, ending with
+            <see cref="F:Voltaic.Mcp.McpRegexOp.Match"/>.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpRequestProtocol">
             <summary>
             Records, for the request being dispatched on this asynchronous flow, the stateless-era protocol version it
@@ -9015,8 +9330,20 @@
         </member>
         <member name="P:Voltaic.Mcp.McpSchemaDocument.IsDraft07">
             <summary>
-            Gets whether the schema is draft-07: <c>$ref</c> then overrides its sibling keywords, and 2019-09/2020-12
-            keywords (such as <c>prefixItems</c> or <c>unevaluatedProperties</c>) are not keywords.
+            Gets whether the schema being evaluated is draft-07 (the dialect of the current resource, so an embedded
+            resource with its own <c>$schema</c> is evaluated in that dialect): <c>$ref</c> then overrides its sibling
+            keywords, and 2019-09/2020-12 keywords (such as <c>prefixItems</c> or <c>unevaluatedProperties</c>) are not
+            keywords.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaDocument.UnsupportedEmbeddedDialect">
+            <summary>
+            Gets the first embedded resource's <c>$schema</c> that names an unsupported dialect, or null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.IsDraft07Dialect(System.String)">
+            <summary>
+            Returns true for a draft-07 <c>$schema</c> value.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpSchemaDocument.IsSupportedDialect(System.String)">
@@ -9105,23 +9432,6 @@
             returns null when the schema is well formed. Unknown keywords are ignored.
             </summary>
         </member>
-        <member name="T:Voltaic.Mcp.McpSchemaPattern">
-            <summary>
-            Translates an ECMA-262 regular expression (the dialect JSON Schema <c>pattern</c> uses) into a .NET pattern with
-            the same meaning whichever .NET options run it: <c>$</c> matches only at the end of the input, <c>.</c> excludes
-            the four ECMA-262 line terminators, <c>\d</c> and <c>\w</c> are ASCII, <c>\s</c> is the ECMA-262 white space and
-            line terminator set, <c>\u{...}</c> is a code point, and Unicode property escapes accept the ECMA-262 general
-            category names. Syntax that ECMA-262 does not define but .NET would give its own meaning (<c>\A</c>, <c>\Z</c>,
-            <c>\z</c>, <c>\G</c>, <c>\a</c>, <c>\e</c>, inline options, comments, atomic and conditional groups) and script
-            properties, which .NET does not support, are rejected with <see cref="T:System.ArgumentException"/>.
-            </summary>
-        </member>
-        <member name="M:Voltaic.Mcp.McpSchemaPattern.Translate(System.String)">
-            <summary>
-            Returns the .NET equivalent of an ECMA-262 pattern.
-            </summary>
-            <exception cref="T:System.ArgumentException">Thrown when the pattern uses syntax that is not ECMA-262 or that .NET cannot express.</exception>
-        </member>
         <member name="T:Voltaic.Mcp.McpSchemaReference">
             <summary>
             A <c>$ref</c> or <c>$dynamicRef</c> found in a schema, with the resource it appears in, so it can be checked
@@ -9155,9 +9465,15 @@
             Not thread-safe; built once per document.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpSchemaResource.#ctor(System.Uri,System.Text.Json.JsonElement)">
+        <member name="M:Voltaic.Mcp.McpSchemaResource.#ctor(System.Uri,System.Text.Json.JsonElement,System.Boolean)">
             <summary>
             Initializes a resource.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaResource.IsDraft07">
+            <summary>
+            Gets whether the resource is a draft-07 schema: its own <c>$schema</c> says so, or it has none and the
+            enclosing resource is draft-07.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpSchemaResource.BaseUri">
@@ -9294,6 +9610,13 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpServer.RateLimits">
+            <summary>
+            Gets the per-client rate limits for tool calls, completions, and log messages (MCP requires servers to
+            rate-limit tool invocations and completions). Change its properties to adjust them; 0 disables a limit.
+            Never null.
+            </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpServer.ProgressIntervalMs">
             <summary>
@@ -9923,7 +10246,7 @@
         <member name="P:Voltaic.Mcp.McpTcpClient.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-            the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+            the server negotiated; each new handshake requests the version last set again. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
             client must request a version it can negotiate. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
             Setting null or whitespace restores the default.
             </summary>
@@ -9951,8 +10274,9 @@
         <member name="P:Voltaic.Mcp.McpTcpClient.ProgressIntervalMs">
             <summary>
             Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
-            <see cref="E:Voltaic.Core.JsonRpcClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
-            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            <see cref="E:Voltaic.Core.JsonRpcClient.NotificationReceived"/>; faster updates are held back, and the latest held-back update is raised just
+            before the request's response, so the last update always arrives. An update with progress equal to the total
+            always passes. Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
             every update. Maximum is 60000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
@@ -10080,6 +10404,13 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.RateLimits">
+            <summary>
+            Gets the per-client rate limits for tool calls, completions, and log messages (MCP requires servers to
+            rate-limit tool invocations and completions). Change its properties to adjust them; 0 disables a limit.
+            Never null.
+            </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpTcpServer.ProgressIntervalMs">
             <summary>
@@ -10410,6 +10741,22 @@
             <returns>A task that represents the asynchronous operation.</returns>
             <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="method"/> is null or whitespace.</exception>
         </member>
+        <member name="T:Voltaic.Mcp.McpTokenBucket">
+            <summary>
+            A token bucket: it refills at a rate per second up to a burst of the same size, and each operation takes one
+            token. Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTokenBucket.LastUsed">
+            <summary>
+            Gets the timestamp of the last take, for pruning idle buckets.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTokenBucket.TryTake(System.Int32)">
+            <summary>
+            Takes one token at <paramref name="ratePerSecond"/>; false when none is left. A rate of 0 or less always allows.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpToolCallContext">
              <summary>
              Ambient context for the <c>tools/call</c> request currently being handled on this asynchronous flow. It carries
@@ -10516,7 +10863,9 @@
             response stream of the call (on HTTP the response becomes an SSE stream). Does nothing when the client sent
             no progress token or the transport cannot deliver notifications for the call. Progress must increase with
             every notification. Updates are rate-limited by the server's <c>ProgressIntervalMs</c>: one that follows the
-            previous one sooner is not sent, except the final one (progress equal to the total).
+            previous one sooner is held back, and only the latest held-back update is sent, just before the response
+            (unless a later update is sent first), so the last update always arrives. An update with progress equal to the
+            total is always sent at once.
             </summary>
             <param name="progress">The progress so far. Must be greater than the previous value.</param>
             <param name="total">The total, when known, or null.</param>
@@ -10957,7 +11306,7 @@
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-            the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+            the server negotiated; each new handshake requests the version last set again. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
             client must request a version it can negotiate. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
             Setting null or whitespace restores the default.
             </summary>
@@ -10985,8 +11334,9 @@
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.ProgressIntervalMs">
             <summary>
             Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
-            <see cref="E:Voltaic.Mcp.McpWebsocketsClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
-            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            <see cref="E:Voltaic.Mcp.McpWebsocketsClient.NotificationReceived"/>; faster updates are held back, and the latest held-back update is raised just
+            before the request's response, so the last update always arrives. An update with progress equal to the total
+            always passes. Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
             every update. Maximum is 60000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
@@ -11242,6 +11592,13 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.RateLimits">
+            <summary>
+            Gets the per-client rate limits for tool calls, completions, and log messages (MCP requires servers to
+            rate-limit tool invocations and completions). Change its properties to adjust them; 0 disables a limit.
+            Never null.
+            </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsServer.ProgressIntervalMs">
             <summary>

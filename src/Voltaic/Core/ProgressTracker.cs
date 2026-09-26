@@ -8,14 +8,17 @@ namespace Voltaic.Core
     /// <summary>
     /// Tracks the progress tokens of a client's requests in flight and decides which <c>notifications/progress</c>
     /// messages reach the application: only those for an active token (MCP: receivers should track active progress
-    /// tokens), and no more often than <see cref="MinIntervalMs"/> per token, except the final one (MCP: both parties
-    /// should rate-limit progress). Thread-safe.
+    /// tokens), and no more often than <see cref="MinIntervalMs"/> per token (MCP: both parties should rate-limit
+    /// progress). An update with progress equal to the total always passes, and the latest held-back update is delivered
+    /// before the request's response, so the last update is never lost. Thread-safe.
     /// </summary>
     internal sealed class ProgressTracker
     {
         private readonly object _Lock = new object();
         private readonly Dictionary<string, int> _Active = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _LastDelivered = new Dictionary<string, long>(StringComparer.Ordinal);
+        // The latest update the rate limit held back per token, delivered before the request's response (TakePending).
+        private readonly Dictionary<string, JsonRpcRequest> _Pending = new Dictionary<string, JsonRpcRequest>(StringComparer.Ordinal);
         private int _MinIntervalMs = 20;
 
         /// <summary>
@@ -68,6 +71,7 @@ namespace Voltaic.Core
 
                 _Active.Remove(key);
                 _LastDelivered.Remove(key);
+                _Pending.Remove(key);
             }
         }
 
@@ -102,11 +106,29 @@ namespace Voltaic.Core
                 if (!final && _MinIntervalMs > 0 && _LastDelivered.TryGetValue(key, out long last)
                     && (now - last) * 1000 / Stopwatch.Frequency < _MinIntervalMs)
                 {
+                    _Pending[key] = notification;
                     return false;
                 }
 
                 _LastDelivered[key] = now;
+                _Pending.Remove(key);
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// Returns, and forgets, the latest progress update held back for the token a request's parameters carry, so it
+        /// can be delivered before that request's response; null when none is held back.
+        /// </summary>
+        internal JsonRpcRequest? TakePending(object? parameters)
+        {
+            string? key = TokenOf(parameters);
+            if (key == null) return null;
+            lock (_Lock)
+            {
+                if (!_Pending.TryGetValue(key, out JsonRpcRequest? pending)) return null;
+                _Pending.Remove(key);
+                return pending;
             }
         }
 

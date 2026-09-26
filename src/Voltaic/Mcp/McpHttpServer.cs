@@ -20,9 +20,10 @@ namespace Voltaic.Mcp
     public class McpHttpServer : IDisposable
     {
         /// <summary>
-        /// Gets or sets the session timeout in seconds.
-        /// Sessions that have been inactive for longer than this will be expired.
-        /// Default is 300 seconds (5 minutes). Minimum is 10 seconds.
+        /// Gets or sets the session timeout in seconds. A session with no request, open stream, or other activity for
+        /// longer than this, and no request still running, is expired (checked every half timeout, between 5 and 60
+        /// seconds); a long-running request
+        /// keeps its session alive. Default is 300 seconds (5 minutes). Minimum is 10 seconds.
         /// </summary>
         public int SessionTimeoutSeconds
         {
@@ -304,6 +305,13 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets the per-client rate limits for tool calls, completions, and log messages (MCP requires servers to
+        /// rate-limit tool invocations and completions). Change its properties to adjust them; 0 disables a limit.
+        /// Never null.
+        /// </summary>
+        public McpRateLimits RateLimits => _Endpoint.RateLimits;
+
+        /// <summary>
         /// Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
         /// (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
         /// the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.
@@ -437,9 +445,10 @@ namespace Voltaic.Mcp
         /// and origin checks.
         /// The handler receives the full <see cref="HttpListenerRequest"/> so it can inspect headers, query strings,
         /// client certificates, or any other request property needed for authentication.
-        /// The handler is not called for the health check endpoint (<c>/</c>), CORS preflight (<c>OPTIONS</c>), and
-        /// <see cref="ProtectedResourceMetadata"/> at <see cref="McpProtocol.ProtectedResourceMetadataPath"/>, so
-        /// clients can check connectivity and discover the authorization server. Every other request, including
+        /// The handler is not called for the health check endpoint (<c>/</c>, unless an endpoint is mounted there), CORS
+        /// preflight (<c>OPTIONS</c>), and <see cref="ProtectedResourceMetadata"/> at the well-known URL derived from its
+        /// resource identifier (for example <c>/.well-known/oauth-protected-resource/mcp</c>), so clients can check
+        /// connectivity and discover the authorization server. Every other request, including
         /// <c>ping</c>, must authenticate, as MCP authorization requires (since v2.1.4; earlier versions answered
         /// a <c>ping</c> that failed authentication).
         /// Authenticated requests run through exactly the same MCP protocol pipeline as unauthenticated
@@ -1566,6 +1575,14 @@ namespace Voltaic.Mcp
         /// Creates a connection that is not registered as a session. It becomes a session only if
         /// <see cref="RegisterSession"/> is called after the request succeeds.
         /// </summary>
+        // The rate-limit client of a request without a session: the authenticated principal and the remote address.
+        private static string RateLimitClientFor(HttpListenerContext context)
+        {
+            string address = context.Request.RemoteEndPoint?.Address.ToString() ?? "unknown";
+            string principal = RpcCallContext.Current?.Principal ?? String.Empty;
+            return "http|" + principal + "|" + address;
+        }
+
         private ClientConnection CreateProvisionalConnection(bool requireInitialize = true)
         {
             ClientConnection connection = new ClientConnection(Guid.NewGuid().ToString());
@@ -1639,10 +1656,10 @@ namespace Voltaic.Mcp
 
             // A session's POST response stream is resumable (MCP 2025-03-26 and later): its events carry IDs and are
             // logged, and from 2025-11-25 it starts with a priming event. Stateless requests have no session to
-            // resume on, and a replay buffer of 0 turns resumability off.
+            // resume on. A replay buffer of 0 keeps the IDs and priming event but retains nothing to replay.
             Func<SseStreamLog>? openLog = null;
             bool prime = false;
-            if (hasSession && statelessVersion == null && _SseReplayBufferSize > 0)
+            if (hasSession && statelessVersion == null)
             {
                 string streamSessionId = connection.SessionId;
                 openLog = () => _SseStreams.GetOrAdd(streamSessionId, _ => new SseSessionStreams(_MaxResumableStreamsPerSession)).OpenRequestStream(_SseReplayBufferSize);
@@ -1924,6 +1941,7 @@ namespace Voltaic.Mcp
                 else if (!isBatch && IsInitializeRequest(incomingRequest))
                 {
                     connection = CreateProvisionalConnection();
+                    StateOf(connection).RateLimitKey = RateLimitClientFor(context);
                     isProvisional = true;
                 }
                 else
@@ -2341,6 +2359,7 @@ namespace Voltaic.Mcp
 
             // Every stateless request runs on its own state: no session, nothing inferred from earlier requests.
             ClientConnection connection = CreateProvisionalConnection(requireInitialize: false);
+            StateOf(connection).RateLimitKey = RateLimitClientFor(context);
             try
             {
                 await DispatchSingleAsync(context, requestBody, connection, false, false, protocolVersion, token).ConfigureAwait(false);
@@ -2923,6 +2942,7 @@ namespace Voltaic.Mcp
             else
             {
                 connection = CreateProvisionalConnection(requireInitialize: true);
+                StateOf(connection).RateLimitKey = RateLimitClientFor(context);
                 isProvisional = true;
             }
 
@@ -3053,12 +3073,15 @@ namespace Voltaic.Mcp
             {
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(60), token).ConfigureAwait(false);
+                    // Checked every half timeout, between 5 and 60 seconds, so a session outlives its timeout by at
+                    // most half of it.
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(_SessionTimeoutSeconds / 2, 5, 60)), token).ConfigureAwait(false);
 
                     DateTime expirationTime = DateTime.UtcNow.AddSeconds(-_SessionTimeoutSeconds);
 
+                    // A session with a request still running is not idle, however long the request takes.
                     List<string> expiredSessions = _Sessions
-                        .Where(kvp => kvp.Value.LastActivity < expirationTime)
+                        .Where(kvp => kvp.Value.LastActivity < expirationTime && !StateOf(kvp.Value).HasRequestsInFlight)
                         .Select(kvp => kvp.Key)
                         .ToList();
 

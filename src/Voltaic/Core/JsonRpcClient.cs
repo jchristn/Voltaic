@@ -176,7 +176,8 @@ namespace Voltaic.Core
                 Id = id
             };
 
-            TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>();
+            // Continuations run off the receive loop, so code after an awaited call never blocks reading (and answering pings).
+            TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
             ClientPendingRequest pendingRequest = new ClientPendingRequest(id, request, tcs);
             _PendingRequests[id] = pendingRequest;
             _ProgressTracker.Track(parameters);
@@ -421,7 +422,9 @@ namespace Voltaic.Core
             }
             finally
             {
-                _IsConnected = false;
+                // A loop stopped by Disconnect (its token cancelled) leaves the flag to Disconnect, so it never clears the
+                // flag of a connection made right after.
+                if (!token.IsCancellationRequested) _IsConnected = false;
             }
         }
 
@@ -451,7 +454,9 @@ namespace Voltaic.Core
             }
             finally
             {
-                _IsConnected = false;
+                // A loop stopped by Disconnect (its token cancelled) leaves the flag to Disconnect, so it never clears the
+                // flag of a connection made right after.
+                if (!token.IsCancellationRequested) _IsConnected = false;
             }
         }
 
@@ -595,6 +600,24 @@ namespace Voltaic.Core
             }
         }
 
+        // Raises NotificationReceived, isolating each handler's exceptions.
+        private void RaiseNotificationReceived(JsonRpcRequest notification)
+        {
+            EventHandler<JsonRpcRequest>? handlers = NotificationReceived;
+            if (handlers == null) return;
+            foreach (Delegate handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    ((EventHandler<JsonRpcRequest>)handler)(this, notification);
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"Error in NotificationReceived handler: {ex.Message}");
+                }
+            }
+        }
+
         private void ProcessResponse(string responseString)
         {
             try
@@ -629,6 +652,10 @@ namespace Voltaic.Core
 
                     if (_PendingRequests.TryRemove(lookupKey, out ClientPendingRequest? pendingRequest))
                     {
+                        // The latest progress update the rate limit held back arrives before the response.
+                        JsonRpcRequest? heldProgress = _ProgressTracker.TakePending(pendingRequest.Request.Params);
+                        if (heldProgress != null) RaiseNotificationReceived(heldProgress);
+
                         RaiseResponseReceived(pendingRequest, response);
                         pendingRequest.TaskCompletionSource.SetResult(response);
                     }

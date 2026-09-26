@@ -282,6 +282,7 @@ namespace Voltaic.Mcp
 
             inFlight.Notify = notify;
             inFlight.ProgressIntervalMs = _Endpoint.ProgressIntervalMs;
+            session.LogRatePerSecond = _Endpoint.RateLimits.LogMessagesPerSecond;
             try
             {
                 if (inFlight.IsCancelled)
@@ -296,6 +297,19 @@ namespace Voltaic.Mcp
                 {
                     McpRequestProtocol.Set(statelessVersion);
                     response = await InvokeAsync(envelope, request, method, inFlight.TokenSource.Token, scope).ConfigureAwait(false);
+                }
+
+                // The latest progress update the rate limit held back goes out before the response.
+                if (!inFlight.IsCancelled)
+                {
+                    try
+                    {
+                        await inFlight.FlushProgressAsync(token).ConfigureAwait(false);
+                    }
+                    catch (Exception flushError) when (flushError is IOException || flushError is ObjectDisposedException || flushError is InvalidOperationException || flushError is OperationCanceledException)
+                    {
+                        _Log($"Could not send the last progress update for request {envelope.IdKey}: {flushError.Message}");
+                    }
                 }
 
                 if (inFlight.IsCancelled)
@@ -418,10 +432,15 @@ namespace Voltaic.Mcp
             {
                 return McpStatelessDispatcher.ResolveStatelessVersion(envelope.Message.GetRawText(), envelope.Method!) != null;
             }
-            catch (McpProtocolException)
+            catch (McpProtocolException unsupported) when (unsupported.Code == -32022)
             {
                 // An unsupported stateless version: still a stateless request.
                 return true;
+            }
+            catch (McpProtocolException)
+            {
+                // A malformed _meta (no version): answered by the normal path with -32602, not refused as stateless.
+                return false;
             }
         }
 

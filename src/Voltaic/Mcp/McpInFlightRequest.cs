@@ -1,8 +1,11 @@
 namespace Voltaic.Mcp
 {
     using System;
+    using System.Diagnostics;
     using System.Text.Json;
     using System.Threading;
+    using System.Threading.Tasks;
+    using Voltaic.Core;
 
     /// <summary>
     /// A request a server is processing: its cancellation source, its progress token, and whether the client
@@ -43,7 +46,7 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Gets or sets the channel for notifications related to this request (progress, log messages), or null.
         /// </summary>
-        internal Func<Voltaic.Core.JsonRpcRequest, CancellationToken, System.Threading.Tasks.Task>? Notify { get; set; }
+        internal Func<JsonRpcRequest, CancellationToken, Task>? Notify { get; set; }
 
         /// <summary>
         /// Gets the source whose token the handler receives.
@@ -84,22 +87,46 @@ namespace Voltaic.Mcp
         // The minimum interval between progress notifications sent for this request (0 sends every one).
         internal int ProgressIntervalMs { get; set; }
 
+        private JsonRpcRequest? _DeferredProgress;
+
+        // Keeps the latest coalesced progress notification, so the last update is never lost: it is sent before the
+        // response (FlushProgressAsync) unless a later update is sent first.
+        internal void DeferProgress(JsonRpcRequest notification)
+        {
+            lock (_ProgressLock) _DeferredProgress = notification;
+        }
+
+        // Sends the latest coalesced progress notification, if any, while the request is still active.
+        internal async Task FlushProgressAsync(CancellationToken token)
+        {
+            JsonRpcRequest? pending;
+            lock (_ProgressLock)
+            {
+                pending = _DeferredProgress;
+                _DeferredProgress = null;
+            }
+
+            Func<JsonRpcRequest, CancellationToken, Task>? notify = Notify;
+            if (pending != null && notify != null && IsActive) await notify(pending, token).ConfigureAwait(false);
+        }
+
         // Rate-limits progress (MCP: senders should rate-limit progress): the first update and the final one (progress
         // equal to the total) are always sent; updates within ProgressIntervalMs of the last one sent are coalesced.
         internal bool ShouldSendProgress(double progress, double? total)
         {
             lock (_ProgressLock)
             {
-                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                long now = Stopwatch.GetTimestamp();
                 bool final = total.HasValue && progress >= total.Value;
                 if (_ProgressSent && !final && ProgressIntervalMs > 0
-                    && (now - _LastProgressSent) * 1000 / System.Diagnostics.Stopwatch.Frequency < ProgressIntervalMs)
+                    && (now - _LastProgressSent) * 1000 / Stopwatch.Frequency < ProgressIntervalMs)
                 {
                     return false;
                 }
 
                 _ProgressSent = true;
                 _LastProgressSent = now;
+                _DeferredProgress = null;
                 return true;
             }
         }

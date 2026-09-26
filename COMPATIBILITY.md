@@ -2,8 +2,8 @@
 
 This document records how Voltaic conforms to each published MCP specification revision: which transports are supported, the status of every requirement area, the relaxations made deliberately to simplify integration, and the optional features not implemented. It is updated with every release.
 
-- **Voltaic version:** 2.1.10
-- **Last reviewed:** 2026-09-26. The v2.1.9 source was reviewed line by line against every MUST, MUST NOT, SHOULD, and SHOULD NOT requirement of each revision (four independent reviews: lifecycle and stream transports, Streamable HTTP and authorization, server features and data model, and the stateless revision); v2.1.10 resolves each finding, and each resolution is covered by a test that fails against v2.1.9 (or exercises a new setting). A review of v2.1.10 is pending.
+- **Voltaic version:** 2.1.11
+- **Last reviewed:** 2026-09-26. The v2.1.10 source was reviewed line by line against every MUST, MUST NOT, SHOULD, and SHOULD NOT requirement of each revision (four independent reviews: lifecycle and stream transports, Streamable HTTP and authorization, server features and data model, and the stateless revision); v2.1.11 resolves each finding, and each resolution is covered by a test (most of which fail against v2.1.10; the rest exercise new settings or timing-dependent races). A review of v2.1.11 is pending.
 - **Revisions covered:** `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, `2026-07-28`
 - **Interoperability verified with:** MCP Inspector CLI 2.8.0, the official Python MCP SDK 2.2.0 (as client and server), Claude Code 2.1.281, the official A2A Python SDK 1.1.5
 
@@ -34,11 +34,11 @@ Legend: ✅ conforms · — requirement does not exist in that revision (not app
 | Lifecycle (initialize first and once, version negotiation, shutdown, request IDs, configurable timeouts) | ✅ | ✅ | ✅ | ✅ | — | stdio shutdown: close input, SIGTERM (Linux, macOS), kill; a request method sent without an `id` never runs; `InitializeTimeoutMs` and `InitializeAsync(timeoutMs)` |
 | Ping (answer; issue periodically; timeouts are connection failures) | ✅ | ✅ | ✅ | ✅ | — ³ | `PingIntervalMs`, `PingTimeoutMs`, `PingFailureThreshold`; the stdio server stops even while a read is pending |
 | Cancellation (races, reused IDs, nothing after cancellation, reasons logged) | ✅ | ✅ | ✅ | ✅ | ✅ | Servers and clients; a cancellation that follows its request always applies (IDs are reserved in message order), also for a reused 2026-07-28 ID; includes rejected and malformed requests and timed-out pings |
-| Progress (increasing values, active tokens only, rate limiting) | ✅ | ✅ | ✅ | ✅ | ✅ | Servers send at most one update per `ProgressIntervalMs` (default 20 ms) per request, plus the final one; clients deliver progress only for tokens of requests in flight, at the same bound |
-| Per-request `_meta`, statelessness, `resultType`, caching hints, `server/discover`, removed methods | — | — | — | — | ✅ | `_meta` with the client fields but no string version is `-32602` on every transport; every complete result of a cacheable method carries `ttlMs` and `cacheScope` |
+| Progress (increasing values, active tokens only, rate limiting) | ✅ | ✅ | ✅ | ✅ | ✅ | Servers send at most one update per `ProgressIntervalMs` (default 20 ms) per request; clients deliver progress only for tokens of requests in flight, at the same bound; the latest held-back update goes out just before the response |
+| Per-request `_meta`, statelessness, `resultType`, caching hints, `server/discover`, removed methods | — | — | — | — | ✅ | a request whose `_meta` has the client fields but no string version is `-32602` on stdio, TCP, and WebSocket (on HTTP the version header decides the revision); every complete result of a cacheable method carries `ttlMs` and `cacheScope` |
 | Multi Round-Trip Requests on `tools/call` (capabilities incl. `elicitation.url`, `sampling.tools`, `sampling.context`) | — | — | — | — | ✅ | An elicitation mode other than `form` or `url` is `-32603`; `McpHttpClient` answers input requests with its registered request handlers, matching the capabilities it declares |
-| JSON Schema in the declared dialect (2020-12, draft-07), references, ECMA-262 patterns | — | — | — | ✅ | ✅ | Other dialects, malformed keyword values, and unresolvable references are rejected at registration |
-| Tools, resources, prompts, completions, logging, pagination | ✅ | ✅ | ✅ | ✅ | ✅ | |
+| JSON Schema in the declared dialect (2020-12, draft-07, per embedded resource), references, ECMA-262 patterns (code points, `u` flag), exact numbers | — | — | — | ✅ | ✅ | Other dialects, malformed keyword values, and unresolvable references are rejected at registration |
+| Tools, resources, prompts, completions, logging, pagination, rate limiting | ✅ | ✅ | ✅ | ✅ | ✅ | `RateLimits` limits tool calls, completions, and log messages per client |
 | Output schemas and `structuredContent` shapes per revision | — | — | ✅ | ✅ | ✅ | Tool schemas are sent in each revision's shape (object output schemas and object property subschemas before 2026-07-28) |
 | Change notifications (`list_changed` on registration, `resources/updated` to subscribers) | ✅ | ✅ | ✅ | ✅ | — ⁴ | Never ahead of the `initialize` response |
 | Result and notification downgrade to the governing revision | ✅ | ✅ | ✅ | ✅ | ✅ | |
@@ -47,7 +47,7 @@ Legend: ✅ conforms · — requirement does not exist in that revision (not app
 | Stateless HTTP headers (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*`) and error codes | — | — | — | — | ✅ | `Mcp-Name` is `params.uri` for `resources/read` |
 | Disconnect is cancellation (2026-07-28 HTTP) | — | — | — | — | ✅ ⁵ | |
 | `-32021` (missing client capability) is HTTP 400 | — | — | — | — | ✅ ⁵ | |
-| Insufficient scope is HTTP 403 with an `insufficient_scope` challenge | — | ✅ | ✅ | ✅ ⁵ | ✅ ⁵ | Also for batches |
+| Insufficient scope is HTTP 403 with an `insufficient_scope` challenge | — | ✅ ⁵ | ✅ ⁵ | ✅ ⁵ | ✅ ⁵ | Also for batches |
 | Authorization, resource server (401/403 challenges, `resource_metadata`, protected resource metadata at the resource's own URL) | — | ✅ ⁶ | ✅ | ✅ | ✅ | Validating access tokens (signature, expiry, audience) and answering invalid ones with 401 is done in the application's `AuthenticationHandler`; Voltaic runs it before every request and writes the challenge |
 | Reserved error codes not emitted | ✅ | ✅ | ✅ | ✅ | ✅ | Insufficient scope uses 403 |
 
@@ -58,7 +58,7 @@ Legend: ✅ conforms · — requirement does not exist in that revision (not app
 
 ## 3. Deliberate relaxations and disclosed behavior
 
-These accept input the specification says a client should not send, are stricter than required, or describe behavior the transport cannot avoid (marked in bold; each is a configurable trade-off between two requirements). None weakens a security check.
+These accept input the specification says a client should not send, are stricter than required, or describe behavior the transport cannot avoid (marked in bold; each is a trade-off between two requirements that the transport cannot meet together). None weakens a security check.
 
 | Item | Revisions | Rationale |
 |---|---|---|
@@ -71,12 +71,12 @@ These accept input the specification says a client should not send, are stricter
 | Invalid UTF-8 is decoded with replacement characters rather than rejected | All | The message is then validated as usual |
 | An error response to a message whose ID cannot be read carries `"id": null` | All | JSON-RPC 2.0 requires it; the MCP schemas declare no form for such a response (2025-11-25 and later make `id` optional) |
 | `/events` accepts `?session=`, and `/rpc` does not check `Accept` or `Content-Type` | Voltaic-specific endpoints | These endpoints are Voltaic's own; the Streamable HTTP endpoint enforces both |
-| Unicode property escapes in `pattern` accept ECMA-262 general category names and .NET's own names (such as `\p{IsGreek}` blocks) | 2025-11-25, 2026-07-28 | .NET block names are accepted as written; every ECMA-262 construct keeps its meaning (see "Stricter than required" for the ones rejected) |
+| `pattern` also accepts three Annex B forms: identity escapes of non-alphanumeric characters (`\_`), a literal `{`, `}`, or `]`, and a class escape at a range end (`[\w-.]`) | 2025-11-25, 2026-07-28 | Common and unambiguous; every pattern valid with the `u` flag keeps its exact meaning |
 | A request carrying `MCP-Protocol-Version: 2026-07-28` is served statelessly even when it also carries a session ID | 2026-07-28 | The header selects the revision, which defines no sessions; the session plays no part in the request |
 | Each session keeps its most recent `MaxResumableStreamsPerSession` streams (default 8) for `Last-Event-ID` resumption; older streams cannot be resumed | 2025-03-26 to 2025-11-25 | Resumption is optional; the limit bounds memory and is configurable |
-| **Status codes once a stream has started:** a late `-32021` or insufficient-scope error is the final SSE event of a 200 response when the client asked for notifications and the handler sent one before failing, or when a 2026-07-28 handler ran silently for longer than `ResponseKeepAliveMs` (default 15 s) | 2025-11-25, 2026-07-28 | The status is sent with the first byte; the stream is what the client asked for, or is needed to notice a disconnect (next row). Every other response keeps its exact status |
+| **Status codes once a stream has started:** a late `-32021` or insufficient-scope error is the final SSE event of a 200 response when the client asked for notifications and the handler sent one before failing, or when a 2026-07-28 handler ran silently for longer than `ResponseKeepAliveMs` (default 15 s) | 2025-03-26 to 2026-07-28 (`-32021`: 2026-07-28 only) | The status is sent with the first byte; the stream is what the client asked for, or is needed to notice a disconnect (next row). Every other response keeps its exact status |
 | **Disconnect detection:** a 2026-07-28 client that closes its stream cancels the request at the handler's next write, or within `ResponseKeepAliveMs` (default 15 s) through keep-alives | 2026-07-28 | `HttpListener` detects a closed connection only by writing. Setting `ResponseKeepAliveMs = 0` keeps exact statuses for slow handlers instead, and a handler that writes nothing then runs to completion |
-| **Stricter than required:** tools must have a description, and tool names must be 1-128 characters of letters, digits, `_`, `-`, and `.`; `RegisterTool` rejects an `x-mcp-header` integer whose schema bounds exceed the JavaScript safe range; `pattern` rejects the ECMA-262 constructs .NET cannot express (script properties such as `\p{Script=Greek}`, code points above U+FFFF inside a character class) and syntax ECMA-262 does not define that .NET would give its own meaning (`\A`, `\Z`, `\z`, `\G`, `\a`, `\e`, inline options, comments, atomic and conditional groups) | 2025-11-25, 2026-07-28 | The description is optional and the name rules are a SHOULD; enforcing them keeps tools portable. A rejected pattern fails at registration, never by validating differently. `McpHttpClient` applies only the specification's `x-mcp-header` rules to other servers' tools |
+| **Stricter than required:** tools must have a description, and tool names must be 1-128 characters of letters, digits, `_`, `-`, and `.`; `RegisterTool` rejects an `x-mcp-header` integer whose schema bounds exceed the JavaScript safe range; `pattern` rejects Unicode properties other than general categories, `Any`, `ASCII`, and `Assigned` (script and binary properties such as `\p{Script=Greek}` or `\p{Alphabetic}`) | 2025-11-25, 2026-07-28 | The description is optional and the name rules are a SHOULD; enforcing them keeps tools portable. A rejected pattern fails at registration, never by validating differently. `McpHttpClient` applies only the specification's `x-mcp-header` rules to other servers' tools |
 
 ## 4. Documentation status
 

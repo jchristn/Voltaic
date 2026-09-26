@@ -14,11 +14,18 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Initializes a resource.
         /// </summary>
-        internal McpSchemaResource(Uri baseUri, JsonElement element)
+        internal McpSchemaResource(Uri baseUri, JsonElement element, bool isDraft07)
         {
             BaseUri = baseUri;
             Element = element;
+            IsDraft07 = isDraft07;
         }
+
+        /// <summary>
+        /// Gets whether the resource is a draft-07 schema: its own <c>$schema</c> says so, or it has none and the
+        /// enclosing resource is draft-07.
+        /// </summary>
+        internal bool IsDraft07 { get; }
 
         /// <summary>
         /// Gets the resource's absolute URI (its <c>$id</c> resolved against the enclosing resource, or a placeholder
