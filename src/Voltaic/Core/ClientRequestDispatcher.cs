@@ -22,7 +22,64 @@ namespace Voltaic.Core
         /// Gets or sets whether <c>ping</c> is answered with an empty object (<c>{}</c>) and reserved, as the MCP
         /// specification requires of every party. Plain JSON-RPC clients leave it off.
         /// </summary>
+        // Requests from the server that are running, by ID, so notifications/cancelled can stop them.
+        private readonly ConcurrentDictionary<string, CancellationTokenSource> _Running = new ConcurrentDictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
+        // Cancellations that arrived before their request started, kept briefly.
+        private readonly ConcurrentDictionary<string, DateTime> _EarlyCancels = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+
         internal bool AnswersPing { get; set; }
+
+        /// <summary>
+        /// Handles a <c>notifications/cancelled</c> from the server: the matching request's handler token is cancelled
+        /// and no response is sent for it. Returns true when the notification was a cancellation.
+        /// </summary>
+        internal bool TryHandleCancellation(JsonRpcRequest notification)
+        {
+            if (notification == null || !StringComparer.Ordinal.Equals(notification.Method, "notifications/cancelled")) return false;
+            string? idKey = null;
+            try
+            {
+                JsonElement parameters = notification.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(notification.Params);
+                if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("requestId", out JsonElement requestId)) idKey = IdKey(requestId);
+            }
+            catch (JsonException)
+            {
+            }
+            catch (NotSupportedException)
+            {
+            }
+
+            if (idKey == null) return true;
+            if (_Running.TryGetValue(idKey, out CancellationTokenSource? running))
+            {
+                try
+                {
+                    running.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+            else
+            {
+                DateTime now = DateTime.UtcNow;
+                foreach (KeyValuePair<string, DateTime> entry in _EarlyCancels)
+                {
+                    if (now - entry.Value > TimeSpan.FromSeconds(30)) _EarlyCancels.TryRemove(entry.Key, out DateTime _);
+                }
+
+                if (_EarlyCancels.Count < 256) _EarlyCancels[idKey] = now;
+            }
+
+            return true;
+        }
+
+        private static string? IdKey(object? id)
+        {
+            if (id == null) return null;
+            JsonElement element = id is JsonElement json ? json : JsonSerializer.SerializeToElement(id);
+            return element.ValueKind == JsonValueKind.String || element.ValueKind == JsonValueKind.Number ? element.GetRawText() : null;
+        }
 
         /// <summary>
         /// Registers or replaces the handler for a method. Throws for a null or empty method, a null handler, or
@@ -88,7 +145,7 @@ namespace Voltaic.Core
         /// <c>-32601</c>; a handler exception that implements <see cref="IJsonRpcErrorProvider"/> supplies its own
         /// error; any other exception becomes <c>-32603</c> without its details.
         /// </summary>
-        internal async Task<JsonRpcResponse> DispatchAsync(JsonRpcRequest request, CancellationToken token)
+        internal async Task<JsonRpcResponse?> DispatchAsync(JsonRpcRequest request, CancellationToken token)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
 
@@ -104,19 +161,40 @@ namespace Voltaic.Core
                 return new JsonRpcResponse { Id = request.Id, Error = notFound };
             }
 
+            string? idKey = IdKey(request.Id);
+            using CancellationTokenSource running = CancellationTokenSource.CreateLinkedTokenSource(token);
+            if (idKey != null)
+            {
+                _Running[idKey] = running;
+                if (_EarlyCancels.TryRemove(idKey, out DateTime _)) running.Cancel();
+            }
+
             try
             {
+                if (running.IsCancellationRequested && !token.IsCancellationRequested) return null;
                 RpcParameters? parameters = request.Params == null ? null : RpcParameters.FromObject(request.Params);
-                object? result = await handler(parameters, token).ConfigureAwait(false);
+                object? result = await handler(parameters, running.Token).ConfigureAwait(false);
+                if (running.IsCancellationRequested && !token.IsCancellationRequested) return null;
                 return new JsonRpcResponse { Id = request.Id, Result = result ?? new Dictionary<string, object?>() };
+            }
+            catch (OperationCanceledException) when (running.IsCancellationRequested && !token.IsCancellationRequested)
+            {
+                // The server cancelled the request: no response is sent.
+                return null;
             }
             catch (Exception error) when (error is IJsonRpcErrorProvider provider)
             {
+                if (running.IsCancellationRequested && !token.IsCancellationRequested) return null;
                 return new JsonRpcResponse { Id = request.Id, Error = provider.ToJsonRpcError() };
             }
             catch (Exception)
             {
+                if (running.IsCancellationRequested && !token.IsCancellationRequested) return null;
                 return new JsonRpcResponse { Id = request.Id, Error = JsonRpcError.InternalError() };
+            }
+            finally
+            {
+                if (idKey != null) _Running.TryRemove(new KeyValuePair<string, CancellationTokenSource>(idKey, running));
             }
         }
     }

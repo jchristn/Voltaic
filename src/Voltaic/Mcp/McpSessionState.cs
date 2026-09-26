@@ -18,6 +18,11 @@ namespace Voltaic.Mcp
         private readonly object _Lock = new object();
         private readonly HashSet<string> _Subscriptions = new HashSet<string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, McpInFlightRequest> _InFlight = new ConcurrentDictionary<string, McpInFlightRequest>(StringComparer.Ordinal);
+        // Cancellations that arrived before their request started (requests start on the thread pool, notifications
+        // are handled in order), kept briefly so the request is cancelled when it begins.
+        private readonly ConcurrentDictionary<string, DateTime> _EarlyCancels = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly TimeSpan _EarlyCancelLifetime = TimeSpan.FromSeconds(30);
+        private const int _MaxEarlyCancels = 256;
         private string? _NegotiatedVersion;
         private JsonElement? _ClientCapabilities;
         private string? _LogLevel;
@@ -112,13 +117,19 @@ namespace Voltaic.Mcp
         internal McpInFlightRequest? TryBeginRequest(string idKey, string method, JsonElement? progressToken, CancellationToken parent)
         {
             McpInFlightRequest request = new McpInFlightRequest(idKey, method, progressToken, parent);
-            if (_InFlight.TryAdd(idKey, request)) return request;
+            if (_InFlight.TryAdd(idKey, request))
+            {
+                if (method != "initialize" && _EarlyCancels.TryRemove(idKey, out DateTime _)) request.Cancel();
+                return request;
+            }
+
             request.Dispose();
             return null;
         }
 
         internal void EndRequest(McpInFlightRequest request)
         {
+            request.MarkCompleted();
             _InFlight.TryRemove(new KeyValuePair<string, McpInFlightRequest>(request.IdKey, request));
             request.Dispose();
         }
@@ -135,7 +146,20 @@ namespace Voltaic.Mcp
                 return true;
             }
 
+            if (request == null) RememberEarlyCancel(idKey);
             return false;
+        }
+
+        private void RememberEarlyCancel(string idKey)
+        {
+            DateTime now = DateTime.UtcNow;
+            foreach (KeyValuePair<string, DateTime> entry in _EarlyCancels)
+            {
+                if (now - entry.Value > _EarlyCancelLifetime) _EarlyCancels.TryRemove(entry.Key, out DateTime _);
+            }
+
+            if (_EarlyCancels.Count >= _MaxEarlyCancels) return;
+            _EarlyCancels[idKey] = now;
         }
 
         /// <summary>
@@ -144,7 +168,7 @@ namespace Voltaic.Mcp
         internal McpInFlightRequest? FindByProgressToken(string progressTokenJson)
         {
             return _InFlight.Values.FirstOrDefault(request =>
-                request.ProgressToken.HasValue && StringComparer.Ordinal.Equals(request.ProgressToken.Value.GetRawText(), progressTokenJson));
+                request.IsActive && request.ProgressToken.HasValue && StringComparer.Ordinal.Equals(request.ProgressToken.Value.GetRawText(), progressTokenJson));
         }
 
         /// <summary>

@@ -37,7 +37,7 @@ namespace Test.Shared
                         RpcResult initialize = await fixture.PostMcpAsync("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion, capabilities = new { }, clientInfo = new { name = "t", version = "1" } }, 1, null, ct).ConfigureAwait(false);
                         RpcResult tools = await fixture.PostMcpAsync("tools/list", new { }, 2, initialize.SessionId, ct).ConfigureAwait(false);
                         RpcResult ping = await fixture.PostMcpAsync("ping", null, 3, initialize.SessionId, ct).ConfigureAwait(false);
-                        RpcResult discover = await fixture.PostMcpAsync("server/discover", new { }, 4, initialize.SessionId, ct).ConfigureAwait(false);
+                        RpcResult discover = await McpHttpTestRequests.SendStatelessAsync(fixture, "server/discover", 4, null, null, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(McpProtocol.LatestProtocolVersion, initialize.Result.Get("protocolVersion").String());
                         TestAssert.Equal("app-tool", String.Join(",", ToolNames(tools.Result)), "tools/list must contain only the application's tool.");

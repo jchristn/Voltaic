@@ -296,13 +296,24 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-        /// the server negotiated. Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace
-        /// restores the default.
+        /// the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+        /// client must request a version it can negotiate. Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
+        /// Setting null or whitespace restores the default.
         /// </summary>
+        /// <exception cref="ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         public string ProtocolVersion
         {
             get => _ProtocolVersion;
-            set => _ProtocolVersion = String.IsNullOrWhiteSpace(value) ? McpProtocol.LatestProtocolVersion : value;
+            set
+            {
+                string version = String.IsNullOrWhiteSpace(value) ? McpProtocol.LatestProtocolVersion : value;
+                if (!McpProtocol.IsHandshakeVersion(version))
+                {
+                    throw new ArgumentException($"'{version}' is not a handshake-era MCP protocol version that initialize can negotiate.", nameof(value));
+                }
+
+                _ProtocolVersion = version;
+            }
         }
 
         /// <summary>
@@ -466,6 +477,8 @@ namespace Voltaic.Mcp
         {
             byte[] buffer = new byte[_MaxMessageSize];
             StringBuilder messageBuilder = new StringBuilder();
+            // Decodes across frames, so a multi-byte UTF-8 character split between reads is preserved.
+            Decoder decoder = new UTF8Encoding(false).GetDecoder();
 
             try
             {
@@ -482,8 +495,9 @@ namespace Voltaic.Mcp
 
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
-                        string chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        messageBuilder.Append(chunk);
+                        char[] chars = new char[decoder.GetCharCount(buffer, 0, result.Count, result.EndOfMessage)];
+                        int decoded = decoder.GetChars(buffer, 0, result.Count, chars, 0, result.EndOfMessage);
+                        messageBuilder.Append(chars, 0, decoded);
 
                         if (result.EndOfMessage)
                         {
@@ -568,8 +582,10 @@ namespace Voltaic.Mcp
                 CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
                 try
                 {
-                    JsonRpcResponse[] responses = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
-                    await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
+                    JsonRpcResponse?[] answered = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
+                    // Requests the server cancelled get no response; a batch with nothing left is not answered.
+                    List<JsonRpcResponse> responses = answered.Where(response => response != null).Select(response => response!).ToList();
+                    if (responses.Count > 0) await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -605,7 +621,8 @@ namespace Voltaic.Mcp
             CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
             try
             {
-                JsonRpcResponse response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                JsonRpcResponse? response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                if (response == null) return;
                 await SendJsonAsync(JsonSerializer.Serialize(response), token).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -658,6 +675,9 @@ namespace Voltaic.Mcp
                     JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString);
                     if (notification != null && notification.Id == null)
                     {
+                        // A cancellation of a request the server sent stops its handler; the notification is still raised.
+                        _RequestDispatcher.TryHandleCancellation(notification);
+
                         // Invoke each handler individually to ensure exception isolation
                         if (NotificationReceived != null)
                         {

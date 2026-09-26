@@ -719,9 +719,11 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Sends <c>notifications/progress</c> to the client whose in-flight request carries
-        /// <paramref name="progressToken"/>; nothing is sent when no active request carries it. Tool handlers can use
-        /// <see cref="McpToolCallContext.ReportProgressAsync"/> instead.
+        /// Sends <c>notifications/progress</c> for the in-flight request that carries <paramref name="progressToken"/>.
+        /// Called from a tool handler, the handler's own request is used; otherwise the notification is sent only when
+        /// exactly one active request on any connection carries the token (tokens are unique only per client), and
+        /// nothing is sent for a cancelled or finished request. Prefer <see cref="McpToolCallContext.ReportProgressAsync"/>,
+        /// which is always scoped to the calling request.
         /// </summary>
         /// <param name="progressToken">Progress token from the request's <c>_meta</c>. Must not be null.</param>
         /// <param name="progress">Current progress value. Must increase with every notification.</param>
@@ -1082,6 +1084,8 @@ namespace Voltaic.Mcp
         {
             byte[] buffer = new byte[_MaxMessageSize];
             StringBuilder messageBuilder = new StringBuilder();
+            // Decodes across frames, so a multi-byte UTF-8 character split between reads is preserved.
+            Decoder decoder = new UTF8Encoding(false).GetDecoder();
 
             try
             {
@@ -1103,8 +1107,9 @@ namespace Voltaic.Mcp
 
                         if (result.MessageType == WebSocketMessageType.Text)
                         {
-                            string chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                            messageBuilder.Append(chunk);
+                            char[] chars = new char[decoder.GetCharCount(buffer, 0, result.Count, result.EndOfMessage)];
+                            int decoded = decoder.GetChars(buffer, 0, result.Count, chars, 0, result.EndOfMessage);
+                            messageBuilder.Append(chars, 0, decoded);
 
                             if (result.EndOfMessage)
                             {

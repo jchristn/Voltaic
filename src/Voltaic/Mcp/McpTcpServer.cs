@@ -443,9 +443,11 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Sends <c>notifications/progress</c> to the client whose in-flight request carries
-        /// <paramref name="progressToken"/>; nothing is sent when no active request carries it. Tool handlers can use
-        /// <see cref="McpToolCallContext.ReportProgressAsync"/> instead.
+        /// Sends <c>notifications/progress</c> for the in-flight request that carries <paramref name="progressToken"/>.
+        /// Called from a tool handler, the handler's own request is used; otherwise the notification is sent only when
+        /// exactly one active request on any connection carries the token (tokens are unique only per client), and
+        /// nothing is sent for a cancelled or finished request. Prefer <see cref="McpToolCallContext.ReportProgressAsync"/>,
+        /// which is always scoped to the calling request.
         /// </summary>
         /// <param name="progressToken">Progress token from the request's <c>_meta</c>. Must not be null.</param>
         /// <param name="progress">Current progress value. Must increase with every notification.</param>

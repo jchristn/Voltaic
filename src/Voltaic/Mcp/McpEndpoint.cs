@@ -274,7 +274,7 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams("tools/call requires params with a name.");
             }
 
-            McpNamedArgumentsParams? call = args.Deserialize<McpNamedArgumentsParams>();
+            McpNamedArgumentsParams? call = ParseParams<McpNamedArgumentsParams>(args);
             if (call == null || call.Name == null)
             {
                 throw McpProtocolException.InvalidParams("tools/call requires a name parameter.");
@@ -423,30 +423,65 @@ namespace Voltaic.Mcp
 
             JsonElement? declared = McpRequestScope.Current?.ClientCapabilities;
             Dictionary<string, object> missing = new Dictionary<string, object>(StringComparer.Ordinal);
+            List<string> missingPaths = new List<string>();
             foreach (KeyValuePair<string, McpInputRequest> entry in result.InputRequests!)
             {
-                string? capability = entry.Value.Method switch
-                {
-                    "elicitation/create" => "elicitation",
-                    "sampling/createMessage" => "sampling",
-                    "roots/list" => "roots",
-                    _ => null
-                };
-
-                if (capability == null)
+                string? path = RequiredCapabilityPath(entry.Value, declared);
+                if (path == null)
                 {
                     throw new McpProtocolException(-32603, $"Tool '{toolName}' requested input with unsupported method '{entry.Value.Method}'; only elicitation/create, sampling/createMessage, and roots/list are allowed.");
                 }
 
-                bool supported = declared.HasValue && declared.Value.ValueKind == JsonValueKind.Object && declared.Value.TryGetProperty(capability, out JsonElement _);
-                if (!supported) missing[capability] = new Dictionary<string, object>();
+                if (McpClientCapabilityPath.IsDeclared(declared, path) || missingPaths.Contains(path)) continue;
+                missingPaths.Add(path);
+
+                // requiredCapabilities mirrors the ClientCapabilities shape, for example {"elicitation":{"url":{}}}.
+                Dictionary<string, object> level = missing;
+                foreach (string segment in path.Split('.'))
+                {
+                    if (!level.TryGetValue(segment, out object? child) || child is not Dictionary<string, object> next)
+                    {
+                        next = new Dictionary<string, object>(StringComparer.Ordinal);
+                        level[segment] = next;
+                    }
+
+                    level = next;
+                }
             }
 
             if (missing.Count > 0)
             {
                 throw McpProtocolException.MissingRequiredClientCapability(
-                    $"Tool '{toolName}' needs the client capabilities {String.Join(", ", missing.Keys)}, which the request did not declare.",
+                    $"Tool '{toolName}' needs the client capabilities {String.Join(", ", missingPaths)}, which the request did not declare.",
                     missing);
+            }
+        }
+
+        // The client capability an input request needs, as a dotted path: elicitation.url for URL-mode elicitation,
+        // elicitation.form for form mode when the client lists modes (an empty elicitation object means form only),
+        // sampling.tools for sampling that offers tools, else the method's capability. Null for other methods.
+        private static string? RequiredCapabilityPath(McpInputRequest request, JsonElement? declared)
+        {
+            JsonElement parameters = request.Params == null ? default : (request.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(request.Params));
+            bool hasParams = parameters.ValueKind == JsonValueKind.Object;
+            switch (request.Method)
+            {
+                case "elicitation/create":
+                    string mode = hasParams && parameters.TryGetProperty("mode", out JsonElement modeElement) && modeElement.ValueKind == JsonValueKind.String
+                        ? modeElement.GetString() ?? "form"
+                        : "form";
+                    if (mode == "url") return "elicitation.url";
+                    bool listsModes = declared.HasValue && declared.Value.ValueKind == JsonValueKind.Object
+                        && declared.Value.TryGetProperty("elicitation", out JsonElement elicitation)
+                        && elicitation.ValueKind == JsonValueKind.Object && elicitation.EnumerateObject().Any();
+                    return listsModes ? "elicitation.form" : "elicitation";
+                case "sampling/createMessage":
+                    bool offersTools = hasParams && parameters.TryGetProperty("tools", out JsonElement tools) && tools.ValueKind == JsonValueKind.Array && tools.GetArrayLength() > 0;
+                    return offersTools ? "sampling.tools" : "sampling";
+                case "roots/list":
+                    return "roots";
+                default:
+                    return null;
             }
         }
 
@@ -510,7 +545,7 @@ namespace Voltaic.Mcp
 
         public async Task<object> ReadResourceAsync(RpcParameters? args, CancellationToken token)
         {
-            McpUriParams? parameters = args?.Deserialize<McpUriParams>();
+            McpUriParams? parameters = ParseParams<McpUriParams>(args);
             if (parameters == null || parameters.Uri == null)
             {
                 throw McpProtocolException.InvalidParams("resources/read requires a uri parameter.");
@@ -574,7 +609,7 @@ namespace Voltaic.Mcp
 
         public async Task<object> GetPromptAsync(RpcParameters? args, CancellationToken token)
         {
-            McpNamedArgumentsParams? request = args?.Deserialize<McpNamedArgumentsParams>();
+            McpNamedArgumentsParams? request = ParseParams<McpNamedArgumentsParams>(args);
             if (request == null || request.Name == null)
             {
                 throw McpProtocolException.InvalidParams("prompts/get requires a name parameter.");
@@ -627,7 +662,7 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams("completion/complete requires params.");
             }
 
-            McpCompleteRequest? request = args.Deserialize<McpCompleteRequest>();
+            McpCompleteRequest? request = ParseParams<McpCompleteRequest>(args);
             if (request == null)
             {
                 throw McpProtocolException.InvalidParams("completion/complete params were invalid.");
@@ -697,7 +732,7 @@ namespace Voltaic.Mcp
         {
             if (!SupportsLogging) throw new McpProtocolException(-32601, "Method not found: logging/setLevel (logging is not supported).");
 
-            McpLevelParams? parameters = args?.Deserialize<McpLevelParams>();
+            McpLevelParams? parameters = ParseParams<McpLevelParams>(args);
             if (parameters == null || parameters.Level == null)
             {
                 throw McpProtocolException.InvalidParams("logging/setLevel requires a level parameter.");
@@ -898,13 +933,13 @@ namespace Voltaic.Mcp
 
         private static string? GetCursor(RpcParameters? args)
         {
-            McpCursorParams? parameters = args?.Deserialize<McpCursorParams>();
+            McpCursorParams? parameters = ParseParams<McpCursorParams>(args);
             return parameters?.Cursor;
         }
 
         private static string GetRequiredUri(RpcParameters? args, string method)
         {
-            McpUriParams? parameters = args?.Deserialize<McpUriParams>();
+            McpUriParams? parameters = ParseParams<McpUriParams>(args);
             if (parameters == null || parameters.Uri == null)
             {
                 throw McpProtocolException.InvalidParams($"{method} requires a uri parameter.");
@@ -918,8 +953,31 @@ namespace Voltaic.Mcp
             return parameters.Uri;
         }
 
+        // Reads typed params; a member of the wrong JSON type is invalid params (-32602), not an internal error.
+        private static T? ParseParams<T>(RpcParameters? args) where T : class
+        {
+            if (args == null || !args.HasValue) return null;
+            try
+            {
+                return args.Deserialize<T>();
+            }
+            catch (JsonException invalid)
+            {
+                throw McpProtocolException.InvalidParams($"Invalid params: {invalid.Message}");
+            }
+            catch (NotSupportedException invalid)
+            {
+                throw McpProtocolException.InvalidParams($"Invalid params: {invalid.Message}");
+            }
+        }
+
         private static void ValidateCompletionRequest(McpCompleteRequest request)
         {
+            if (request.Ref == null || request.Argument == null)
+            {
+                throw McpProtocolException.InvalidParams("completion/complete requires ref and argument objects.");
+            }
+
             if (String.IsNullOrWhiteSpace(request.Ref.Type))
             {
                 throw McpProtocolException.InvalidParams("completion/complete ref.type is required.");

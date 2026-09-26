@@ -61,6 +61,8 @@ namespace Test.Shared
                 McpFeatureConformanceSuites.Features(),
                 McpHttpConformanceSuites.Server(),
                 McpHttpConformanceSuites.Client(),
+                McpSpecEdgeSuites.Streams(),
+                McpSpecEdgeSuites.Http(),
                 McpTransportParitySuites.TcpMcpParity(),
                 McpTransportParitySuites.WebSocketMcpParity(),
                 A2AProtocolSuites.ProtocolAndTransports(),

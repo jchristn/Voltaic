@@ -253,10 +253,13 @@ namespace Voltaic.Mcp
 
             if (content != null) DowngradeContentArray(content, revision);
 
-            if (revision < _Rev20250618 && result.ContainsKey("structuredContent"))
+            // structuredContent was added in 2025-06-18, and until 2026-07-28 it must be a JSON object. Keep the data
+            // reachable by making sure a text block carries it (FromStructured already adds one; handler-built results
+            // may not).
+            bool undefined = revision < _Rev20250618;
+            bool notAnObject = result.ContainsKey("structuredContent") && result["structuredContent"] is not JsonObject;
+            if (result.ContainsKey("structuredContent") && (undefined || notAnObject))
             {
-                // structuredContent was added in 2025-06-18. Keep the data reachable by making sure a text
-                // block carries it (Voltaic's FromStructured already adds one; handler-built results may not).
                 JsonNode? structured = result["structuredContent"];
                 result.Remove("structuredContent");
 

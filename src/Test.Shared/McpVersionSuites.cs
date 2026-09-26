@@ -523,7 +523,7 @@ namespace Test.Shared
                             server.RegisterTool("noop", "Does nothing", new { type = "object", properties = new { }, required = new string[] { } }, (_) => "ok");
                         }).ConfigureAwait(false);
 
-                        RpcResult response = await fixture.PostMcpAsync("server/discover", new { }, "d1", null, ct).ConfigureAwait(false);
+                        RpcResult response = await McpHttpTestRequests.SendStatelessAsync(fixture, "server/discover", "d1", null, null, null, ct).ConfigureAwait(false);
                         McpDiscoverResult? result = RpcResponseHelpers.ResultAs<McpDiscoverResult>(response.Body);
                         TestAssert.NotNull(result, "Discovery result should deserialize.");
 

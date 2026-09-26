@@ -1461,7 +1461,8 @@ namespace Voltaic.Mcp
             CancellationToken token = _ServerRequestTokenSource.Token;
             try
             {
-                JsonRpcResponse response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                JsonRpcResponse? response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                if (response == null) return;
                 string responseJson = JsonSerializer.Serialize(response);
                 using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
@@ -1530,6 +1531,9 @@ namespace Voltaic.Mcp
                 JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(data);
                 if (notification != null)
                 {
+                    // A cancellation of a request the server sent stops its handler; the notification is still raised.
+                    _RequestDispatcher.TryHandleCancellation(notification);
+
                     // Invoke each handler individually to ensure exception isolation
                     if (NotificationReceived != null)
                     {

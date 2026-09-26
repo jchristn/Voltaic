@@ -10,11 +10,13 @@ namespace Voltaic.Mcp
     /// values. Supports simple (<c>{var}</c>), reserved (<c>{+var}</c>), fragment (<c>{#var}</c>), label
     /// (<c>{.var}</c>), path-segment (<c>{/var}</c>), path-parameter (<c>{;var}</c>), and query (<c>{?a,b}</c>,
     /// <c>{&amp;a}</c>) expressions, with several variables per expression and the <c>:n</c> prefix and <c>*</c> explode
-    /// modifiers (an exploded variable receives its raw text). Values are percent-decoded. Thread-safe.
+    /// modifiers (an exploded variable receives its raw text, separators included). Variable names may contain dots and
+    /// percent-encoded characters. Values are percent-decoded. Thread-safe.
     /// </summary>
     internal sealed class McpUriTemplate
     {
-        private static readonly Regex _VariableName = new Regex("^[A-Za-z0-9_]+$", RegexOptions.CultureInvariant);
+        // RFC 6570 varname: varchar *( ["."] varchar ), where varchar is ALPHA / DIGIT / "_" / pct-encoded.
+        private static readonly Regex _VariableName = new Regex("^(?:[A-Za-z0-9_]|%[0-9A-Fa-f]{2})+(?:\\.(?:[A-Za-z0-9_]|%[0-9A-Fa-f]{2})+)*$", RegexOptions.CultureInvariant);
         private readonly Regex _Pattern;
         private readonly Dictionary<string, string> _Groups = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<List<string>> _QueryExpressions = new List<List<string>>();
@@ -48,8 +50,10 @@ namespace Voltaic.Mcp
                 char op = "+#./;?&".IndexOf(expression[0]) >= 0 ? expression[0] : '\0';
                 string list = op == '\0' ? expression : expression.Substring(1);
                 List<string> names = new List<string>();
+                List<bool> exploded = new List<bool>();
                 foreach (string spec in list.Split(','))
                 {
+                    exploded.Add(spec.EndsWith("*", StringComparison.Ordinal));
                     string name = spec.TrimEnd('*');
                     int colon = name.IndexOf(':');
                     if (colon >= 0) name = name.Substring(0, colon);
@@ -71,14 +75,17 @@ namespace Voltaic.Mcp
                 {
                     string group = "v" + groupIndex++;
                     _Groups[group] = names[n];
+                    // Reserved (+) and fragment (#) values may contain reserved characters, commas included, so they are
+                    // matched lazily; an exploded variable receives the raw text of all its items, separators included.
+                    bool explode = exploded[n];
                     string value = op switch
                     {
-                        '+' => "[^?#,]*",
-                        '#' => "[^,]*",
-                        '.' => "[^/?#.,]*",
-                        '/' => "[^/?#,]*",
-                        ';' => "[^;/?#,]*",
-                        _ => "[^/?#,&=]+"
+                        '+' => ".*?",
+                        '#' => ".*?",
+                        '.' => explode ? "[^/?#]*" : "[^/?#.,]*",
+                        '/' => explode ? "[^?#]*" : "[^/?#,]*",
+                        ';' => explode ? "[^/?#]*" : "[^;/?#,]*",
+                        _ => explode ? "[^/?#]+" : "[^/?#,&=]+"
                     };
 
                     string capture = "(?<" + group + ">" + value + ")";

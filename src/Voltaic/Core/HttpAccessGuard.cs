@@ -166,17 +166,21 @@ namespace Voltaic.Core
             foreach (KeyValuePair<string, string> header in result.Headers)
             {
                 if (String.IsNullOrEmpty(header.Key) || header.Value == null) continue;
-                if (StringComparer.OrdinalIgnoreCase.Equals(header.Key, "WWW-Authenticate")) hasChallenge = true;
-                context.Response.AddHeader(header.Key, header.Value);
+                string value = header.Value;
+                if (StringComparer.OrdinalIgnoreCase.Equals(header.Key, "WWW-Authenticate"))
+                {
+                    hasChallenge = true;
+                    value = WithResourceMetadata(value, resourceMetadataUrl);
+                }
+
+                context.Response.AddHeader(header.Key, value);
             }
 
             // A 401 must carry a WWW-Authenticate challenge (RFC 9110); MCP clients read resource_metadata from it to
             // discover the authorization server (MCP 2025-06-18 and later).
             if (result.StatusCode == 401 && !hasChallenge)
             {
-                context.Response.AddHeader("WWW-Authenticate", String.IsNullOrEmpty(resourceMetadataUrl)
-                    ? "Bearer"
-                    : "Bearer resource_metadata=\"" + resourceMetadataUrl!.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"");
+                context.Response.AddHeader("WWW-Authenticate", WithResourceMetadata("Bearer", resourceMetadataUrl));
             }
 
             if (!String.IsNullOrEmpty(result.ErrorMessage))
@@ -188,6 +192,20 @@ namespace Voltaic.Core
             }
 
             context.Response.Close();
+        }
+
+        // Adds resource_metadata to a Bearer challenge that lacks it when the server publishes protected resource
+        // metadata, so clients can always discover the authorization server from a 401 or 403.
+        internal static string WithResourceMetadata(string challenge, string? resourceMetadataUrl)
+        {
+            if (String.IsNullOrEmpty(resourceMetadataUrl)) return challenge;
+            string trimmed = challenge.Trim();
+            if (!trimmed.StartsWith("Bearer", StringComparison.OrdinalIgnoreCase)) return challenge;
+            if (trimmed.Length > 6 && !Char.IsWhiteSpace(trimmed[6])) return challenge;
+            if (trimmed.IndexOf("resource_metadata=", StringComparison.OrdinalIgnoreCase) >= 0) return challenge;
+
+            string parameter = "resource_metadata=\"" + resourceMetadataUrl!.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+            return trimmed.Length == 6 ? "Bearer " + parameter : trimmed + ", " + parameter;
         }
     }
 }

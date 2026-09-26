@@ -11,6 +11,7 @@ namespace Voltaic.Mcp
     internal sealed class McpInFlightRequest : IDisposable
     {
         private int _Cancelled;
+        private int _Completed;
         private double? _LastProgress;
         private readonly object _ProgressLock = new object();
 
@@ -51,6 +52,14 @@ namespace Voltaic.Mcp
         /// Gets whether the client cancelled the request.
         /// </summary>
         internal bool IsCancelled => Volatile.Read(ref _Cancelled) == 1;
+
+        // True while the request may still produce messages: neither cancelled nor finished.
+        internal bool IsActive => Volatile.Read(ref _Cancelled) == 0 && Volatile.Read(ref _Completed) == 0;
+
+        internal void MarkCompleted()
+        {
+            Volatile.Write(ref _Completed, 1);
+        }
 
         /// <summary>
         /// Marks the request cancelled by the client and cancels its handler token.

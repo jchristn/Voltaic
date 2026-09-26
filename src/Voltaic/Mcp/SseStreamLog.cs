@@ -20,11 +20,39 @@ namespace Voltaic.Mcp
         private long _Sequence;
         private CancellationTokenSource? _Writer;
         private CancellationTokenSource? _Wake;
+        private bool _Complete;
 
         /// <summary>
         /// Gets the stream identifier (32 hexadecimal characters).
         /// </summary>
         internal string StreamId { get; }
+
+        // True for the SSE response stream of one POST request; it ends after the request's response.
+        internal bool IsRequestStream { get; set; }
+
+        // True once a request stream's final response has been appended.
+        internal bool IsComplete
+        {
+            get { lock (_Lock) return _Complete; }
+        }
+
+        internal void Complete()
+        {
+            CancellationTokenSource? wake;
+            lock (_Lock)
+            {
+                _Complete = true;
+                wake = _Wake;
+            }
+
+            try
+            {
+                wake?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
 
         internal SseStreamLog(string streamId, int capacity)
         {
@@ -131,7 +159,7 @@ namespace Voltaic.Mcp
             {
                 _Wake?.Dispose();
                 _Wake = new CancellationTokenSource();
-                if (_Events.Last != null && _Events.Last.Value.Sequence > lastSent) _Wake.Cancel();
+                if ((_Events.Last != null && _Events.Last.Value.Sequence > lastSent) || _Complete) _Wake.Cancel();
                 return _Wake.Token;
             }
         }

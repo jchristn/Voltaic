@@ -133,6 +133,9 @@ namespace Voltaic.Mcp
         {
             McpInFlightRequest? request = _Scope?.Request;
             if (request == null || !request.ProgressToken.HasValue || _Scope?.Notify == null) return Task.CompletedTask;
+
+            // Nothing may be sent for a request that was cancelled or has already been answered.
+            if (!request.IsActive) return Task.CompletedTask;
             if (!request.TryRecordProgress(progress))
             {
                 throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
@@ -170,6 +173,7 @@ namespace Voltaic.Mcp
         {
             if (!McpLogLevels.IsValid(level)) throw new ArgumentException($"'{level}' is not an MCP log level.", nameof(level));
             if (_Scope?.Notify == null) return Task.CompletedTask;
+            if (_Scope.Request != null && !_Scope.Request.IsActive) return Task.CompletedTask;
 
             string? minimum = _Scope.StatelessVersion != null ? _Scope.RequestLogLevel : _Scope.Session.LogLevel;
             if (_Scope.StatelessVersion != null && minimum == null) return Task.CompletedTask;
@@ -187,16 +191,16 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Returns true when the client declared <paramref name="capability"/> (for example <c>elicitation</c>,
         /// <c>sampling</c>, or <c>roots</c>): in <c>initialize</c> for handshake-era sessions, or in the request's
-        /// <c>_meta</c> for <c>2026-07-28</c> requests. Tools must not rely on capabilities the client did not declare.
+        /// <c>_meta</c> for <c>2026-07-28</c> requests. A dotted path checks a nested capability, for example
+        /// <c>elicitation.url</c> or <c>sampling.tools</c>. Tools must not rely on capabilities the client did not declare.
         /// </summary>
-        /// <param name="capability">The capability name. Must not be null or empty.</param>
+        /// <param name="capability">The capability name or dotted path. Must not be null or empty.</param>
         /// <returns>True when declared.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="capability"/> is null or empty.</exception>
         public bool ClientSupports(string capability)
         {
             if (String.IsNullOrEmpty(capability)) throw new ArgumentNullException(nameof(capability));
-            JsonElement? declared = _Scope?.ClientCapabilities;
-            return declared.HasValue && declared.Value.ValueKind == JsonValueKind.Object && declared.Value.TryGetProperty(capability, out JsonElement _);
+            return McpClientCapabilityPath.IsDeclared(_Scope?.ClientCapabilities, capability);
         }
 
         /// <summary>

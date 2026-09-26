@@ -325,7 +325,9 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Gets or sets whether the server advertises the <c>io.modelcontextprotocol/tasks</c>
-        /// extension in its capabilities (2026-07-28+). Default is false.
+        /// extension in its capabilities (2026-07-28+). Default is false. Voltaic does not implement the
+        /// <c>tasks/*</c> methods: set this to true only when the application registers them itself with
+        /// <c>RegisterMethod</c>, because a server must not advertise a capability it does not support.
         /// </summary>
         public bool AdvertiseTasksExtension
         {
@@ -1543,11 +1545,25 @@ namespace Voltaic.Mcp
 
             McpSessionState state = StateOf(connection);
             bool sessionHeader = hasSession;
+
+            // A session's POST response stream is resumable (MCP 2025-03-26 and later): its events carry IDs and are
+            // logged, and from 2025-11-25 it starts with a priming event. Stateless requests have no session to
+            // resume on, and a replay buffer of 0 turns resumability off.
+            Func<SseStreamLog>? openLog = null;
+            bool prime = false;
+            if (hasSession && statelessVersion == null && _SseReplayBufferSize > 0)
+            {
+                string streamSessionId = connection.SessionId;
+                openLog = () => _SseStreams.GetOrAdd(streamSessionId, _ => new SseSessionStreams(MaxSseStreamsPerSession)).OpenRequestStream(_SseReplayBufferSize);
+                string? negotiated = state.NegotiatedVersion;
+                prime = negotiated != null && String.CompareOrdinal(negotiated, McpProtocol.ProtocolVersion20251125) >= 0;
+            }
+
             McpHttpResponseWriter writer = new McpHttpResponseWriter(context, response =>
             {
                 HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
                 if (sessionHeader) SetSessionIdHeaders(response, connection.SessionId);
-            });
+            }, openLog, prime, _SseRetryIntervalMs);
 
             using CancellationTokenSource requestTokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
             using CancellationTokenSource keepAliveStop = new CancellationTokenSource();
@@ -1905,6 +1921,27 @@ namespace Voltaic.Mcp
                             lastSent = pending.Sequence;
                         }
 
+                        if (streamLog.IsRequestStream)
+                        {
+                            // A resumed POST response stream carries only that request's messages and ends after its
+                            // response; the session's other notifications stay on the GET stream.
+                            if (streamLog.IsComplete && streamLog.After(lastSent).Count == 0) break;
+                            CancellationToken appended = streamLog.BeginWait(lastSent);
+                            using (CancellationTokenSource waitCts = CancellationTokenSource.CreateLinkedTokenSource(streamToken, appended))
+                            {
+                                try
+                                {
+                                    await Task.Delay(_SseHeartbeatInterval, waitCts.Token).ConfigureAwait(false);
+                                    await SendSseKeepAliveAsync(context.Response, token).ConfigureAwait(false);
+                                }
+                                catch (OperationCanceledException) when (!streamToken.IsCancellationRequested)
+                                {
+                                }
+                            }
+
+                            continue;
+                        }
+
                         CancellationToken wake = streamLog.BeginWait(lastSent);
                         using (CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(streamToken, wake))
                         {
@@ -2019,7 +2056,11 @@ namespace Voltaic.Mcp
             }
             catch (McpProtocolException resolveError)
             {
-                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, resolveError, token).ConfigureAwait(false);
+                // The supported list must name only versions this server accepts (the handshake cap applies).
+                McpProtocolException reported = resolveError.Code == -32022
+                    ? McpProtocolException.UnsupportedProtocolVersion(metaProtocolVersion ?? context.Request.Headers[McpProtocol.ProtocolVersionHeader] ?? String.Empty, _Endpoint.SupportedVersions())
+                    : resolveError;
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, reported, token).ConfigureAwait(false);
                 return true;
             }
 
@@ -2187,10 +2228,21 @@ namespace Voltaic.Mcp
                 string? header = context.Request.Headers[parameter.HeaderName];
                 bool hasValue = McpHeaderParameters.TryGetValue(hasArguments ? arguments : default, parameter.Path, out JsonElement value) && hasArguments;
 
-                // A value of the wrong type cannot be mirrored; input schema validation reports it as a tool error.
-                if (hasValue && !McpHeaderParameters.HasDeclaredType(value, parameter.Type)) continue;
+                // The header must match the body whatever the value's type (a client mirrors it as its own type); an
+                // object or array cannot be mirrored at all, so the request cannot carry a matching header.
+                string matchType = parameter.Type;
+                if (hasValue && !McpHeaderParameters.HasDeclaredType(value, parameter.Type))
+                {
+                    string? actual = McpHeaderParameters.ActualType(value);
+                    if (actual == null)
+                    {
+                        return McpProtocolException.HeaderMismatch($"Argument '{path}' is an object or array, which cannot be mirrored in the {parameter.HeaderName} header.");
+                    }
 
-                if (hasValue && parameter.Type == "integer" && !McpHeaderParameters.IsSafeInteger(value))
+                    matchType = actual;
+                }
+
+                if (hasValue && matchType == "integer" && !McpHeaderParameters.IsSafeInteger(value))
                 {
                     return McpProtocolException.HeaderMismatch($"Argument '{path}' is outside the JavaScript safe integer range, so it cannot be mirrored in {parameter.HeaderName}.");
                 }
@@ -2211,7 +2263,7 @@ namespace Voltaic.Mcp
                     return McpProtocolException.HeaderMismatch($"{parameter.HeaderName} header is present but the request has no value for argument '{path}'.");
                 }
 
-                if (!McpHeaderParameters.Matches(decoded, value, parameter.Type))
+                if (!McpHeaderParameters.Matches(decoded, value, matchType))
                 {
                     return McpProtocolException.HeaderMismatch($"Header mismatch: {parameter.HeaderName} header value does not match the body value of argument '{path}'.");
                 }

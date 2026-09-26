@@ -487,8 +487,10 @@ namespace Voltaic.Core
                 CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
                 try
                 {
-                    JsonRpcResponse[] responses = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
-                    await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
+                    JsonRpcResponse?[] answered = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
+                    // Requests the server cancelled get no response; a batch with nothing left is not answered.
+                    List<JsonRpcResponse> responses = answered.Where(response => response != null).Select(response => response!).ToList();
+                    if (responses.Count > 0) await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -540,7 +542,8 @@ namespace Voltaic.Core
             CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
             try
             {
-                JsonRpcResponse response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                JsonRpcResponse? response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                if (response == null) return;
                 await SendJsonAsync(JsonSerializer.Serialize(response), token).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -592,6 +595,9 @@ namespace Voltaic.Core
                     JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString);
                     if (notification != null && notification.Id == null)
                     {
+                        // A cancellation of a request the server sent stops its handler; the notification is still raised.
+                        _RequestDispatcher.TryHandleCancellation(notification);
+
                         // Invoke each handler individually to ensure exception isolation
                         if (NotificationReceived != null)
                         {

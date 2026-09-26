@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.1.6
+Fixes the deviations a second specification review of v2.1.5 found. Verified with the MCP Inspector CLI, the official Python MCP SDK (both directions), Claude Code 2.1.281, and the official A2A Python SDK.
+
+### Transports and lifecycle
+- **WebSocket UTF-8.** `McpWebsocketsServer` and `McpWebsocketsClient` decoded each read separately, so a multi-byte character split between reads was corrupted for peers that send raw UTF-8 (such as the Python SDK). Messages are now decoded across reads.
+- **Cancellation.** A `notifications/cancelled` that arrives before its request (requests start concurrently) now suppresses it. After cancellation, and after the response, a handler's `ReportProgressAsync` and `LogAsync` send nothing, as the specification requires.
+- **Clients honor cancellation of server requests.** When a server cancels a request it sent (for example `sampling/createMessage`), the client cancels the handler's token and sends no response.
+- **Server-level progress.** `NotifyProgressAsync` on the TCP, WebSocket, and stdio servers uses the calling handler's request, and otherwise sends only when exactly one active request carries the token, since two clients may use the same one.
+- A handler that returns null answers `{}` (a result response must carry `result`). Params members of the wrong JSON type are `-32602` instead of `-32603`, and `completion/complete` with a null `ref` no longer fails internally.
+- The stream clients' `ProtocolVersion` accepts only versions `initialize` can negotiate.
+
+### Features
+- `structuredContent` that is not an object is removed for `2025-06-18` and `2025-11-25` sessions, whose schemas require an object; the text block keeps the data.
+- Resource templates: reserved (`{+var}`) and fragment values may contain commas, exploded variables (`{/var*}`) match several segments, and variable names may contain dots and percent-encoded characters, as RFC 6570 allows.
+- Input requests (2026-07-28) check nested capabilities: URL-mode elicitation needs `elicitation.url`, form mode needs `elicitation.form` when the client lists modes, and sampling with tools needs `sampling.tools`; `-32021` names the missing path. `McpToolCallContext.ClientSupports` accepts dotted paths.
+- `server/discover` without the `_meta` protocol version is `-32602`.
+
+### HTTP
+- The `-32022` supported list names only versions the server accepts (`MaximumHandshakeProtocolVersion` applies), as on the other transports.
+- `Mcp-Param-*` headers are validated whatever the argument's JSON type; objects and arrays cannot be mirrored and are rejected. `McpHttpClient` mirrors values of another type as that type.
+- Every Bearer challenge on a 401 or 403 names `resource_metadata` when `ProtectedResourceMetadata` is set, including challenges built by the `AuthenticationHandler`.
+- POST response streams on a session are resumable: events carry IDs, a priming event starts the stream from `2025-11-25`, and `GET` with `Last-Event-ID` replays the missed events and ends after the response.
+- `AdvertiseTasksExtension` documents that the application must register the `tasks/*` methods itself.
+- README "Specification conformance" explains why an error raised after a response stream has started arrives in the stream rather than as a 400 or 403.
+
+### Tests
+- New suites `McpStreams.EdgeCases` (12) and `McpHttp.EdgeCases` (4); `Mcp.HeaderParameters.WrongTypeArgumentIsToolError` mirrors the value as a conforming client must.
+
 ## v2.1.5
 Brings Voltaic to full conformance with the MUST and SHOULD requirements of the five MCP revisions, on every transport. A review against v2.1.4 found lifecycle, JSON-RPC, notification, cancellation, and HTTP requirements that were not enforced or not implemented; all are fixed here. The only remaining differences are optional features and a short list of deliberate leniencies (README "Specification conformance"). stdio, TCP, and WebSocket servers now share one message processor with per-connection session state, so every rule below applies to all of them alike.
 

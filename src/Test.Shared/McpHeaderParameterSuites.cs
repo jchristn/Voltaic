@@ -122,10 +122,10 @@ namespace Test.Shared
                         TestAssert.Equal(-32020, malformedName.Error.Get("code").Int(), "The error is HeaderMismatch.");
                     }),
 
-                    Case(suiteId, "WrongTypeArgumentIsToolError", "An annotated argument of the wrong type is reported by input validation as an isError result, not as a header mismatch", async ct =>
+                    Case(suiteId, "WrongTypeArgumentIsToolError", "An annotated argument of the wrong type, mirrored in its header as a conforming client must, is reported by input validation as an isError result", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await StartAsync(ct).ConfigureAwait(false);
-                        RpcResult wrongType = await CallAsync(fixture, new { count = "forty-two", query = "q" }, new Dictionary<string, string>(), ct).ConfigureAwait(false);
+                        RpcResult wrongType = await CallAsync(fixture, new { count = "forty-two", query = "q" }, new Dictionary<string, string> { { "Mcp-Param-Count", "forty-two" } }, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, wrongType.StatusCode, $"Body: {wrongType.Body}");
                         TestAssert.True(wrongType.Result.Get("isError").Bool(), "The schema violation is a tool execution error.");

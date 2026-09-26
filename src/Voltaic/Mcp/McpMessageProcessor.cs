@@ -177,6 +177,12 @@ namespace Voltaic.Mcp
                     return isRequest ? Respond(request, MethodNotFound(envelope, $"Method '{method}' does not exist in protocol version {statelessVersion}."), session, statelessVersion) : null;
                 }
             }
+            else if (method == "server/discover")
+            {
+                // server/discover exists only in the stateless revision, whose requests must carry the protocol version.
+                if (!isRequest) return null;
+                return Respond(request, Error(envelope, -32602, $"server/discover requires params._meta[\"{McpProtocol.MetaProtocolVersionKey}\"] naming a supported protocol version."), session, null);
+            }
             else if (session.RequireInitialize)
             {
                 if (method == "initialize" && session.IsInitialized)
@@ -212,6 +218,12 @@ namespace Voltaic.Mcp
             inFlight.Notify = notify;
             try
             {
+                if (inFlight.IsCancelled)
+                {
+                    _Log($"Request {envelope.IdKey} ({method}) was cancelled before it started; no response is sent.");
+                    return null;
+                }
+
                 JsonRpcResponse response;
                 McpRequestScope scope = new McpRequestScope(session, inFlight, statelessVersion, requestLogLevel, statelessCapabilities, notify);
                 using (McpRequestScope.Push(scope))
@@ -373,7 +385,9 @@ namespace Voltaic.Mcp
             {
                 RpcParameters? parameters = request.Params == null ? null : RpcParameters.FromObject(request.Params);
                 object result = await handler(parameters, token).ConfigureAwait(false);
-                return new JsonRpcResponse { Id = envelope.ResponseId, Result = result };
+
+                // A result response must carry a result member; a handler that returns null answers {}.
+                return new JsonRpcResponse { Id = envelope.ResponseId, Result = result ?? new McpEmptyResult() };
             }
             catch (McpInsufficientScopeException scopeError)
             {

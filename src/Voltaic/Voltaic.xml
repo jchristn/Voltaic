@@ -4161,10 +4161,16 @@
             party may send and the receiver must answer). Shared by every Voltaic client transport. Thread-safe.
             </summary>
         </member>
-        <member name="P:Voltaic.Core.ClientRequestDispatcher.AnswersPing">
+        <member name="F:Voltaic.Core.ClientRequestDispatcher._Running">
             <summary>
             Gets or sets whether <c>ping</c> is answered with an empty object (<c>{}</c>) and reserved, as the MCP
             specification requires of every party. Plain JSON-RPC clients leave it off.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.ClientRequestDispatcher.TryHandleCancellation(Voltaic.Core.JsonRpcRequest)">
+            <summary>
+            Handles a <c>notifications/cancelled</c> from the server: the matching request's handler token is cancelled
+            and no response is sent for it. Returns true when the notification was a cancellation.
             </summary>
         </member>
         <member name="M:Voltaic.Core.ClientRequestDispatcher.Register(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
@@ -5606,9 +5612,11 @@
         <member name="P:Voltaic.Mcp.McpClient.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-            the server negotiated. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace
-            restores the default.
+            the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+            client must request a version it can negotiate. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Setting null or whitespace restores the default.
             </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpClient.ClientName">
             <summary>
@@ -5691,6 +5699,17 @@
             Releases the unmanaged resources used by the <see cref="T:Voltaic.Mcp.McpClient"/> and optionally releases the managed resources.
             </summary>
             <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
+        </member>
+        <member name="T:Voltaic.Mcp.McpClientCapabilityPath">
+            <summary>
+            Checks whether a client declared a capability, including nested ones named by a dotted path such as
+            <c>elicitation.url</c> or <c>sampling.tools</c>. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClientCapabilityPath.IsDeclared(System.Nullable{System.Text.Json.JsonElement},System.String)">
+            <summary>
+            Returns true when <paramref name="path"/> names an object member present in <paramref name="capabilities"/>.
+            </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpClientHandshake">
             <summary>
@@ -6362,13 +6381,21 @@
         <member name="M:Voltaic.Mcp.McpHeaderParameters.FormatValue(System.Text.Json.JsonElement,System.String)">
             <summary>
             Returns the header text for a body value (string as-is, integer in decimal, boolean in lowercase), already
-            encoded, or null when the value is absent, null, or not of the parameter's type.
+            encoded, or null when the value cannot be mirrored (an object or array, or an integer outside the safe range).
+            A value of another JSON type than the parameter declares is mirrored as that type, since a client must send
+            the header whenever the argument has a value.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHeaderParameters.HasDeclaredType(System.Text.Json.JsonElement,System.String)">
             <summary>
             Returns true when a body value has the JSON type the parameter declares (an integral number for
             <c>integer</c>). Values of another type are left to input schema validation.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHeaderParameters.ActualType(System.Text.Json.JsonElement)">
+            <summary>
+            Returns the header parameter type that describes a body value (<c>string</c>, <c>boolean</c>, <c>integer</c>
+            for integral numbers, <c>number</c> for others), or null for objects and arrays, which cannot be mirrored.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHeaderParameters.IsSafeInteger(System.Text.Json.JsonElement)">
@@ -6780,12 +6807,18 @@
             <summary>
             Writes the response to one Streamable HTTP POST. It stays a single JSON response unless something must be sent
             before the result (a notification related to the request, or a keep-alive), in which case it becomes an SSE
-            stream (<c>text/event-stream</c>) that ends with the JSON-RPC response. Thread-safe.
+            stream (<c>text/event-stream</c>) that ends with the JSON-RPC response. On a session, the stream is resumable:
+            every event carries an ID and is logged, a priming event (an ID with empty data) comes first where the session's
+            revision asks for one, and a client that loses the connection can resume with <c>GET</c> and
+            <c>Last-Event-ID</c>; events keep being logged after the connection breaks. Thread-safe.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpResponseWriter.#ctor(System.Net.HttpListenerContext,System.Action{System.Net.HttpListenerResponse})">
+        <member name="M:Voltaic.Mcp.McpHttpResponseWriter.#ctor(System.Net.HttpListenerContext,System.Action{System.Net.HttpListenerResponse},System.Func{Voltaic.Mcp.SseStreamLog},System.Boolean,System.Int32)">
             <param name="context">The request context.</param>
             <param name="prepareHeaders">Sets CORS and session headers; called once, just before the first write.</param>
+            <param name="openLog">Opens the session stream log that makes the SSE stream resumable, or null for a stream without event IDs (stateless requests).</param>
+            <param name="prime">True to start the stream with a priming event (MCP 2025-11-25 and later).</param>
+            <param name="retryMs">The reconnection delay announced with the priming event.</param>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpResponseWriter.IsStreaming">
             <summary>
@@ -6799,19 +6832,18 @@
         </member>
         <member name="M:Voltaic.Mcp.McpHttpResponseWriter.KeepAliveAsync(System.Threading.CancellationToken)">
             <summary>
-            Writes an SSE keep-alive comment, switching to an SSE stream if needed. Returns false when the client is gone.
+            Writes an SSE comment to keep the stream open. Returns false when the client has gone away.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpResponseWriter.CompleteAsync(System.String,System.Int32,System.Threading.CancellationToken)">
             <summary>
-            Completes the response. With <paramref name="json"/> null, a stream simply ends (no response is sent, as
-            for a request the client cancelled) and a plain response gets <paramref name="statusCode"/> with no body.
+            Sends the JSON-RPC response (or nothing when <paramref name="json"/> is null) and ends the response: as the
+            final SSE event when streaming, otherwise as a JSON body with <paramref name="statusCode"/>.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpResponseWriter.EndWithoutResponseAsync(System.Threading.CancellationToken)">
             <summary>
-            Ends the response without a JSON-RPC response (for a request the client cancelled): an SSE stream that
-            closes with no events.
+            Ends the response without a JSON-RPC response (for example when the client cancelled the request).
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpHttpServer">
@@ -7004,7 +7036,9 @@
         <member name="P:Voltaic.Mcp.McpHttpServer.AdvertiseTasksExtension">
             <summary>
             Gets or sets whether the server advertises the <c>io.modelcontextprotocol/tasks</c>
-            extension in its capabilities (2026-07-28+). Default is false.
+            extension in its capabilities (2026-07-28+). Default is false. Voltaic does not implement the
+            <c>tasks/*</c> methods: set this to true only when the application registers them itself with
+            <c>RegisterMethod</c>, because a server must not advertise a capability it does not support.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.ListCacheTtlMs">
@@ -9390,9 +9424,11 @@
         <member name="P:Voltaic.Mcp.McpTcpClient.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-            the server negotiated. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace
-            restores the default.
+            the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+            client must request a version it can negotiate. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Setting null or whitespace restores the default.
             </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpTcpClient.ClientName">
             <summary>
@@ -9719,9 +9755,11 @@
         </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.NotifyProgressAsync(System.Object,System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)">
             <summary>
-            Sends <c>notifications/progress</c> to the client whose in-flight request carries
-            <paramref name="progressToken"/>; nothing is sent when no active request carries it. Tool handlers can use
-            <see cref="M:Voltaic.Mcp.McpToolCallContext.ReportProgressAsync(System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)"/> instead.
+            Sends <c>notifications/progress</c> for the in-flight request that carries <paramref name="progressToken"/>.
+            Called from a tool handler, the handler's own request is used; otherwise the notification is sent only when
+            exactly one active request on any connection carries the token (tokens are unique only per client), and
+            nothing is sent for a cancelled or finished request. Prefer <see cref="M:Voltaic.Mcp.McpToolCallContext.ReportProgressAsync(System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)"/>,
+            which is always scoped to the calling request.
             </summary>
             <param name="progressToken">Progress token from the request's <c>_meta</c>. Must not be null.</param>
             <param name="progress">Current progress value. Must increase with every notification.</param>
@@ -9904,9 +9942,10 @@
             <summary>
             Returns true when the client declared <paramref name="capability"/> (for example <c>elicitation</c>,
             <c>sampling</c>, or <c>roots</c>): in <c>initialize</c> for handshake-era sessions, or in the request's
-            <c>_meta</c> for <c>2026-07-28</c> requests. Tools must not rely on capabilities the client did not declare.
+            <c>_meta</c> for <c>2026-07-28</c> requests. A dotted path checks a nested capability, for example
+            <c>elicitation.url</c> or <c>sampling.tools</c>. Tools must not rely on capabilities the client did not declare.
             </summary>
-            <param name="capability">The capability name. Must not be null or empty.</param>
+            <param name="capability">The capability name or dotted path. Must not be null or empty.</param>
             <returns>True when declared.</returns>
             <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="capability"/> is null or empty.</exception>
         </member>
@@ -9983,7 +10022,8 @@
             values. Supports simple (<c>{var}</c>), reserved (<c>{+var}</c>), fragment (<c>{#var}</c>), label
             (<c>{.var}</c>), path-segment (<c>{/var}</c>), path-parameter (<c>{;var}</c>), and query (<c>{?a,b}</c>,
             <c>{&amp;a}</c>) expressions, with several variables per expression and the <c>:n</c> prefix and <c>*</c> explode
-            modifiers (an exploded variable receives its raw text). Values are percent-decoded. Thread-safe.
+            modifiers (an exploded variable receives its raw text, separators included). Variable names may contain dots and
+            percent-encoded characters. Values are percent-decoded. Thread-safe.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpUriTemplate.#ctor(System.String)">
@@ -10309,9 +10349,11 @@
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.ProtocolVersion">
             <summary>
             Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
-            the server negotiated. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace
-            restores the default.
+            the server negotiated. Must be a handshake-era revision (<c>2024-11-05</c> through <c>2025-11-25</c>), since a
+            client must request a version it can negotiate. Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Setting null or whitespace restores the default.
             </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.ClientName">
             <summary>
@@ -10824,9 +10866,11 @@
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.NotifyProgressAsync(System.Object,System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)">
             <summary>
-            Sends <c>notifications/progress</c> to the client whose in-flight request carries
-            <paramref name="progressToken"/>; nothing is sent when no active request carries it. Tool handlers can use
-            <see cref="M:Voltaic.Mcp.McpToolCallContext.ReportProgressAsync(System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)"/> instead.
+            Sends <c>notifications/progress</c> for the in-flight request that carries <paramref name="progressToken"/>.
+            Called from a tool handler, the handler's own request is used; otherwise the notification is sent only when
+            exactly one active request on any connection carries the token (tokens are unique only per client), and
+            nothing is sent for a cancelled or finished request. Prefer <see cref="M:Voltaic.Mcp.McpToolCallContext.ReportProgressAsync(System.Double,System.Nullable{System.Double},System.String,System.Threading.CancellationToken)"/>,
+            which is always scoped to the calling request.
             </summary>
             <param name="progressToken">Progress token from the request's <c>_meta</c>. Must not be null.</param>
             <param name="progress">Current progress value. Must increase with every notification.</param>

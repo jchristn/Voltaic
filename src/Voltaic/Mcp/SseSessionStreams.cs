@@ -37,17 +37,34 @@ namespace Voltaic.Mcp
                     return existing;
                 }
 
-                SseStreamLog created = new SseStreamLog(Guid.NewGuid().ToString("N"), capacity);
-                _Streams[created.StreamId] = created;
-                _Order.Enqueue(created.StreamId);
-                while (_Order.Count > _MaxStreams)
-                {
-                    _Streams.Remove(_Order.Dequeue());
-                }
-
+                SseStreamLog created = Create(capacity);
                 resumeAfter = -1;
                 return created;
             }
+        }
+
+        // Opens the resumable SSE stream of one POST response.
+        internal SseStreamLog OpenRequestStream(int capacity)
+        {
+            lock (_Lock)
+            {
+                SseStreamLog created = Create(capacity);
+                created.IsRequestStream = true;
+                return created;
+            }
+        }
+
+        private SseStreamLog Create(int capacity)
+        {
+            SseStreamLog created = new SseStreamLog(Guid.NewGuid().ToString("N"), capacity);
+            _Streams[created.StreamId] = created;
+            _Order.Enqueue(created.StreamId);
+            while (_Order.Count > _MaxStreams)
+            {
+                _Streams.Remove(_Order.Dequeue());
+            }
+
+            return created;
         }
     }
 }

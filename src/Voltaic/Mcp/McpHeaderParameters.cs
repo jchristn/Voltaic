@@ -113,10 +113,20 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Returns the header text for a body value (string as-is, integer in decimal, boolean in lowercase), already
-        /// encoded, or null when the value is absent, null, or not of the parameter's type.
+        /// encoded, or null when the value cannot be mirrored (an object or array, or an integer outside the safe range).
+        /// A value of another JSON type than the parameter declares is mirrored as that type, since a client must send
+        /// the header whenever the argument has a value.
         /// </summary>
         internal static string? FormatValue(JsonElement value, string type)
         {
+            if (!HasDeclaredType(value, type))
+            {
+                string? actual = ActualType(value);
+                if (actual == null) return null;
+                if (actual == "number") return value.GetRawText();
+                if (actual != type) return FormatValue(value, actual);
+            }
+
             switch (value.ValueKind)
             {
                 case JsonValueKind.String when type == "string":
@@ -151,6 +161,26 @@ namespace Voltaic.Mcp
                     return value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out decimal number) && number == Math.Truncate(number);
                 default:
                     return false;
+            }
+        }
+
+        /// <summary>
+        /// Returns the header parameter type that describes a body value (<c>string</c>, <c>boolean</c>, <c>integer</c>
+        /// for integral numbers, <c>number</c> for others), or null for objects and arrays, which cannot be mirrored.
+        /// </summary>
+        internal static string? ActualType(JsonElement value)
+        {
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    return "string";
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    return "boolean";
+                case JsonValueKind.Number:
+                    return value.TryGetDecimal(out decimal number) && number == Math.Truncate(number) ? "integer" : "number";
+                default:
+                    return null;
             }
         }
 
@@ -199,6 +229,7 @@ namespace Voltaic.Mcp
                     return (bodyValue.ValueKind == JsonValueKind.True && decodedHeader == "true")
                         || (bodyValue.ValueKind == JsonValueKind.False && decodedHeader == "false");
                 case "integer":
+                case "number":
                     return bodyValue.ValueKind == JsonValueKind.Number
                         && Decimal.TryParse(decodedHeader, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal header)
                         && bodyValue.TryGetDecimal(out decimal body)

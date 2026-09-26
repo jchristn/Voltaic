@@ -61,26 +61,37 @@ namespace Voltaic.Mcp
             if (progressToken == null) throw new ArgumentNullException(nameof(progressToken));
             string tokenJson = progressToken is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(progressToken);
 
-            foreach (McpSessionState session in sessions)
+            // Progress tokens are unique only per client, so two clients may use the same one. Prefer the request this
+            // code runs for; otherwise send only when exactly one active request carries the token.
+            List<McpSessionState> candidates = sessions.ToList();
+            McpInFlightRequest? request = null;
+            McpRequestScope? scope = McpRequestScope.Current;
+            McpInFlightRequest? current = scope?.Request;
+            if (current != null && current.IsActive && candidates.Contains(scope!.Session)
+                && current.ProgressToken.HasValue && StringComparer.Ordinal.Equals(current.ProgressToken.Value.GetRawText(), tokenJson))
             {
-                McpInFlightRequest? request = session.FindByProgressToken(tokenJson);
-                if (request == null || request.Notify == null) continue;
-                if (!request.TryRecordProgress(progress))
-                {
-                    throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
-                }
-
-                JsonRpcRequest notification = new JsonRpcRequest
-                {
-                    Method = "notifications/progress",
-                    Params = new McpProgressNotification { ProgressToken = request.ProgressToken!.Value, Progress = progress, Total = total, Message = message }
-                };
-
-                await request.Notify(notification, token).ConfigureAwait(false);
-                return true;
+                request = current;
+            }
+            else
+            {
+                List<McpInFlightRequest> matches = candidates.Select(session => session.FindByProgressToken(tokenJson)).Where(match => match != null).Select(match => match!).ToList();
+                if (matches.Count == 1) request = matches[0];
             }
 
-            return false;
+            if (request == null || request.Notify == null) return false;
+            if (!request.TryRecordProgress(progress))
+            {
+                throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
+            }
+
+            JsonRpcRequest notification = new JsonRpcRequest
+            {
+                Method = "notifications/progress",
+                Params = new McpProgressNotification { ProgressToken = request.ProgressToken!.Value, Progress = progress, Total = total, Message = message }
+            };
+
+            await request.Notify(notification, token).ConfigureAwait(false);
+            return true;
         }
 
         private static async Task SendAsync(IEnumerable<McpSessionState> sessions, JsonRpcRequest notification, CancellationToken token)
