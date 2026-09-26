@@ -44,6 +44,7 @@ namespace Test.Shared
                 HttpAccessSecuritySuites.HttpServers(),
                 McpWebsocketsSecuritySuites.WebSocketSecurity(),
                 MessageFramingStrictSuites.StrictFraming(),
+                McpSpecConformanceSuites.Conformance(),
                 MessageFramingSuites.Framing(),
                 MessageFramingAdvancedSuites.EdgeCases(),
                 ClientConnectionSuites.QueueAndLifecycle(),

@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.1.1
+A specification-conformance patch, found by reviewing Voltaic against the published MCP `2025-11-25` and `2026-07-28` specifications.
+
+### Fixed
+- **Client-sent JSON-RPC responses get `202 Accepted`.** A JSON-RPC response or error POSTed to `/mcp` or `/rpc` was treated as a request and answered with `200` and a `-32601` error; the Streamable HTTP specification requires `202` with no body (or an HTTP error status). Such messages are now accepted and dropped, since Voltaic sends no requests to clients. On `/mcp` without a session they still get 400. In a batch, response entries are skipped, and a batch of only responses and notifications gets `202`. A malformed batch now gets a single parse error instead of an empty array.
+- **Header-less requests assume `2025-03-26`.** When a handshake-era request has no `MCP-Protocol-Version` header and no negotiated session version, the server now assumes `2025-03-26`, as the specification requires, instead of `2025-11-25`. This affects the batching rule for such requests and the no-signal result of `McpVersionResolver.Resolve`. A session's negotiated version still takes precedence.
+- **Stateless requests must carry the `_meta` protocol version.** A `2026-07-28` request whose body has no `params._meta["io.modelcontextprotocol/protocolVersion"]` is now rejected with `400` and `-32020` (HeaderMismatch), because the specification requires the `MCP-Protocol-Version` header to match it. Notifications are exempt. `McpHttpClient` and Claude Code already send it.
+
+### Added
+- `McpHttpServer.ProtectedResourceMetadata` and `McpProtectedResourceMetadata`: OAuth 2.0 Protected Resource Metadata (RFC 9728), served without authentication at `/.well-known/oauth-protected-resource` and at that path followed by the MCP endpoint path. The MCP authorization specification requires OAuth-protected servers to publish it. The setter rejects metadata without a resource or an authorization server.
+- `McpProtocol.HeaderlessProtocolVersion` (`2025-03-26`) and `McpProtocol.ProtectedResourceMetadataPath`.
+- The `Mcp.SpecConformance` Touchstone suite (10 cases; 503 in total).
+
+### Documentation
+- The README has a new "Specification conformance" section listing deliberate differences and unimplemented optional features, and a new "OAuth and protected resource metadata" section.
+- Corrected the `AuthenticationHandler` documentation (README and XML): the handler runs for `ping`, and requests without a handler are still subject to the origin and loopback checks.
+- The README now states that `/rpc` and `/events` are Voltaic-specific endpoints, not the deprecated 2024-11-05 HTTP+SSE transport.
+
 ## v2.1.0
 A security release (reports: `archive/BUG_TO_FIX.md`, `archive/AUTH_BUGS.md`). It fixes handshake sessions being created for requests that never initialized, and closes the ways a web page in the user's browser, or another host on the network, could reach a Voltaic server the developer believed was local-only. Defaults change as a result; see "Upgrading to v2.1.0" in the README for the one-line fixes.
 

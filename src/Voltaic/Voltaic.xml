@@ -3260,6 +3260,19 @@
             Setting null restores the default policy.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ProtectedResourceMetadata">
+            <summary>
+            Gets or sets the OAuth 2.0 Protected Resource Metadata (RFC 9728) document the server publishes.
+            The MCP authorization specification requires servers that use OAuth to publish it so clients can find
+            the authorization server. When set, a GET to <see cref="F:Voltaic.Mcp.McpProtocol.ProtectedResourceMetadataPath"/>
+            (<c>/.well-known/oauth-protected-resource</c>) or to that path followed by the MCP endpoint path (for
+            example <c>/.well-known/oauth-protected-resource/mcp</c>) returns the document as JSON, without calling
+            <see cref="P:Voltaic.Mcp.McpHttpServer.AuthenticationHandler"/>; the loopback and origin checks still apply. Point clients at it
+            from a 401 with <see cref="M:Voltaic.Core.AuthenticationResult.BearerChallenge(System.String,System.String,System.String,System.String)"/>. Default is null, which serves
+            nothing at those paths (HTTP 404).
+            </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the value has an empty <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.Resource"/> or no <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.RestrictToLoopbackClients">
             <summary>
             Gets or sets whether only loopback clients are served. When true, a request whose remote address is
@@ -3338,20 +3351,25 @@
         <member name="P:Voltaic.Mcp.McpHttpServer.AuthenticationHandler">
             <summary>
             Gets or sets an optional asynchronous authentication handler.
-            When set, incoming HTTP requests are passed through this handler before processing.
+            When set, incoming HTTP requests that pass the loopback check (<see cref="P:Voltaic.Mcp.McpHttpServer.RestrictToLoopbackClients"/>)
+            and origin check (<see cref="P:Voltaic.Mcp.McpHttpServer.OriginPolicy"/>) are passed through this handler before processing.
             If the handler returns an <see cref="T:Voltaic.Core.AuthenticationResult"/> with <see cref="P:Voltaic.Core.AuthenticationResult.IsAuthenticated"/> set to false,
-            the server immediately returns the specified status code and error message without processing the request.
-            When null (the default), no authentication is performed and all requests are accepted — preserving
-            backward compatibility with existing deployments.
+            the server immediately returns the result's status code, <see cref="P:Voltaic.Core.AuthenticationResult.Headers"/>
+            (for example <c>WWW-Authenticate</c>), and error message without processing the request.
+            When null (the default), no authentication is performed; requests are still subject to the loopback
+            and origin checks.
             The handler receives the full <see cref="T:System.Net.HttpListenerRequest"/> so it can inspect headers, query strings,
             client certificates, or any other request property needed for authentication.
-            The following endpoints always bypass authentication to allow connectivity validation:
-            the health check endpoint (<c>/</c>) and the MCP protocol <c>ping</c> request, which returns an
-            empty result and reaches no application code. Tools are never reachable through this bypass,
-            including a tool named <c>ping</c>, because tools are invoked only through <c>tools/call</c>.
-            An application that replaces the <c>ping</c> method with <c>RegisterMethod</c> is responsible
-            for what that method exposes.
-            CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
+            The following requests are served even when authentication fails, to allow connectivity validation
+            and authorization discovery: the health check endpoint (<c>/</c>, the handler is not called), CORS
+            preflight (<c>OPTIONS</c>, not called), <see cref="P:Voltaic.Mcp.McpHttpServer.ProtectedResourceMetadata"/> at
+            <see cref="F:Voltaic.Mcp.McpProtocol.ProtectedResourceMetadataPath"/> (not called), and the MCP protocol <c>ping</c>
+            request. For <c>ping</c> the handler is called: an authenticated ping carries its caller in
+            <see cref="P:Voltaic.Core.RpcCallContext.Current"/> and may use that caller's session, and a ping that fails
+            authentication is still answered, without a caller. The built-in <c>ping</c> returns an empty result
+            and runs no application code. Tools are never reachable through this exception, including a tool named
+            <c>ping</c>, because tools are invoked only through <c>tools/call</c>. An application that replaces the
+            <c>ping</c> method with <c>RegisterMethod</c> is responsible for what that method exposes.
             Authenticated requests run through exactly the same MCP protocol pipeline as unauthenticated
             ones (version resolution, stateless 2026-07-28 routing, batching rules, and session tracking),
             so setting a handler never changes protocol behavior.
@@ -3859,19 +3877,25 @@
         <member name="M:Voltaic.Mcp.McpHttpServer.TryHandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.Threading.CancellationToken)">
             <summary>
             Resolves the protocol version of a POST and, when it resolves to the stateless (2026-07-28) era,
-            serves it through <see cref="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.String,System.Threading.CancellationToken)"/>. Both the MCP endpoint and the JSON-RPC
+            serves it through <see cref="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.String,System.String,System.Threading.CancellationToken)"/>. Both the MCP endpoint and the JSON-RPC
             endpoint call this, because <c>server/discover</c> advertises the stateless revision on both, so a
             client that chose it must get stateless results wherever it sends requests. Returns true when a
             response was written, including a version-resolution error; false when the request belongs to
             the handshake era and the caller should continue.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.String,System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Mcp.McpHttpServer.HandleStatelessPostAsync(System.Net.HttpListenerContext,Voltaic.Core.JsonRpcRequest,System.String,System.String,System.String,System.String,System.Threading.CancellationToken)">
             <summary>
             Handles a POST to the MCP endpoint that resolved to the stateless (2026-07-28) era.
             Validates the required routing headers, dispatches through the shared registry without
             creating or echoing a session, and returns a single JSON response (or 202 for a
             notification). An unknown method returns HTTP 404 with a JSON-RPC method-not-found error.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.IsJsonRpcResponseMessage(System.String)">
+            <summary>
+            Returns true when the body is a single JSON-RPC response or error object (it has an id and a
+            result or error, and no method).
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpInCoreTask">
@@ -4147,6 +4171,56 @@
             Gets or sets prompt messages.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpProtectedResourceMetadata">
+            <summary>
+            OAuth 2.0 Protected Resource Metadata (RFC 9728) for an MCP server. The MCP authorization
+            specification requires servers that use OAuth to publish this document so clients can discover the
+            authorization server. Assign an instance to <see cref="P:Voltaic.Mcp.McpHttpServer.ProtectedResourceMetadata"/> and the
+            server serves it, without authentication, at <see cref="F:Voltaic.Mcp.McpProtocol.ProtectedResourceMetadataPath"/>
+            and at that path followed by the MCP endpoint path (for example
+            <c>/.well-known/oauth-protected-resource/mcp</c>). Null properties are omitted from the JSON.
+            Instances are not thread-safe; configure them before the server starts.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtectedResourceMetadata.Resource">
+            <summary>
+            Gets or sets the protected resource identifier (<c>resource</c>): the canonical URI of the MCP server,
+            for example <c>https://mcp.example.com/mcp</c>. Required by RFC 9728; the server rejects metadata
+            without it. Default is an empty string.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtectedResourceMetadata.AuthorizationServers">
+            <summary>
+            Gets or sets the issuer URLs of the authorization servers that issue tokens for this resource
+            (<c>authorization_servers</c>). The MCP authorization specification requires at least one; the server
+            rejects metadata without one. Never null; setting null stores an empty list.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtectedResourceMetadata.ScopesSupported">
+            <summary>
+            Gets or sets the scopes clients may request for this resource (<c>scopes_supported</c>).
+            Null (the default) omits the field.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtectedResourceMetadata.BearerMethodsSupported">
+            <summary>
+            Gets or sets how bearer tokens may be presented (<c>bearer_methods_supported</c>), for example
+            <c>header</c>. MCP clients send tokens only in the <c>Authorization</c> header. Null (the default) omits
+            the field.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtectedResourceMetadata.ResourceName">
+            <summary>
+            Gets or sets a human-readable name for the resource (<c>resource_name</c>). Null (the default) omits
+            the field.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpProtectedResourceMetadata.ResourceDocumentation">
+            <summary>
+            Gets or sets a URL of human-readable documentation for the resource (<c>resource_documentation</c>).
+            Null (the default) omits the field.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpProtocol">
             <summary>
             MCP protocol constants and the version registry used by Voltaic.
@@ -4208,6 +4282,20 @@
         <member name="F:Voltaic.Mcp.McpProtocol.ProtocolVersionHeader">
             <summary>
             Streamable HTTP protocol version header.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.HeaderlessProtocolVersion">
+            <summary>
+            The protocol version a server assumes for a handshake-era HTTP request that carries no
+            <c>MCP-Protocol-Version</c> header and has no other way to identify its version (such as a session's
+            negotiated version): <c>2025-03-26</c>, as the Streamable HTTP specification requires for backward
+            compatibility with clients that predate the header.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.ProtectedResourceMetadataPath">
+            <summary>
+            The well-known path (RFC 9728) at which <see cref="T:Voltaic.Mcp.McpHttpServer"/> serves
+            <see cref="P:Voltaic.Mcp.McpHttpServer.ProtectedResourceMetadata"/>: <c>/.well-known/oauth-protected-resource</c>.
             </summary>
         </member>
         <member name="F:Voltaic.Mcp.McpProtocol.MethodHeader">
@@ -5633,7 +5721,9 @@
             <item><description>The <c>_meta</c> protocol-version value carried in the request body.</description></item>
             <item><description>Structural cues: an <c>initialize</c> method or a session header implies the
             handshake era; stateless routing headers imply the newest stateless revision.</description></item>
-            <item><description>The default handshake version (<see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>).</description></item>
+            <item><description>With no signal at all, <see cref="F:Voltaic.Mcp.McpProtocol.HeaderlessProtocolVersion"/> (<c>2025-03-26</c>),
+            which the Streamable HTTP specification says a server assumes when a request carries no
+            <c>MCP-Protocol-Version</c> header and nothing else identifies its version.</description></item>
             </list>
             When both a header and a body <c>_meta</c> version are present and disagree, a
             <see cref="T:Voltaic.Mcp.McpProtocolException"/> with code <c>-32020</c> (header mismatch) is thrown.

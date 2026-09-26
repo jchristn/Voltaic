@@ -143,6 +143,7 @@ namespace Test.Shared
                             "Voltaic.Mcp.McpPrompt",
                             "Voltaic.Mcp.McpPromptArgument",
                             "Voltaic.Mcp.McpPromptMessage",
+                            "Voltaic.Mcp.McpProtectedResourceMetadata",
                             "Voltaic.Mcp.McpProtocol",
                             "Voltaic.Mcp.McpProtocolException",
                             "Voltaic.Mcp.McpReadResourceResult",

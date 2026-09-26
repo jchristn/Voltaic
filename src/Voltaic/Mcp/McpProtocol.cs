@@ -69,6 +69,20 @@ namespace Voltaic.Mcp
         public const string ProtocolVersionHeader = "MCP-Protocol-Version";
 
         /// <summary>
+        /// The protocol version a server assumes for a handshake-era HTTP request that carries no
+        /// <c>MCP-Protocol-Version</c> header and has no other way to identify its version (such as a session's
+        /// negotiated version): <c>2025-03-26</c>, as the Streamable HTTP specification requires for backward
+        /// compatibility with clients that predate the header.
+        /// </summary>
+        public const string HeaderlessProtocolVersion = "2025-03-26";
+
+        /// <summary>
+        /// The well-known path (RFC 9728) at which <see cref="McpHttpServer"/> serves
+        /// <see cref="McpHttpServer.ProtectedResourceMetadata"/>: <c>/.well-known/oauth-protected-resource</c>.
+        /// </summary>
+        public const string ProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource";
+
+        /// <summary>
         /// Stateless header carrying the JSON-RPC <c>method</c> value (2026-07-28+).
         /// </summary>
         public const string MethodHeader = "Mcp-Method";

@@ -99,10 +99,12 @@ namespace Test.Shared
                         return Task.CompletedTask;
                     }),
 
-                    Case(suiteId, "ResolveDefaultFallback", "No cues fall back to the handshake default", ct =>
+                    Case(suiteId, "ResolveDefaultFallback", "No cues fall back to 2025-03-26, as the Streamable HTTP spec requires for header-less requests", ct =>
                     {
                         McpResolvedVersion resolved = McpVersionResolver.Resolve(null, null, null, false, false);
-                        TestAssert.Equal("2025-11-25", resolved.Version, "Default fallback is the handshake version.");
+                        TestAssert.Equal("2025-03-26", resolved.Version, "Default fallback is the header-less version 2025-03-26.");
+                        TestAssert.Equal(McpProtocol.HeaderlessProtocolVersion, resolved.Version, "The fallback is McpProtocol.HeaderlessProtocolVersion.");
+                        TestAssert.Equal(McpProtocolEra.Handshake, resolved.Era, "The fallback is handshake-era.");
                         return Task.CompletedTask;
                     }),
 

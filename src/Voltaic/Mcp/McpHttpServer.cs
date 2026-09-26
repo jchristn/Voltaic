@@ -117,6 +117,34 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets the OAuth 2.0 Protected Resource Metadata (RFC 9728) document the server publishes.
+        /// The MCP authorization specification requires servers that use OAuth to publish it so clients can find
+        /// the authorization server. When set, a GET to <see cref="McpProtocol.ProtectedResourceMetadataPath"/>
+        /// (<c>/.well-known/oauth-protected-resource</c>) or to that path followed by the MCP endpoint path (for
+        /// example <c>/.well-known/oauth-protected-resource/mcp</c>) returns the document as JSON, without calling
+        /// <see cref="AuthenticationHandler"/>; the loopback and origin checks still apply. Point clients at it
+        /// from a 401 with <see cref="AuthenticationResult.BearerChallenge"/>. Default is null, which serves
+        /// nothing at those paths (HTTP 404).
+        /// </summary>
+        /// <exception cref="ArgumentException">Thrown when the value has an empty <see cref="McpProtectedResourceMetadata.Resource"/> or no <see cref="McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
+        public McpProtectedResourceMetadata? ProtectedResourceMetadata
+        {
+            get => _ProtectedResourceMetadata;
+            set
+            {
+                if (value != null)
+                {
+                    if (String.IsNullOrWhiteSpace(value.Resource))
+                        throw new ArgumentException("Protected resource metadata requires a resource identifier.", nameof(value));
+                    if (value.AuthorizationServers.Count == 0 || value.AuthorizationServers.Any(String.IsNullOrWhiteSpace))
+                        throw new ArgumentException("Protected resource metadata requires at least one authorization server, and entries must not be empty.", nameof(value));
+                }
+
+                _ProtectedResourceMetadata = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets whether only loopback clients are served. When true, a request whose remote address is
         /// not loopback (<c>127.0.0.0/8</c>, <c>::1</c>, or an IPv4-mapped loopback address) receives HTTP 403.
         /// Default is true when the server is constructed with a loopback host name (<c>localhost</c>,
@@ -243,20 +271,25 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Gets or sets an optional asynchronous authentication handler.
-        /// When set, incoming HTTP requests are passed through this handler before processing.
+        /// When set, incoming HTTP requests that pass the loopback check (<see cref="RestrictToLoopbackClients"/>)
+        /// and origin check (<see cref="OriginPolicy"/>) are passed through this handler before processing.
         /// If the handler returns an <see cref="AuthenticationResult"/> with <see cref="AuthenticationResult.IsAuthenticated"/> set to false,
-        /// the server immediately returns the specified status code and error message without processing the request.
-        /// When null (the default), no authentication is performed and all requests are accepted — preserving
-        /// backward compatibility with existing deployments.
+        /// the server immediately returns the result's status code, <see cref="AuthenticationResult.Headers"/>
+        /// (for example <c>WWW-Authenticate</c>), and error message without processing the request.
+        /// When null (the default), no authentication is performed; requests are still subject to the loopback
+        /// and origin checks.
         /// The handler receives the full <see cref="HttpListenerRequest"/> so it can inspect headers, query strings,
         /// client certificates, or any other request property needed for authentication.
-        /// The following endpoints always bypass authentication to allow connectivity validation:
-        /// the health check endpoint (<c>/</c>) and the MCP protocol <c>ping</c> request, which returns an
-        /// empty result and reaches no application code. Tools are never reachable through this bypass,
-        /// including a tool named <c>ping</c>, because tools are invoked only through <c>tools/call</c>.
-        /// An application that replaces the <c>ping</c> method with <c>RegisterMethod</c> is responsible
-        /// for what that method exposes.
-        /// CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
+        /// The following requests are served even when authentication fails, to allow connectivity validation
+        /// and authorization discovery: the health check endpoint (<c>/</c>, the handler is not called), CORS
+        /// preflight (<c>OPTIONS</c>, not called), <see cref="ProtectedResourceMetadata"/> at
+        /// <see cref="McpProtocol.ProtectedResourceMetadataPath"/> (not called), and the MCP protocol <c>ping</c>
+        /// request. For <c>ping</c> the handler is called: an authenticated ping carries its caller in
+        /// <see cref="RpcCallContext.Current"/> and may use that caller's session, and a ping that fails
+        /// authentication is still answered, without a caller. The built-in <c>ping</c> returns an empty result
+        /// and runs no application code. Tools are never reachable through this exception, including a tool named
+        /// <c>ping</c>, because tools are invoked only through <c>tools/call</c>. An application that replaces the
+        /// <c>ping</c> method with <c>RegisterMethod</c> is responsible for what that method exposes.
         /// Authenticated requests run through exactly the same MCP protocol pipeline as unauthenticated
         /// ones (version resolution, stateless 2026-07-28 routing, batching rules, and session tracking),
         /// so setting a handler never changes protocol behavior.
@@ -318,6 +351,7 @@ namespace Voltaic.Mcp
         };
         private OriginPolicy _OriginPolicy = new OriginPolicy();
         private bool _RestrictToLoopbackClients;
+        private McpProtectedResourceMetadata? _ProtectedResourceMetadata;
         private Func<HttpListenerRequest, Task<AuthenticationResult>>? _AuthenticationHandler;
         private volatile bool _IsStopping = false;
         private bool _IsDisposed = false;
@@ -1218,6 +1252,13 @@ namespace Voltaic.Mcp
                     return;
                 }
 
+                // Protected resource metadata (RFC 9728) must be readable without a token.
+                if (IsProtectedResourceMetadataPath(path))
+                {
+                    await HandleProtectedResourceMetadataAsync(context, token).ConfigureAwait(false);
+                    return;
+                }
+
                 // The request body, when it had to be read before routing (to inspect the method for the
                 // ping bypass). Null means the handler below reads the body itself. Both cases run the same
                 // routing and protocol pipeline, so authentication never changes protocol behavior.
@@ -1541,11 +1582,29 @@ namespace Voltaic.Mcp
                     HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
 
                     if (hasSession) SetSessionIdHeaders(context.Response, sessionId);
+
+                    // A batch of only notifications and responses has nothing to answer: 202 with no body.
+                    if (batchResponses.Count == 0)
+                    {
+                        context.Response.StatusCode = 202;
+                        context.Response.Close();
+                        return;
+                    }
+
                     context.Response.ContentType = "application/json";
                     byte[] batchBuffer = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(batchResponses));
                     context.Response.ContentLength64 = batchBuffer.Length;
                     await context.Response.OutputStream.WriteAsync(batchBuffer, 0, batchBuffer.Length, token).ConfigureAwait(false);
                     context.Response.Close();
+                    return;
+                }
+
+                // A JSON-RPC response or error sent by the client is accepted with 202 and no body, as the
+                // Streamable HTTP specification requires. Voltaic never sends requests to clients, so there is
+                // nothing to correlate it with; it is logged and dropped.
+                if (IsJsonRpcResponseMessage(requestBody))
+                {
+                    AcceptClientResponse(context, connection, isProvisional, hasSession);
                     return;
                 }
 
@@ -1757,7 +1816,7 @@ namespace Voltaic.Mcp
 
             if (resolved.Era == McpProtocolEra.Stateless && !isHandshakeRequest)
             {
-                await HandleStatelessPostAsync(context, incomingRequest, requestBody, bodyName, resolved.Version, token).ConfigureAwait(false);
+                await HandleStatelessPostAsync(context, incomingRequest, requestBody, bodyName, metaProtocolVersion, resolved.Version, token).ConfigureAwait(false);
                 return true;
             }
 
@@ -1775,6 +1834,7 @@ namespace Voltaic.Mcp
             JsonRpcRequest? incomingRequest,
             string requestBody,
             string? bodyName,
+            string? metaProtocolVersion,
             string protocolVersion,
             CancellationToken token)
         {
@@ -1785,6 +1845,15 @@ namespace Voltaic.Mcp
             {
                 await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id,
                     McpProtocolException.HeaderMismatch($"Missing required {McpProtocol.ProtocolVersionHeader} header."), token).ConfigureAwait(false);
+                return;
+            }
+
+            // The header MUST match the protocol version in the request body's _meta, so a request that omits it
+            // cannot be validated. Notifications are exempt: this revision defines no header rules for them.
+            if (incomingRequest != null && incomingRequest.Id != null && String.IsNullOrWhiteSpace(metaProtocolVersion))
+            {
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest.Id,
+                    McpProtocolException.HeaderMismatch($"Header mismatch: the request body has no params._meta[\"{McpProtocol.MetaProtocolVersionKey}\"] value to match the {McpProtocol.ProtocolVersionHeader} header."), token).ConfigureAwait(false);
                 return;
             }
 
@@ -1969,6 +2038,46 @@ namespace Voltaic.Mcp
             context.Response.Close();
         }
 
+        private void AcceptClientResponse(HttpListenerContext context, ClientConnection connection, bool isProvisional, bool hasSession)
+        {
+            if (isProvisional) connection.Dispose();
+
+            HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
+            if (hasSession) SetSessionIdHeaders(context.Response, connection.SessionId);
+            context.Response.StatusCode = 202;
+            context.Response.Close();
+            LogMessage($"Accepted a JSON-RPC response from the client{(hasSession ? " on session " + connection.SessionId : "")}; no server request was pending");
+        }
+
+        /// <summary>
+        /// Returns true when the body is a single JSON-RPC response or error object (it has an id and a
+        /// result or error, and no method).
+        /// </summary>
+        private static bool IsJsonRpcResponseMessage(string body)
+        {
+            if (String.IsNullOrWhiteSpace(body)) return false;
+
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(body))
+                {
+                    return IsJsonRpcResponseElement(document.RootElement);
+                }
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        private static bool IsJsonRpcResponseElement(JsonElement element)
+        {
+            return element.ValueKind == JsonValueKind.Object
+                && !element.TryGetProperty("method", out JsonElement _)
+                && element.TryGetProperty("id", out JsonElement _)
+                && (element.TryGetProperty("result", out JsonElement _) || element.TryGetProperty("error", out JsonElement _));
+        }
+
         private static bool IsBatchBody(string body)
         {
             if (String.IsNullOrEmpty(body))
@@ -2002,31 +2111,40 @@ namespace Voltaic.Mcp
                 return header!;
             }
 
-            return McpProtocol.LatestProtocolVersion;
+            // No negotiated version and no header: the Streamable HTTP specification says to assume 2025-03-26.
+            return McpProtocol.HeaderlessProtocolVersion;
         }
 
         private async Task<List<JsonRpcResponse>> ProcessBatchAsync(ClientConnection connection, string body, CancellationToken token)
         {
-            List<JsonRpcRequest>? requests = null;
+            List<string> elements = new List<string>();
+            List<bool> expectsResponse = new List<bool>();
             try
             {
-                requests = JsonSerializer.Deserialize<List<JsonRpcRequest>>(body);
+                using (JsonDocument document = JsonDocument.Parse(body))
+                {
+                    foreach (JsonElement element in document.RootElement.EnumerateArray())
+                    {
+                        // JSON-RPC responses sent by the client in a batch are accepted and dropped.
+                        if (IsJsonRpcResponseElement(element)) continue;
+
+                        elements.Add(element.GetRawText());
+                        expectsResponse.Add(element.ValueKind != JsonValueKind.Object || element.TryGetProperty("id", out JsonElement _));
+                    }
+                }
             }
             catch (JsonException)
             {
+                return new List<JsonRpcResponse> { new JsonRpcResponse { Error = JsonRpcError.ParseError(), Id = null } };
             }
 
             List<JsonRpcResponse> responses = new List<JsonRpcResponse>();
-            if (requests != null)
+            for (int index = 0; index < elements.Count; index++)
             {
-                foreach (JsonRpcRequest request in requests)
+                JsonRpcResponse batchResponse = await ProcessRpcRequestAsync(connection, elements[index], token).ConfigureAwait(false);
+                if (expectsResponse[index])
                 {
-                    string requestJson = JsonSerializer.Serialize(request);
-                    JsonRpcResponse batchResponse = await ProcessRpcRequestAsync(connection, requestJson, token).ConfigureAwait(false);
-                    if (request.Id != null)
-                    {
-                        responses.Add(batchResponse);
-                    }
+                    responses.Add(batchResponse);
                 }
             }
 
@@ -2089,6 +2207,41 @@ namespace Voltaic.Mcp
             byte[] errorBytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = errorBytes.Length;
             await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+        }
+
+        private bool IsProtectedResourceMetadataPath(string path)
+        {
+            string trimmed = path.Length > 1 ? path.TrimEnd('/') : path;
+            if (StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath)) return true;
+
+            string mcpPath = _McpPath.TrimEnd('/');
+            return !String.IsNullOrEmpty(mcpPath)
+                && StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + mcpPath);
+        }
+
+        private async Task HandleProtectedResourceMetadataAsync(HttpListenerContext context, CancellationToken token)
+        {
+            McpProtectedResourceMetadata? metadata = _ProtectedResourceMetadata;
+            if (metadata == null)
+            {
+                await SendTextResponseAsync(context, 404, "Not found", token).ConfigureAwait(false);
+                return;
+            }
+
+            if (context.Request.HttpMethod != "GET")
+            {
+                context.Response.AddHeader("Allow", "GET, OPTIONS");
+                await SendTextResponseAsync(context, 405, "Method not allowed", token).ConfigureAwait(false);
+                return;
+            }
+
+            HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            byte[] buffer = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(metadata));
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
             context.Response.Close();
         }
 
@@ -2173,6 +2326,12 @@ namespace Voltaic.Mcp
             LogMessage(isProvisional
                 ? $"RPC request without a session: {requestBody}"
                 : $"RPC request from session {sessionId}: {requestBody}");
+
+            if (IsJsonRpcResponseMessage(requestBody))
+            {
+                AcceptClientResponse(context, connection, isProvisional, hasSession);
+                return;
+            }
 
             // Process JSON-RPC request
             JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);

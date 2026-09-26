@@ -18,7 +18,9 @@ namespace Voltaic.Mcp
         /// <item><description>The <c>_meta</c> protocol-version value carried in the request body.</description></item>
         /// <item><description>Structural cues: an <c>initialize</c> method or a session header implies the
         /// handshake era; stateless routing headers imply the newest stateless revision.</description></item>
-        /// <item><description>The default handshake version (<see cref="McpProtocol.LatestProtocolVersion"/>).</description></item>
+        /// <item><description>With no signal at all, <see cref="McpProtocol.HeaderlessProtocolVersion"/> (<c>2025-03-26</c>),
+        /// which the Streamable HTTP specification says a server assumes when a request carries no
+        /// <c>MCP-Protocol-Version</c> header and nothing else identifies its version.</description></item>
         /// </list>
         /// When both a header and a body <c>_meta</c> version are present and disagree, a
         /// <see cref="McpProtocolException"/> with code <c>-32020</c> (header mismatch) is thrown.
@@ -71,7 +73,7 @@ namespace Voltaic.Mcp
                 return ForVersion(McpProtocol.NewestProtocolVersion);
             }
 
-            return ForVersion(McpProtocol.LatestProtocolVersion);
+            return ForVersion(McpProtocol.HeaderlessProtocolVersion);
         }
 
         /// <summary>
