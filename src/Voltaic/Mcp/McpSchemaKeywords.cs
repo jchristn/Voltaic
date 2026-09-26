@@ -121,7 +121,8 @@ namespace Voltaic.Mcp
                 if (reference.ValueKind != JsonValueKind.String) return $"{location}/$ref must be a string.";
                 foreach (JsonProperty member in schema.EnumerateObject())
                 {
-                    if (!_SchemaMaps.Contains(member.Name) || member.Value.ValueKind != JsonValueKind.Object) continue;
+                    // draft-07 containers only: $defs is not a draft-07 keyword.
+                    if (!_SchemaMaps.Contains(member.Name) || member.Name == "$defs" || member.Value.ValueKind != JsonValueKind.Object) continue;
                     foreach (JsonProperty entry in member.Value.EnumerateObject())
                     {
                         string? problem = FindMalformed(entry.Value, $"{location}/{member.Name}/{entry.Name}", draft07, isValidPattern, depth + 1);
@@ -151,7 +152,7 @@ namespace Voltaic.Mcp
             if (keyword == "type")
             {
                 if (value.ValueKind == JsonValueKind.String) return _TypeNames.Contains(value.GetString()!) ? null : $"{at}: '{value.GetString()}' is not a JSON Schema type.";
-                if (value.ValueKind != JsonValueKind.Array) return $"{at} must be a type name or an array of type names.";
+                if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() == 0) return $"{at} must be a type name or a non-empty array of type names.";
                 List<string> names = new List<string>();
                 foreach (JsonElement name in value.EnumerateArray())
                 {
@@ -169,7 +170,8 @@ namespace Voltaic.Mcp
 
             if (keyword == "multipleOf")
             {
-                return value.ValueKind == JsonValueKind.Number && value.GetDouble() > 0 ? null : $"{at} must be a number greater than 0.";
+                McpJsonNumber? divisor = value.ValueKind == JsonValueKind.Number ? McpJsonNumber.Parse(value.GetRawText()) : null;
+                return divisor != null && divisor.IsPositive ? null : $"{at} must be a number greater than 0.";
             }
 
             if (_CountKeywords.Contains(keyword))
@@ -179,7 +181,15 @@ namespace Voltaic.Mcp
 
             if (_StringKeywords.Contains(keyword))
             {
-                return value.ValueKind == JsonValueKind.String ? null : $"{at} must be a string.";
+                if (value.ValueKind != JsonValueKind.String) return $"{at} must be a string.";
+
+                // Plain-name anchors: a letter or underscore, then letters, digits, '-', '_', or '.'.
+                if ((keyword == "$anchor" || keyword == "$dynamicAnchor") && !IsAnchorName(value.GetString()!))
+                {
+                    return $"{at}: '{value.GetString()}' is not a valid anchor name.";
+                }
+
+                return null;
             }
 
             if (keyword == "pattern")
@@ -274,14 +284,18 @@ namespace Voltaic.Mcp
             return value.ValueKind == JsonValueKind.Object || value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False;
         }
 
+        private static bool IsAnchorName(string name)
+        {
+            if (name.Length == 0 || !(Char.IsAsciiLetter(name[0]) || name[0] == '_')) return false;
+            return name.All(character => Char.IsAsciiLetterOrDigit(character) || character == '-' || character == '_' || character == '.');
+        }
+
         private static bool IsCount(JsonElement value)
         {
+            // Exact: 1e400 is a (huge) non-negative integer, and 1.0 is an integer in JSON Schema.
             if (value.ValueKind != JsonValueKind.Number) return false;
-            if (value.TryGetInt64(out long whole)) return whole >= 0;
-
-            // 1.0 is an integer in JSON Schema.
-            return Double.TryParse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out double number)
-                && number >= 0 && Math.Floor(number) == number && !Double.IsInfinity(number);
+            McpJsonNumber? number = McpJsonNumber.Parse(value.GetRawText());
+            return number != null && number.IsNonNegativeInteger;
         }
 
         private static bool IsUniqueStrings(JsonElement value)

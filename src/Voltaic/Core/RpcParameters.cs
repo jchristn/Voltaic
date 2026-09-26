@@ -43,6 +43,9 @@ namespace Voltaic.Core
         /// <returns>A new <see cref="RpcParameters"/> instance.</returns>
         public static RpcParameters FromObject(object? value)
         {
+            // A JsonElement keeps its exact text (no transcoding, so any JSON string survives, even one that is not
+            // valid Unicode).
+            if (value is JsonElement element && element.ValueKind != JsonValueKind.Undefined) return new RpcParameters(element.GetRawText());
             return new RpcParameters(value == null ? null : JsonSerializer.Serialize(value));
         }
 

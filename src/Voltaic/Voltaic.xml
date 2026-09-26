@@ -6360,8 +6360,14 @@
         </member>
         <member name="P:Voltaic.Mcp.McpEcmaRegex.MaxSteps">
             <summary>
-            Gets or sets the step budget of one match: a match that needs more steps (catastrophic backtracking) stops,
-            and <see cref="M:Voltaic.Mcp.McpEcmaRegex.IsMatch(System.String)"/> reports it as exhausted. Default is 5,000,000.
+            Gets the base step budget of one match. The budget of a match is this plus
+            <see cref="P:Voltaic.Mcp.McpEcmaRegex.StepsPerInputCharacter"/> per input character, so linear work on long inputs always fits and only
+            catastrophic backtracking runs out. Default is 10,000,000.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpEcmaRegex.StepsPerInputCharacter">
+            <summary>
+            Gets the step budget added per input character. Default is 200.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpEcmaRegex.Compile(System.String)">
@@ -6619,6 +6625,8 @@
             request this version in <c>initialize</c> and replace it with the version the server negotiates;
             it is then sent in the <c>MCP-Protocol-Version</c> header of every request in the session.
             Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace restores the default.
+            Every new handshake requests the version last set (a stateless-era version requests the newest handshake
+            version), never one negotiated with an earlier server.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.ClientName">
@@ -7094,8 +7102,8 @@
             <summary>
             Gets or sets the reconnection delay in milliseconds sent in the <c>retry</c> field of the priming event that
             starts each resumable SSE stream on sessions that negotiated 2025-11-25 or later (earlier revisions define no
-            priming event, so their streams carry no <c>retry</c>). Clients wait this long before reconnecting after the
-            stream closes.
+            priming event), and of a GET stream resumed with <c>Last-Event-ID</c> on any revision. Clients wait this long
+            before reconnecting after the stream closes.
             Default is 1000. Minimum is 0; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
@@ -7693,7 +7701,7 @@
         <member name="M:Voltaic.Mcp.McpHttpServer.NotifyCancelled(System.String,System.Object,System.String)">
             <summary>
             Obsolete and does nothing. <c>notifications/cancelled</c> may only reference a request the sender issued, and
-            an MCP server issues no requests to clients, so the server has nothing it may cancel.
+            McpHttpServer sends no requests to clients, so it has nothing it may cancel.
             </summary>
             <param name="sessionId">Ignored.</param>
             <param name="requestId">Ignored.</param>
@@ -8034,6 +8042,27 @@
             <summary>
             Returns whether <paramref name="value"/> divided by <paramref name="divisor"/> is an integer, exactly; null when
             the divisor is not positive.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpJsonNumber.IsNonNegativeInteger">
+            <summary>
+            Gets whether the number is a non-negative integer (1.0 counts).
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpJsonNumber.IsPositive">
+            <summary>
+            Gets whether the number is greater than zero.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpJsonNumber.Canonical">
+            <summary>
+            Gets a canonical text for the value (equal numbers, such as 1, 1.0, and 10e-1, give the same text).
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpJsonNumber.ToCount">
+            <summary>
+            Returns the value as a count: the number itself when it fits, <see cref="F:System.Int64.MaxValue"/> for larger
+            non-negative integers. Only meaningful when <see cref="P:Voltaic.Mcp.McpJsonNumber.IsNonNegativeInteger"/>.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpJsonValueKind">
@@ -8831,8 +8860,8 @@
         </member>
         <member name="T:Voltaic.Mcp.McpRateLimits">
             <summary>
-            The rate limits an MCP server applies per client (MCP: servers must rate-limit tool invocations and
-            completions, and should rate-limit log messages). A client is a session, or, for HTTP requests without a
+            The rate limits an MCP server applies per client (MCP: servers must rate-limit tool invocations, and should
+            rate-limit completions and log messages). A client is a session, or, for HTTP requests without a
             session, the authenticated principal and remote address. Each limit allows that many operations per second, with
             a burst of the same size. A tool call over the limit gets a tool result with <c>isError: true</c> (so the model
             can back off), a completion request gets no suggestions, and a log message is not sent. Changes take effect
@@ -8931,7 +8960,7 @@
             thread-safe; create one per match.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpRegexMatcher.Search(Voltaic.Mcp.McpRegexProgram)">
+        <member name="M:Voltaic.Mcp.McpRegexMatcher.Search(Voltaic.Mcp.McpRegexProgram,System.Boolean)">
             <summary>
             Searches the input: true when the pattern matches starting at some code point boundary, false when it does
             not, and null when the step budget ran out first.
@@ -10043,7 +10072,7 @@
             Registers a request. Returns null when a request with the same ID is already in flight (IDs must be unique).
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpSessionState.ReserveRequest(System.String)">
+        <member name="M:Voltaic.Mcp.McpSessionState.WasCancelledBeforeStart(System.String)">
             <summary>
             Reserves a request ID when the request is read, before it starts on the thread pool, so a cancellation that
             arrives in between applies to it. A reused ID (allowed once its earlier request was answered, and on
@@ -10686,7 +10715,7 @@
         <member name="M:Voltaic.Mcp.McpTcpServer.NotifyCancelledAsync(System.Object,System.String,System.Threading.CancellationToken)">
             <summary>
             Obsolete and does nothing. <c>notifications/cancelled</c> may only reference a request the sender issued, and
-            an MCP server issues no requests to clients, so the server has nothing it may cancel.
+            the only requests an MCP server sends are its own pings, which it cancels itself when they time out.
             </summary>
             <param name="requestId">Ignored.</param>
             <param name="reason">Ignored.</param>
@@ -11933,7 +11962,7 @@
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.NotifyCancelledAsync(System.Object,System.String,System.Threading.CancellationToken)">
             <summary>
             Obsolete and does nothing. <c>notifications/cancelled</c> may only reference a request the sender issued, and
-            an MCP server issues no requests to clients, so the server has nothing it may cancel.
+            the only requests an MCP server sends are its own pings, which it cancels itself when they time out.
             </summary>
             <param name="requestId">Ignored.</param>
             <param name="reason">Ignored.</param>

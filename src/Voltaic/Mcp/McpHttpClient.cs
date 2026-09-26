@@ -54,11 +54,17 @@ namespace Voltaic.Mcp
         /// request this version in <c>initialize</c> and replace it with the version the server negotiates;
         /// it is then sent in the <c>MCP-Protocol-Version</c> header of every request in the session.
         /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace restores the default.
+        /// Every new handshake requests the version last set (a stateless-era version requests the newest handshake
+        /// version), never one negotiated with an earlier server.
         /// </summary>
         public string ProtocolVersion
         {
             get => _ProtocolVersion;
-            set => _ProtocolVersion = String.IsNullOrWhiteSpace(value) ? McpProtocol.LatestProtocolVersion : value;
+            set
+            {
+                _ProtocolVersion = String.IsNullOrWhiteSpace(value) ? McpProtocol.LatestProtocolVersion : value;
+                _RequestedProtocolVersion = _ProtocolVersion;
+            }
         }
 
         /// <summary>
@@ -255,6 +261,7 @@ namespace Voltaic.Mcp
         private string _ClientName = "Voltaic.Mcp.HttpClient";
         private string _ClientVersion = "1.0.0";
         private string _ProtocolVersion = McpProtocol.LatestProtocolVersion;
+        private string _RequestedProtocolVersion = McpProtocol.LatestProtocolVersion;
 
         private int _RequestTimeoutMs = 30000;
         private bool _IsDisposed = false;
@@ -1093,12 +1100,14 @@ namespace Voltaic.Mcp
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
                 if ((int)httpResponse.StatusCode == 404 && !String.IsNullOrEmpty(sentSessionId) && _Streamable)
                 {
-                    // The session is gone: start a new one. A notification about the old session (initialized or a
-                    // cancellation) means nothing to the new one; anything else is sent again.
+                    // The session is gone. A notification about the old session (initialized or a cancellation) means
+                    // nothing to a new one, and notifications/initialized is sent by the handshake itself (which may be
+                    // a recovery holding the recovery lock), so neither starts a recovery. Anything else is sent again
+                    // on a new session.
                     httpResponse.Dispose();
+                    if (method == "notifications/initialized" || method == "notifications/cancelled") return;
                     bool recovered = await RecoverSessionAsync(sentSessionId, token).ConfigureAwait(false);
                     if (!recovered) throw McpProtocolException.SessionNotFound();
-                    if (method == "notifications/initialized" || method == "notifications/cancelled") return;
 
                     using HttpRequestMessage retry = CreatePostRequest(requestJson);
                     httpResponse = await _HttpClient.SendAsync(retry, cts.Token).ConfigureAwait(false);
@@ -1291,6 +1300,11 @@ namespace Voltaic.Mcp
         private async Task PerformHandshakeAsync(CancellationToken token)
         {
             _HandshakeComplete = false;
+
+            // initialize requests the configured version, never one negotiated earlier; a stateless-era version has no
+            // initialize, so the newest handshake version stands in for it.
+            bool statelessEra = McpProtocol.IsSupportedVersion(_RequestedProtocolVersion) && McpProtocol.GetEra(_RequestedProtocolVersion) == McpProtocolEra.Stateless;
+            _ProtocolVersion = statelessEra ? McpProtocol.NewestHandshakeProtocolVersion : _RequestedProtocolVersion;
             Dictionary<string, object?> parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 { "protocolVersion", _ProtocolVersion },

@@ -104,7 +104,16 @@ namespace Voltaic.Mcp
 
                 using (parsed)
                 {
-                    error = Evaluate(root, parsed.RootElement, path, document, 0, 0, ref budget);
+                    try
+                    {
+                        error = Evaluate(root, parsed.RootElement, path, document, 0, 0, ref budget);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // A string or property name with an unpaired UTF-16 surrogate is not valid Unicode (I-JSON forbids
+                        // it) and cannot be read as text, so the value is rejected as invalid input.
+                        throw McpProtocolException.ValidationError($"{path} contains a string with an unpaired UTF-16 surrogate, which is not valid Unicode.");
+                    }
                 }
             }
 
@@ -295,7 +304,7 @@ namespace Voltaic.Mcp
                     error = CheckArray(schema, instance, path, root, depth, ref budget, local);
                     break;
                 case JsonValueKind.String:
-                    error = CheckString(schema, instance, path);
+                    error = CheckString(schema, instance, path, ref budget);
                     break;
                 case JsonValueKind.Number:
                     error = CheckNumber(schema, instance, path);
@@ -585,6 +594,7 @@ namespace Voltaic.Mcp
                         bool? matched = MatchPattern(pattern.Name, member.Name, out bool timedOut);
                         if (timedOut)
                         {
+                            budget = -1;
                             return $"{memberPath} could not be checked against the property name pattern '{pattern.Name}' in time.";
                         }
 
@@ -748,7 +758,7 @@ namespace Voltaic.Mcp
             return null;
         }
 
-        private static string? CheckString(JsonElement schema, JsonElement instance, string path)
+        private static string? CheckString(JsonElement schema, JsonElement instance, string path, ref int budget)
         {
             string text = instance.GetString() ?? String.Empty;
             bool hasMin = TryGetCount(schema, "minLength", out long minLength);
@@ -774,6 +784,8 @@ namespace Voltaic.Mcp
                 bool? matched = MatchPattern(patternText, text, out bool timedOut);
                 if (timedOut)
                 {
+                    // An aborted match aborts the whole evaluation, so a negating keyword can never turn it into a pass.
+                    budget = -1;
                     return $"{path} could not be checked against the pattern '{patternText}' in time.";
                 }
 
@@ -1068,20 +1080,11 @@ namespace Voltaic.Mcp
                 return false;
             }
 
-            if (value.TryGetInt64(out long whole))
-            {
-                if (whole < 0) return false;
-                count = whole;
-                return true;
-            }
-
-            if (value.TryGetDouble(out double real) && real >= 0 && Math.Floor(real) == real)
-            {
-                count = real >= Int64.MaxValue ? Int64.MaxValue : (long)real;
-                return true;
-            }
-
-            return false;
+            // Read exactly: 1e400 is a (huge) count, and 2.0 is 2.
+            McpJsonNumber? number = McpJsonNumber.Parse(value.GetRawText());
+            if (number == null || !number.IsNonNegativeInteger) return false;
+            count = number.ToCount();
+            return true;
         }
 
         // JSON Schema measures string length in Unicode code points, so a surrogate pair counts once.
@@ -1259,25 +1262,11 @@ namespace Voltaic.Mcp
             }
         }
 
+        // The exact value of a number as canonical text, so equal numbers (1, 1.0, 10e-1) compare equal and different
+        // ones never do, whatever their precision or range.
         private static string CanonicalNumber(JsonElement value)
         {
-            if (value.TryGetDecimal(out decimal number))
-            {
-                string text = number.ToString(CultureInfo.InvariantCulture);
-                if (text.Contains('.', StringComparison.Ordinal))
-                {
-                    text = text.TrimEnd('0').TrimEnd('.');
-                }
-
-                return text == "-0" ? "0" : text;
-            }
-
-            if (value.TryGetDouble(out double real))
-            {
-                return real.ToString("R", CultureInfo.InvariantCulture);
-            }
-
-            return value.GetRawText();
+            return McpJsonNumber.Parse(value.GetRawText())?.Canonical ?? value.GetRawText();
         }
 
         #endregion

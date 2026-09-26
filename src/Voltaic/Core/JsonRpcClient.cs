@@ -90,6 +90,7 @@ namespace Voltaic.Core
         private Task? _ReceiveTask;
         private int _RequestIdCounter = 0;
         private bool _IsConnected = false;
+        private int _ConnectionGeneration;
         private bool _IsDisposed = false;
         private string _DefaultContentType = "application/json; charset=utf-8";
         private string? _Endpoint;
@@ -130,6 +131,7 @@ namespace Voltaic.Core
                 _TokenSource = new CancellationTokenSource();
                 _ReceiveTask = Task.Run(() => ReceiveLoop(_TokenSource.Token));
 
+                Interlocked.Increment(ref _ConnectionGeneration);
                 _IsConnected = true;
                 _Endpoint = $"{host}:{port}";
                 _ConnectedUtc = DateTime.UtcNow;
@@ -180,6 +182,7 @@ namespace Voltaic.Core
             TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
             ClientPendingRequest pendingRequest = new ClientPendingRequest(id, request, tcs);
             _PendingRequests[id] = pendingRequest;
+            int generation = Volatile.Read(ref _ConnectionGeneration);
             _ProgressTracker.Track(parameters);
 
             try
@@ -198,7 +201,8 @@ namespace Voltaic.Core
                     }
                     catch (TaskCanceledException)
                     {
-                        OnCallAbandoned(method, id, token.IsCancellationRequested);
+                        // A cancellation goes only to the connection the request was sent on, and only while it is up.
+                        if (_IsConnected && generation == Volatile.Read(ref _ConnectionGeneration)) OnCallAbandoned(method, id, token.IsCancellationRequested);
                         throw;
                     }
 
@@ -424,7 +428,12 @@ namespace Voltaic.Core
             {
                 // A loop stopped by Disconnect (its token cancelled) leaves the flag to Disconnect, so it never clears the
                 // flag of a connection made right after.
-                if (!token.IsCancellationRequested) _IsConnected = false;
+                if (!token.IsCancellationRequested)
+                {
+                    // The connection dropped: calls waiting for a response fail now instead of timing out.
+                    _IsConnected = false;
+                    FailPendingRequests();
+                }
             }
         }
 
@@ -456,7 +465,12 @@ namespace Voltaic.Core
             {
                 // A loop stopped by Disconnect (its token cancelled) leaves the flag to Disconnect, so it never clears the
                 // flag of a connection made right after.
-                if (!token.IsCancellationRequested) _IsConnected = false;
+                if (!token.IsCancellationRequested)
+                {
+                    // The connection dropped: calls waiting for a response fail now instead of timing out.
+                    _IsConnected = false;
+                    FailPendingRequests();
+                }
             }
         }
 
@@ -615,6 +629,15 @@ namespace Voltaic.Core
                 {
                     LogMessage($"Error in NotificationReceived handler: {ex.Message}");
                 }
+            }
+        }
+
+        // Fails every call still waiting for a response, because the connection they were sent on is gone.
+        private void FailPendingRequests()
+        {
+            foreach (ClientPendingRequest pending in _PendingRequests.Values)
+            {
+                pending.TaskCompletionSource.TrySetException(new IOException("The connection closed before the response arrived."));
             }
         }
 

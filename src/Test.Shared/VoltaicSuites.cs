@@ -78,6 +78,7 @@ namespace Test.Shared
                 McpRegexSuites.Engine(),
                 McpHardeningSuites.Clients(),
                 McpHardeningSuites.Servers(),
+                McpPolishSuites.Cases(),
                 McpTransportParitySuites.TcpMcpParity(),
                 McpTransportParitySuites.WebSocketMcpParity(),
                 A2AProtocolSuites.ProtocolAndTransports(),

@@ -233,7 +233,19 @@ namespace Voltaic.Core
             if (idKey != null) _Finished.TryRemove(idKey, out DateTime _);
             try
             {
-                return await DispatchCoreAsync(request, idKey, token).ConfigureAwait(false);
+                JsonRpcResponse? response = await DispatchCoreAsync(request, idKey, token).ConfigureAwait(false);
+
+                // A request answered without running (unknown method, ping, a null ID) is not answered once the server
+                // cancelled it.
+                if (response != null && idKey != null)
+                {
+                    lock (_RequestLock)
+                    {
+                        if (_Reserved.TryGetValue(idKey, out bool cancelled) && cancelled) return null;
+                    }
+                }
+
+                return response;
             }
             finally
             {

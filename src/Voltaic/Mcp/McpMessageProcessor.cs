@@ -138,7 +138,17 @@ namespace Voltaic.Mcp
         {
             try
             {
-                return await HandleCoreAsync(envelope, session, statelessVersion, statelessResolved, notify, token, rawSend).ConfigureAwait(false);
+                McpHandledResponse? handled = await HandleCoreAsync(envelope, session, statelessVersion, statelessResolved, notify, token, rawSend).ConfigureAwait(false);
+
+                // A request rejected before it ran (for example for a bad _meta, or before initialize) gets no response
+                // once the client cancelled it: nothing may be sent for a cancelled request.
+                if (handled != null && envelope.IdKey != null && session.WasCancelledBeforeStart(envelope.IdKey))
+                {
+                    _Log($"Request {envelope.IdKey} was cancelled by the client before it ran; its error response is not sent.");
+                    return null;
+                }
+
+                return handled;
             }
             finally
             {
@@ -283,6 +293,8 @@ namespace Voltaic.Mcp
             inFlight.Notify = notify;
             inFlight.ProgressIntervalMs = _Endpoint.ProgressIntervalMs;
             session.LogRatePerSecond = _Endpoint.RateLimits.LogMessagesPerSecond;
+            session.Limiter = _Endpoint.RateLimiter;
+            session.Limits = _Endpoint.RateLimits;
             try
             {
                 if (inFlight.IsCancelled)

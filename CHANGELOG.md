@@ -1,5 +1,54 @@
 # Changelog
 
+## v2.1.12
+Resolves every finding of a four-part review of v2.1.11 against the MCP specification.
+
+### Cancellation and clients
+- A request rejected before it runs (for example for a bad `_meta`, or before `initialize`) gets no response once its cancellation has arrived. The same holds for server requests a client would reject.
+- When a connection drops, calls waiting for a response fail at once with `IOException`. A cancellation for a timed-out call goes only to the connection the call was sent on, never to a later one.
+- The stdio client shuts down (closes input, then SIGTERM, then kill) a server process that already closed its stdout.
+- A failed explicit `InitializeAsync` closes the connection and throws `InvalidOperationException`, as the documentation says.
+- `McpHttpClient` requests its configured protocol version on every handshake. It used to request the one negotiated earlier, or `2026-07-28` after a stateless connection.
+
+### HTTP
+- A session stays alive after a long request ends: activity is recorded when a request finishes as well as when it starts. An open GET stream keeps its session alive at any timeout, because heartbeats come every third of `SessionTimeoutSeconds`, at most 30 seconds.
+- Each session is its own rate-limit client, and the log message limit follows the client (it was per request for HTTP requests without a session). Changing `RateLimits.LogMessagesPerSecond` takes effect at once.
+- A rejected notification's error response carries no `id`.
+- A 404 on `notifications/initialized` no longer starts a session recovery that could deadlock the handshake.
+- A session is checked again just before it expires, so a request that arrives meanwhile keeps it.
+
+### Schemas and features
+- `pattern`:
+  - The step budget is 10,000,000 steps plus 200 per input character, so linear and quadratic work on long inputs fits.
+  - An exhausted match fails the whole validation, even inside `not`, `oneOf`, or `if`. It used to pass there.
+  - A pattern starting with `^` is tried only at the start of the input.
+  - A complete `{n}` with nothing to repeat is an error.
+  - Group names follow ECMA-262 identifier rules, including `\u` escapes.
+  - A backreference never splits a surrogate pair.
+  - Groups nested more than 500 deep are rejected instead of overflowing the stack.
+- A string argument with an unpaired UTF-16 surrogate is an input validation error (`isError`), not `-32603`.
+- A `$ref` pointer into an embedded resource resolves in that resource and its dialect.
+- `uniqueItems` compares numbers exactly, and numbers with huge exponents compare exactly.
+- `multipleOf: 1e-400` and `maxLength: 1e400` are accepted.
+- Malformed schemas are rejected at registration: `type: []`, an invalid `$anchor`, and a JSON pointer array index with a leading zero. draft-07 checks no `$defs` beside `$ref`.
+- `completion/complete` requires `argument.value`.
+- URI templates honor `:n` prefixes and empty values.
+
+### Documentation
+- COMPATIBILITY.md and README:
+  - The late-status disclosure names the log-message case.
+  - The general categories follow the runtime's Unicode version (15.0 on .NET 8, 16.0 on .NET 10).
+  - The evaluation budgets are disclosed.
+  - Unpaired surrogates and the 500-level nesting limit are listed as stricter than required.
+  - The description requirement applies to every revision.
+  - Priming applies from 2025-11-25.
+  - Completion rate limiting is a SHOULD.
+  - URI template matching is described.
+- The `NotifyCancelled` documentation and the `SseRetryIntervalMs` XML doc are corrected.
+
+### Tests
+- New suite `Mcp.Polish` (12) and three more `Mcp.RegexEngine` cases.
+
 ## v2.1.11
 Resolves every finding of a four-part review of v2.1.10 against the MCP specification.
 

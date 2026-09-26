@@ -11,7 +11,7 @@ namespace Voltaic.Mcp
     /// </summary>
     internal sealed class McpJsonNumber
     {
-        private McpJsonNumber(bool negative, BigInteger digits, long exponent)
+        private McpJsonNumber(bool negative, BigInteger digits, BigInteger exponent)
         {
             Negative = negative && !digits.IsZero;
             Digits = digits;
@@ -23,7 +23,7 @@ namespace Voltaic.Mcp
 
         internal BigInteger Digits { get; }
 
-        internal long Exponent { get; }
+        internal BigInteger Exponent { get; }
 
         /// <summary>
         /// Parses the text of a JSON number, or returns null when it is not one.
@@ -49,20 +49,16 @@ namespace Voltaic.Mcp
                 if (fraction.Length == 0) return null;
             }
 
-            long exponent = 0;
+            BigInteger exponent = BigInteger.Zero;
             if (index < text.Length && (text[index] == 'e' || text[index] == 'E'))
             {
                 index++;
                 bool negativeExponent = index < text.Length && text[index] == '-';
                 if (index < text.Length && (text[index] == '+' || text[index] == '-')) index++;
                 int exponentStart = index;
-                while (index < text.Length && Char.IsAsciiDigit(text[index]))
-                {
-                    exponent = Math.Min(exponent * 10 + (text[index] - '0'), Int64.MaxValue / 20);
-                    index++;
-                }
-
+                while (index < text.Length && Char.IsAsciiDigit(text[index])) index++;
                 if (index == exponentStart) return null;
+                exponent = BigInteger.Parse(text.Substring(exponentStart, index - exponentStart), NumberStyles.None, CultureInfo.InvariantCulture);
                 if (negativeExponent) exponent = -exponent;
             }
 
@@ -70,7 +66,7 @@ namespace Voltaic.Mcp
 
             BigInteger digits = BigInteger.Parse(integerPart + fraction, NumberStyles.None, CultureInfo.InvariantCulture);
             exponent -= fraction.Length;
-            if (digits.IsZero) return new McpJsonNumber(false, BigInteger.Zero, 0);
+            if (digits.IsZero) return new McpJsonNumber(false, BigInteger.Zero, BigInteger.Zero);
 
             while (digits % 10 == 0)
             {
@@ -93,8 +89,8 @@ namespace Voltaic.Mcp
             if (leftSign == 0) return 0;
 
             // Compare magnitudes by the position of the most significant digit first, then digit by digit.
-            long leftMagnitude = DigitCount(left.Digits) + left.Exponent;
-            long rightMagnitude = DigitCount(right.Digits) + right.Exponent;
+            BigInteger leftMagnitude = DigitCount(left.Digits) + left.Exponent;
+            BigInteger rightMagnitude = DigitCount(right.Digits) + right.Exponent;
             int absolute;
             if (leftMagnitude != rightMagnitude)
             {
@@ -103,9 +99,9 @@ namespace Voltaic.Mcp
             else
             {
                 // Equal magnitudes: the exponents differ by less than the digit counts, so aligning them is cheap.
-                long shift = left.Exponent - right.Exponent;
-                BigInteger a = shift > 0 ? left.Digits * BigInteger.Pow(10, (int)shift) : left.Digits;
-                BigInteger b = shift < 0 ? right.Digits * BigInteger.Pow(10, (int)-shift) : right.Digits;
+                int shift = (int)(left.Exponent - right.Exponent);
+                BigInteger a = shift > 0 ? left.Digits * BigInteger.Pow(10, shift) : left.Digits;
+                BigInteger b = shift < 0 ? right.Digits * BigInteger.Pow(10, -shift) : right.Digits;
                 absolute = a.CompareTo(b);
             }
 
@@ -121,8 +117,8 @@ namespace Voltaic.Mcp
             if (divisor.Digits.IsZero || divisor.Negative) return null;
             if (value.Digits.IsZero) return true;
 
-            long shift = value.Exponent - divisor.Exponent;
-            if (shift < 0)
+            BigInteger shift = value.Exponent - divisor.Exponent;
+            if (shift.Sign < 0)
             {
                 // value's digits have no trailing zeros, so they cannot be divisible by divisor * 10^-shift.
                 return false;
@@ -132,7 +128,33 @@ namespace Voltaic.Mcp
             return remainder.IsZero;
         }
 
-        private static long DigitCount(BigInteger digits)
+        /// <summary>
+        /// Gets whether the number is a non-negative integer (1.0 counts).
+        /// </summary>
+        internal bool IsNonNegativeInteger => !Negative && (Digits.IsZero || Exponent.Sign >= 0);
+
+        /// <summary>
+        /// Gets whether the number is greater than zero.
+        /// </summary>
+        internal bool IsPositive => !Negative && !Digits.IsZero;
+
+        /// <summary>
+        /// Gets a canonical text for the value (equal numbers, such as 1, 1.0, and 10e-1, give the same text).
+        /// </summary>
+        internal string Canonical => Digits.IsZero ? "0" : (Negative ? "-" : String.Empty) + Digits.ToString(CultureInfo.InvariantCulture) + "e" + Exponent.ToString(CultureInfo.InvariantCulture);
+
+        /// <summary>
+        /// Returns the value as a count: the number itself when it fits, <see cref="Int64.MaxValue"/> for larger
+        /// non-negative integers. Only meaningful when <see cref="IsNonNegativeInteger"/>.
+        /// </summary>
+        internal long ToCount()
+        {
+            if (Digits.IsZero) return 0;
+            if (DigitCount(Digits) + Exponent > 18) return Int64.MaxValue;
+            return (long)(Digits * BigInteger.Pow(10, (int)Exponent));
+        }
+
+        private static BigInteger DigitCount(BigInteger digits)
         {
             return digits.IsZero ? 1 : digits.ToString(CultureInfo.InvariantCulture).Length;
         }

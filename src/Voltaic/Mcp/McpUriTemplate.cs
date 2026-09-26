@@ -51,12 +51,25 @@ namespace Voltaic.Mcp
                 string list = op == '\0' ? expression : expression.Substring(1);
                 List<string> names = new List<string>();
                 List<bool> exploded = new List<bool>();
+                List<int> prefixes = new List<int>();
                 foreach (string spec in list.Split(','))
                 {
                     exploded.Add(spec.EndsWith("*", StringComparison.Ordinal));
                     string name = spec.TrimEnd('*');
                     int colon = name.IndexOf(':');
-                    if (colon >= 0) name = name.Substring(0, colon);
+                    int prefix = 0;
+                    if (colon >= 0)
+                    {
+                        // {var:n} expands to at most the first n characters of the value.
+                        if (!Int32.TryParse(name.Substring(colon + 1), out prefix) || prefix < 1 || prefix > 9999)
+                        {
+                            throw new ArgumentException($"Invalid resource template prefix modifier in '{spec}'.", nameof(template));
+                        }
+
+                        name = name.Substring(0, colon);
+                    }
+
+                    prefixes.Add(prefix);
                     if (!_VariableName.IsMatch(name)) throw new ArgumentException($"Invalid resource template variable '{spec}'.", nameof(template));
                     names.Add(name);
                 }
@@ -78,15 +91,18 @@ namespace Voltaic.Mcp
                     // Reserved (+) and fragment (#) values may contain reserved characters, commas included, so they are
                     // matched lazily; an exploded variable receives the raw text of all its items, separators included.
                     bool explode = exploded[n];
-                    string value = op switch
+                    // A value may be empty (an empty variable expands to nothing); a prefix modifier caps its length.
+                    string characters = op switch
                     {
-                        '+' => ".*?",
-                        '#' => ".*?",
-                        '.' => explode ? "[^/?#]*" : "[^/?#.,]*",
-                        '/' => explode ? "[^?#]*" : "[^/?#,]*",
-                        ';' => explode ? "[^/?#]*" : "[^;/?#,]*",
-                        _ => explode ? "[^/?#]+" : "[^/?#,&=]+"
+                        '+' => ".",
+                        '#' => ".",
+                        '.' => explode ? "[^/?#]" : "[^/?#.,]",
+                        '/' => explode ? "[^?#]" : "[^/?#,]",
+                        ';' => explode ? "[^/?#]" : "[^;/?#,]",
+                        _ => explode ? "[^/?#]" : "[^/?#,&=]"
                     };
+                    string repeat = prefixes[n] > 0 && !explode ? "{0," + prefixes[n] + "}" : "*";
+                    string value = characters + repeat + (op == '+' || op == '#' ? "?" : String.Empty);
 
                     string capture = "(?<" + group + ">" + value + ")";
                     string separator = n == 0

@@ -78,6 +78,9 @@ namespace Voltaic.Mcp
 
         private readonly McpRateLimiter _RateLimiter = new McpRateLimiter();
 
+        // The per-client limiter, shared with sessions for the log message limit.
+        internal McpRateLimiter RateLimiter => _RateLimiter;
+
         // The client a request belongs to, for the rate limits.
         private static string RateLimitClient()
         {
@@ -328,12 +331,25 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams("tools/call name must be a non-empty string.");
             }
 
-            if (call.Arguments != null && JsonSerializer.SerializeToElement(call.Arguments).ValueKind != JsonValueKind.Object)
+            RpcParameters? toolArguments;
+            try
             {
-                throw McpProtocolException.InvalidParams("tools/call arguments must be a JSON object.");
-            }
+                JsonValueKind argumentsKind = call.Arguments is JsonElement argumentsElement ? argumentsElement.ValueKind : JsonSerializer.SerializeToElement(call.Arguments).ValueKind;
+                if (call.Arguments != null && argumentsKind != JsonValueKind.Object)
+                {
+                    throw McpProtocolException.InvalidParams("tools/call arguments must be a JSON object.");
+                }
 
-            RpcParameters? toolArguments = call.Arguments == null ? null : RpcParameters.FromObject(call.Arguments);
+                toolArguments = call.Arguments == null ? null : RpcParameters.FromObject(call.Arguments);
+            }
+            catch (InvalidOperationException)
+            {
+                // A string with an unpaired UTF-16 surrogate is not valid Unicode (I-JSON forbids it) and cannot be
+                // processed as text: an input validation error, reported as a tool execution error.
+                McpToolCallResult invalidText = McpToolCallResult.FromText($"Tool '{toolName}' arguments contain a string with an unpaired UTF-16 surrogate, which is not valid Unicode.");
+                invalidText.IsError = true;
+                return invalidText;
+            }
 
             ToolRegistration? tool;
             lock (_Lock)
@@ -748,6 +764,11 @@ namespace Voltaic.Mcp
             }
 
             ValidateCompletionRequest(request);
+            if (!HasStringArgumentValue(args))
+            {
+                throw McpProtocolException.InvalidParams("completion/complete argument.value is required and must be a string.");
+            }
+
             EnsureCompletionReferenceExists(request);
 
             // Completions are rate-limited per client (MCP completion utility): over the limit there are no suggestions.
@@ -1068,6 +1089,25 @@ namespace Voltaic.Mcp
             catch (NotSupportedException invalid)
             {
                 throw McpProtocolException.InvalidParams($"Invalid params: {invalid.Message}");
+            }
+        }
+
+        // argument.value is required (the parsed model defaults it to an empty string, so the raw params decide).
+        private static bool HasStringArgumentValue(RpcParameters args)
+        {
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(args.RawJson ?? "{}"))
+                {
+                    JsonElement root = document.RootElement;
+                    return root.ValueKind == JsonValueKind.Object
+                        && root.TryGetProperty("argument", out JsonElement argument) && argument.ValueKind == JsonValueKind.Object
+                        && argument.TryGetProperty("value", out JsonElement value) && value.ValueKind == JsonValueKind.String;
+                }
+            }
+            catch (JsonException)
+            {
+                return false;
             }
         }
 

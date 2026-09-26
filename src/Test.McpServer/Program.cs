@@ -8,6 +8,15 @@ namespace Test.McpServer
     using Voltaic.Mcp;
     class Program
     {
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr GetStdHandle(int handle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "close")]
+        private static extern int CloseDescriptor(int descriptor);
+
         static async Task Main(string[] args)
         {
             if (args.Length > 0 && args[0] == "--probe-client")
@@ -19,6 +28,17 @@ namespace Test.McpServer
             if (args.Length > 0 && args[0] == "--raw-utf8")
             {
                 await RawUtf8ServerAsync().ConfigureAwait(false);
+                return;
+            }
+
+            if (args.Length > 1 && args[0] == "--close-stdout")
+            {
+                // A server that closes its stdout at once and keeps running, to test that clients still shut it down.
+                System.IO.File.WriteAllText(args[1], Environment.ProcessId.ToString());
+                // Close the process's own stdout handle (the Console stream does not own it).
+                if (OperatingSystem.IsWindows()) CloseHandle(GetStdHandle(-11));
+                else CloseDescriptor(1);
+                await Task.Delay(TimeSpan.FromSeconds(60)).ConfigureAwait(false);
                 return;
             }
 

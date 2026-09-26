@@ -803,13 +803,13 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Obsolete and does nothing. <c>notifications/cancelled</c> may only reference a request the sender issued, and
-        /// an MCP server issues no requests to clients, so the server has nothing it may cancel.
+        /// the only requests an MCP server sends are its own pings, which it cancels itself when they time out.
         /// </summary>
         /// <param name="requestId">Ignored.</param>
         /// <param name="reason">Ignored.</param>
         /// <param name="token">Ignored.</param>
         /// <returns>A completed task.</returns>
-        [Obsolete("A server may only cancel requests it sent, and MCP servers send none. This method does nothing.")]
+        [Obsolete("A server may only cancel requests it sent; Voltaic servers send only pings and cancel those themselves. This method does nothing.")]
         public Task NotifyCancelledAsync(object requestId, string? reason = null, CancellationToken token = default)
         {
             return Task.CompletedTask;

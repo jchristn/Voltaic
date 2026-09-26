@@ -4,6 +4,7 @@ namespace Voltaic.Mcp
     using System.Collections.Concurrent;
     using System.Linq;
     using System.Collections.Generic;
+    using System.IO;
     using System.Net.WebSockets;
     using System.Text;
     using System.Text.Json;
@@ -76,6 +77,7 @@ namespace Voltaic.Mcp
         private Task? _ReceiveTask;
         private int _RequestIdCounter = 0;
         private bool _IsConnected = false;
+        private int _ConnectionGeneration;
         private bool _IsDisposed = false;
         private int _MaxMessageSize = 1048576; // 1 MB
         private string? _Endpoint;
@@ -159,6 +161,7 @@ namespace Voltaic.Mcp
                 _TokenSource = new CancellationTokenSource();
                 _ReceiveTask = Task.Run(() => ReceiveLoop(_TokenSource.Token));
 
+                Interlocked.Increment(ref _ConnectionGeneration);
                 _IsConnected = true;
                 _Endpoint = url;
                 _ConnectedUtc = DateTime.UtcNow;
@@ -234,6 +237,7 @@ namespace Voltaic.Mcp
             TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
             ClientPendingRequest pendingRequest = new ClientPendingRequest(id, request, tcs);
             _PendingRequests[id] = pendingRequest;
+            int generation = Volatile.Read(ref _ConnectionGeneration);
             _ProgressTracker.Track(parameters);
 
             try
@@ -252,7 +256,8 @@ namespace Voltaic.Mcp
                     }
                     catch (TaskCanceledException)
                     {
-                        SendCancellation(method, id, token.IsCancellationRequested);
+                        // A cancellation goes only to the connection the request was sent on, and only while it is up.
+                        if (_IsConnected && generation == Volatile.Read(ref _ConnectionGeneration)) SendCancellation(method, id, token.IsCancellationRequested);
                         throw;
                     }
 
@@ -479,14 +484,27 @@ namespace Voltaic.Mcp
             // Every handshake requests the version the application set (the latest by default), never one negotiated
             // with an earlier server.
             _ProtocolVersion = _RequestedProtocolVersion;
-            McpInitializeOutcome outcome = await McpClientHandshake.RunAsync(
-                async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
-                ct => NotifyAsync("notifications/initialized", null, ct),
-                _ProtocolVersion,
-                _ClientName,
-                _ClientVersion,
-                McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities, _ProtocolVersion),
-                token).ConfigureAwait(false);
+            McpInitializeOutcome outcome;
+            try
+            {
+                outcome = await McpClientHandshake.RunAsync(
+                    async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
+                    ct => NotifyAsync("notifications/initialized", null, ct),
+                    _ProtocolVersion,
+                    _ClientName,
+                    _ClientVersion,
+                    McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities, _ProtocolVersion),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception initializeError) when (!(initializeError is OperationCanceledException && token.IsCancellationRequested))
+            {
+                // A failed handshake (a rejection, a timeout, or a version this client cannot use) ends the connection,
+                // as the lifecycle asks of a client that cannot proceed.
+                LogMessage($"MCP initialize failed: {initializeError.Message}");
+                Disconnect();
+                if (initializeError is InvalidOperationException) throw;
+                throw new InvalidOperationException($"initialize failed: {initializeError.Message}", initializeError);
+            }
 
             _ProtocolVersion = outcome.ProtocolVersion;
             _InitializeResult = outcome.Result;
@@ -651,7 +669,12 @@ namespace Voltaic.Mcp
             {
                 // A loop stopped by Disconnect (its token cancelled) leaves the flag to Disconnect, so it never clears the
                 // flag of a connection made right after.
-                if (!token.IsCancellationRequested) _IsConnected = false;
+                if (!token.IsCancellationRequested)
+                {
+                    // The connection dropped: calls waiting for a response fail now instead of timing out.
+                    _IsConnected = false;
+                    FailPendingRequests();
+                }
             }
         }
 
@@ -798,6 +821,15 @@ namespace Voltaic.Mcp
                 {
                     LogMessage($"Error in NotificationReceived handler: {ex.Message}");
                 }
+            }
+        }
+
+        // Fails every call still waiting for a response, because the connection they were sent on is gone.
+        private void FailPendingRequests()
+        {
+            foreach (ClientPendingRequest pending in _PendingRequests.Values)
+            {
+                pending.TaskCompletionSource.TrySetException(new IOException("The connection closed before the response arrived."));
             }
         }
 

@@ -19,8 +19,10 @@ namespace Voltaic.Mcp
         private readonly List<int> _CodePoints = new List<int>();
         private readonly Dictionary<string, int> _GroupNames = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly List<McpRegexNode> _Backreferences = new List<McpRegexNode>();
+        private const int _MaxNesting = 500;
         private int _Position;
         private int _CaptureCount;
+        private int _Nesting;
 
         private McpRegexParser(string pattern)
         {
@@ -97,6 +99,20 @@ namespace Voltaic.Mcp
         }
 
         private McpRegexNode ParseDisjunction()
+        {
+            // Groups nest through recursion; a bound keeps a hostile pattern from exhausting the stack.
+            if (++_Nesting > _MaxNesting) throw Error($"groups are nested more than {_MaxNesting} deep");
+            try
+            {
+                return ParseDisjunctionCore();
+            }
+            finally
+            {
+                _Nesting--;
+            }
+        }
+
+        private McpRegexNode ParseDisjunctionCore()
         {
             McpRegexNode first = ParseAlternative();
             if (Peek() != '|') return first;
@@ -252,7 +268,16 @@ namespace Voltaic.Mcp
                 case '|':
                     throw Error("unexpected character");
                 default:
-                    // '{', '}', and ']' outside a quantifier or class are literal (Annex B).
+                    // '{', '}', and ']' outside a quantifier or class are literal (Annex B), but a complete {n,m} with
+                    // nothing before it is a syntax error in both ECMA-262 grammars.
+                    if (current == '{')
+                    {
+                        _Position--;
+                        bool quantifier = TryReadQuantifierBounds(out int _, out int _, out int _);
+                        _Position++;
+                        if (quantifier) throw Error("nothing to repeat");
+                    }
+
                     return Set(McpRegexCharSet.Single(current));
             }
         }
@@ -288,14 +313,22 @@ namespace Voltaic.Mcp
             return group;
         }
 
-        // Reads a group name up to and including '>': identifier characters ($, _, letters, and digits after the first).
+        // Reads a group name up to and including '>' (ECMA-262 RegExpIdentifierName): an ID_Start character, '$', or '_',
+        // then ID_Continue characters, '$', ZWNJ, or ZWJ; any of them may be written as a \u escape.
         private string ParseGroupName()
         {
             StringBuilder name = new StringBuilder();
             while (!AtEnd && Peek() != '>')
             {
                 int codePoint = Next();
-                bool valid = codePoint == '$' || codePoint == '_' || IsLetter(codePoint) || (name.Length > 0 && (IsDigit(codePoint) || codePoint == 0x200C || codePoint == 0x200D));
+                if (codePoint == '\\')
+                {
+                    if (!Accept('u')) throw Error("invalid group name");
+                    codePoint = ParseUnicodeEscape();
+                }
+
+                bool first = name.Length == 0;
+                bool valid = codePoint == '$' || codePoint == '_' || (first ? IsIdStart(codePoint) : (IsIdContinue(codePoint) || codePoint == 0x200C || codePoint == 0x200D));
                 if (!valid) throw Error("invalid group name");
                 name.Append(Char.ConvertFromUtf32(codePoint));
             }
@@ -596,6 +629,40 @@ namespace Voltaic.Mcp
         private static bool IsDigit(int codePoint)
         {
             return codePoint >= '0' && codePoint <= '9';
+        }
+
+        // Unicode ID_Start: letters, letter numbers, and Other_ID_Start, without Pattern_Syntax and Pattern_White_Space.
+        private static bool IsIdStart(int codePoint)
+        {
+            if (codePoint < 0 || IsPatternSyntaxOrWhiteSpace(codePoint)) return false;
+            if (codePoint == 0x1885 || codePoint == 0x1886 || codePoint == 0x2118 || codePoint == 0x212E || codePoint == 0x309B || codePoint == 0x309C) return true;
+            return IsLetter(codePoint);
+        }
+
+        // Unicode ID_Continue: ID_Start, marks, decimal digits, connector punctuation, and Other_ID_Continue.
+        private static bool IsIdContinue(int codePoint)
+        {
+            if (IsIdStart(codePoint)) return true;
+            if (codePoint < 0 || IsPatternSyntaxOrWhiteSpace(codePoint)) return false;
+            if (codePoint == 0x00B7 || codePoint == 0x0387 || (codePoint >= 0x1369 && codePoint <= 0x1371) || codePoint == 0x19DA || codePoint == 0x200C || codePoint == 0x200D || codePoint == 0x30FB || codePoint == 0xFF65) return true;
+            UnicodeCategory category = CharUnicodeInfo.GetUnicodeCategory(codePoint);
+            return category == UnicodeCategory.NonSpacingMark || category == UnicodeCategory.SpacingCombiningMark
+                || category == UnicodeCategory.DecimalDigitNumber || category == UnicodeCategory.ConnectorPunctuation;
+        }
+
+        // Pattern_Syntax and Pattern_White_Space (stable Unicode properties), which identifiers never contain.
+        private static bool IsPatternSyntaxOrWhiteSpace(int codePoint)
+        {
+            return (codePoint >= 0x21 && codePoint <= 0x2F) || (codePoint >= 0x3A && codePoint <= 0x40) || (codePoint >= 0x5B && codePoint <= 0x5E)
+                || codePoint == 0x60 || (codePoint >= 0x7B && codePoint <= 0x7E) || (codePoint >= 0xA1 && codePoint <= 0xA7) || codePoint == 0xA9
+                || codePoint == 0xAB || codePoint == 0xAC || codePoint == 0xAE || codePoint == 0xB0 || codePoint == 0xB1 || codePoint == 0xB6
+                || codePoint == 0xBB || codePoint == 0xBF || codePoint == 0xD7 || codePoint == 0xF7 || (codePoint >= 0x2010 && codePoint <= 0x2027)
+                || (codePoint >= 0x2030 && codePoint <= 0x203E) || (codePoint >= 0x2041 && codePoint <= 0x2053) || (codePoint >= 0x2055 && codePoint <= 0x205E)
+                || (codePoint >= 0x2190 && codePoint <= 0x245F) || (codePoint >= 0x2500 && codePoint <= 0x2775) || (codePoint >= 0x2794 && codePoint <= 0x2BFF)
+                || (codePoint >= 0x2E00 && codePoint <= 0x2E7F) || (codePoint >= 0x3001 && codePoint <= 0x3003) || (codePoint >= 0x3008 && codePoint <= 0x3020)
+                || codePoint == 0x3030 || codePoint == 0xFD3E || codePoint == 0xFD3F || codePoint == 0xFE45 || codePoint == 0xFE46
+                || (codePoint >= 0x09 && codePoint <= 0x0D) || codePoint == 0x20 || codePoint == 0x85 || codePoint == 0x200E || codePoint == 0x200F
+                || codePoint == 0x2028 || codePoint == 0x2029;
         }
 
         private static bool IsLetter(int codePoint)

@@ -206,7 +206,7 @@ namespace Voltaic.Mcp
                 return false;
             }
 
-            if (decoded.Length > 0 && decoded[0] == '/') return TryResolvePointer(resource!.Element, decoded, out target);
+            if (decoded.Length > 0 && decoded[0] == '/') return TryResolvePointer(resource!, decoded, out target, out resource);
             return resource!.Anchors.TryGetValue(decoded, out target);
         }
 
@@ -300,10 +300,14 @@ namespace Voltaic.Mcp
             return hash < 0 ? uri : new Uri(text.Substring(0, hash));
         }
 
-        private static bool TryResolvePointer(JsonElement scope, string pointer, out JsonElement target)
+        // Walks a JSON pointer from a resource. A step into an embedded resource (a subschema with its own $id) makes
+        // that resource the one the target belongs to, so references inside the target resolve, and its dialect applies,
+        // as in the target's own resource.
+        private bool TryResolvePointer(McpSchemaResource start, string pointer, out JsonElement target, out McpSchemaResource? resource)
         {
-            target = scope;
-            JsonElement current = scope;
+            resource = start;
+            target = start.Element;
+            JsonElement current = start.Element;
             foreach (string rawToken in pointer.Substring(1).Split('/'))
             {
                 string token = rawToken.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
@@ -314,12 +318,21 @@ namespace Voltaic.Mcp
                 }
                 else if (current.ValueKind == JsonValueKind.Array)
                 {
+                    // Array indexes have no leading zeros (RFC 6901).
+                    if (token.Length > 1 && token[0] == '0') return false;
                     if (!Int32.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out int index) || index >= current.GetArrayLength()) return false;
                     current = current[index];
                 }
                 else
                 {
                     return false;
+                }
+
+                if (current.ValueKind == JsonValueKind.Object && TryGetResourceId(current, out string? id)
+                    && Uri.TryCreate(resource.BaseUri, id, out Uri? resolved)
+                    && _Resources.TryGetValue(WithoutFragment(resolved).AbsoluteUri, out McpSchemaResource? embedded))
+                {
+                    resource = embedded;
                 }
             }
 

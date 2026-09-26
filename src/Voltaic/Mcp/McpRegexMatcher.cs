@@ -31,7 +31,7 @@ namespace Voltaic.Mcp
         /// Searches the input: true when the pattern matches starting at some code point boundary, false when it does
         /// not, and null when the step budget ran out first.
         /// </summary>
-        internal bool? Search(McpRegexProgram program)
+        internal bool? Search(McpRegexProgram program, bool anchored)
         {
             int position = 0;
             while (true)
@@ -41,7 +41,7 @@ namespace Voltaic.Mcp
                 int result = Run(program, position);
                 if (result == 1) return true;
                 if (result == _Exhausted) return null;
-                if (position >= _Input.Length) return false;
+                if (anchored || position >= _Input.Length) return false;
                 position += CodePointLength(position);
             }
         }
@@ -304,13 +304,23 @@ namespace Voltaic.Mcp
             if (instruction.Backward)
             {
                 if (position - length < 0 || String.CompareOrdinal(_Input, start, _Input, position - length, length) != 0) return false;
+
+                // The match must not split a surrogate pair (the u flag compares code points).
+                if (length > 0 && SplitsPair(position - length)) return false;
                 position -= length;
                 return true;
             }
 
             if (position + length > _Input.Length || String.CompareOrdinal(_Input, start, _Input, position, length) != 0) return false;
+            if (length > 0 && SplitsPair(position + length)) return false;
             position += length;
             return true;
+        }
+
+        // True when index falls between the two halves of a surrogate pair.
+        private bool SplitsPair(int index)
+        {
+            return index > 0 && index < _Input.Length && Char.IsHighSurrogate(_Input[index - 1]) && Char.IsLowSurrogate(_Input[index]);
         }
 
         private bool IsWordAt(int index)

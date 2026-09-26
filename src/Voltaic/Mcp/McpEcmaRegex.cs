@@ -21,13 +21,24 @@ namespace Voltaic.Mcp
             _Program = program;
             _CaptureCount = captureCount;
             _RegisterCount = registerCount;
+
+            // A pattern that starts with ^ can only match at the start of the input.
+            Anchored = program.Instructions.Count > 0 && program.Instructions[0].Op == McpRegexOp.Start;
         }
 
         /// <summary>
-        /// Gets or sets the step budget of one match: a match that needs more steps (catastrophic backtracking) stops,
-        /// and <see cref="IsMatch"/> reports it as exhausted. Default is 5,000,000.
+        /// Gets the base step budget of one match. The budget of a match is this plus
+        /// <see cref="StepsPerInputCharacter"/> per input character, so linear work on long inputs always fits and only
+        /// catastrophic backtracking runs out. Default is 10,000,000.
         /// </summary>
-        internal static long MaxSteps { get; set; } = 5_000_000;
+        internal static long MaxSteps { get; set; } = 10_000_000;
+
+        /// <summary>
+        /// Gets the step budget added per input character. Default is 200.
+        /// </summary>
+        internal static long StepsPerInputCharacter { get; set; } = 200;
+
+        internal bool Anchored { get; }
 
         /// <summary>
         /// Compiles a pattern.
@@ -48,8 +59,9 @@ namespace Voltaic.Mcp
         /// </summary>
         internal bool? IsMatch(string input)
         {
-            McpRegexMatcher matcher = new McpRegexMatcher(input ?? String.Empty, _CaptureCount, _RegisterCount, MaxSteps);
-            return matcher.Search(_Program);
+            string text = input ?? String.Empty;
+            McpRegexMatcher matcher = new McpRegexMatcher(text, _CaptureCount, _RegisterCount, MaxSteps + StepsPerInputCharacter * text.Length);
+            return matcher.Search(_Program, Anchored);
         }
     }
 }

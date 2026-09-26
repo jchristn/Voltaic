@@ -183,6 +183,16 @@ namespace Voltaic.Mcp
         /// arrives in between applies to it. A reused ID (allowed once its earlier request was answered, and on
         /// 2026-07-28) is no longer treated as finished.
         /// </summary>
+        // True when a cancellation arrived for a reserved request that never started (it was rejected before running):
+        // nothing may be sent for it.
+        internal bool WasCancelledBeforeStart(string idKey)
+        {
+            lock (_RequestLock)
+            {
+                return _Reserved.TryGetValue(idKey, out bool cancelled) && cancelled;
+            }
+        }
+
         internal void ReserveRequest(string idKey)
         {
             lock (_RequestLock)
@@ -204,10 +214,19 @@ namespace Voltaic.Mcp
         // The log message rate limit, set from McpRateLimits for every request the session makes.
         internal int LogRatePerSecond { get; set; } = 200;
 
-        // Takes one log message from the session's rate limit; false when over it.
+        // The endpoint's per-client limiter, so the log limit follows RateLimitKey (shared by every request of a client),
+        // not the session object; set by the processor for every request.
+        internal McpRateLimiter? Limiter { get; set; }
+
+        // The live rate limit settings, so a change applies at once, even to sessions that make no request.
+        internal McpRateLimits? Limits { get; set; }
+
+        // Takes one log message from the client's rate limit; false when over it.
         internal bool TryConsumeLog()
         {
-            return _LogBucket.TryTake(LogRatePerSecond);
+            int rate = Limits?.LogMessagesPerSecond ?? LogRatePerSecond;
+            McpRateLimiter? limiter = Limiter;
+            return limiter != null ? limiter.TryAcquire(RateLimitKey, "logs", rate) : _LogBucket.TryTake(rate);
         }
 
         // True while any request of this session is running (a running request keeps the session alive).

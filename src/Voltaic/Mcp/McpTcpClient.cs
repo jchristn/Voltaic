@@ -220,14 +220,27 @@ namespace Voltaic.Mcp
             // Every handshake requests the version the application set (the latest by default), never one negotiated
             // with an earlier server.
             _ProtocolVersion = _RequestedProtocolVersion;
-            McpInitializeOutcome outcome = await McpClientHandshake.RunAsync(
-                async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
-                ct => NotifyAsync("notifications/initialized", null, ct),
-                _ProtocolVersion,
-                _ClientName,
-                _ClientVersion,
-                McpClientHandshake.CapabilitiesFor(RequestDispatcher, ClientCapabilities, _ProtocolVersion),
-                token).ConfigureAwait(false);
+            McpInitializeOutcome outcome;
+            try
+            {
+                outcome = await McpClientHandshake.RunAsync(
+                    async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
+                    ct => NotifyAsync("notifications/initialized", null, ct),
+                    _ProtocolVersion,
+                    _ClientName,
+                    _ClientVersion,
+                    McpClientHandshake.CapabilitiesFor(RequestDispatcher, ClientCapabilities, _ProtocolVersion),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception initializeError) when (!(initializeError is OperationCanceledException && token.IsCancellationRequested))
+            {
+                // A failed handshake (a rejection, a timeout, or a version this client cannot use) ends the connection,
+                // as the lifecycle asks of a client that cannot proceed.
+                LogMessage($"MCP initialize failed: {initializeError.Message}");
+                Disconnect();
+                if (initializeError is InvalidOperationException) throw;
+                throw new InvalidOperationException($"initialize failed: {initializeError.Message}", initializeError);
+            }
 
             _ProtocolVersion = outcome.ProtocolVersion;
             _InitializeResult = outcome.Result;

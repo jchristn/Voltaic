@@ -96,8 +96,8 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Gets or sets the reconnection delay in milliseconds sent in the <c>retry</c> field of the priming event that
         /// starts each resumable SSE stream on sessions that negotiated 2025-11-25 or later (earlier revisions define no
-        /// priming event, so their streams carry no <c>retry</c>). Clients wait this long before reconnecting after the
-        /// stream closes.
+        /// priming event), and of a GET stream resumed with <c>Last-Event-ID</c> on any revision. Clients wait this long
+        /// before reconnecting after the stream closes.
         /// Default is 1000. Minimum is 0; maximum is 600000.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
@@ -522,7 +522,9 @@ namespace Voltaic.Mcp
         private Func<HttpListenerRequest, Task<AuthenticationResult>>? _AuthenticationHandler;
         private volatile bool _IsStopping = false;
         private bool _IsDisposed = false;
-        private static readonly TimeSpan _SseHeartbeatInterval = TimeSpan.FromSeconds(30);
+        // The heartbeat of an idle stream, which also keeps its session alive: at most 30 seconds, and a third of the
+        // session timeout when that is shorter.
+        private TimeSpan _SseHeartbeatInterval => TimeSpan.FromSeconds(Math.Clamp(_SessionTimeoutSeconds / 3, 2, 30));
         private static readonly byte[] _SseConnectedPrelude = Encoding.UTF8.GetBytes(": connected\n\n");
         private static readonly byte[] _SseKeepAliveComment = Encoding.UTF8.GetBytes(": keep-alive\n\n");
 
@@ -1100,13 +1102,13 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Obsolete and does nothing. <c>notifications/cancelled</c> may only reference a request the sender issued, and
-        /// an MCP server issues no requests to clients, so the server has nothing it may cancel.
+        /// McpHttpServer sends no requests to clients, so it has nothing it may cancel.
         /// </summary>
         /// <param name="sessionId">Ignored.</param>
         /// <param name="requestId">Ignored.</param>
         /// <param name="reason">Ignored.</param>
         /// <returns>Always false.</returns>
-        [Obsolete("A server may only cancel requests it sent, and MCP servers send none. This method does nothing.")]
+        [Obsolete("A server may only cancel requests it sent, and McpHttpServer sends none. This method does nothing.")]
         public bool NotifyCancelled(string sessionId, object requestId, string? reason = null)
         {
             return false;
@@ -1641,7 +1643,7 @@ namespace Voltaic.Mcp
                 McpProtocolException rejection = envelope.Error != null
                     ? new McpProtocolException(envelope.Error.Code, envelope.Error.Message ?? "Invalid notification.")
                     : new McpProtocolException(-32600, $"Invalid Request: '{envelope.Method}' is a request and must include a string or integer id.");
-                await WriteJsonRpcErrorAsync(context, 400, null, rejection, token).ConfigureAwait(false);
+                await WriteJsonRpcErrorAsync(context, 400, null, rejection, token, omitId: !envelope.Message.TryGetProperty("id", out JsonElement _)).ConfigureAwait(false);
                 return;
             }
 
@@ -1697,6 +1699,9 @@ namespace Voltaic.Mcp
                 keepAliveStop.Cancel();
                 await keepAlive.ConfigureAwait(false);
             }
+
+            // A request counts as activity when it ends too, so a session is idle only after its last request finished.
+            connection.MarkActivity();
 
             if (mayIssueSession)
             {
@@ -1832,6 +1837,9 @@ namespace Voltaic.Mcp
         private void RegisterSession(ClientConnection connection)
         {
             connection.Caller = RpcCallContext.Current;
+
+            // A session is its own client for the rate limits.
+            StateOf(connection).RateLimitKey = "session|" + connection.SessionId;
             if (_Sessions.TryAdd(connection.SessionId, connection))
             {
                 // The client learns the session ID from the initialize response, and only then can open a stream that
@@ -2209,7 +2217,7 @@ namespace Voltaic.Mcp
                 McpProtocolException reported = resolveError.Code == -32022
                     ? McpProtocolException.UnsupportedProtocolVersion(metaProtocolVersion ?? context.Request.Headers[McpProtocol.ProtocolVersionHeader] ?? String.Empty, _Endpoint.SupportedVersions())
                     : resolveError;
-                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, reported, token).ConfigureAwait(false);
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, reported, token, omitId: incomingRequest != null && incomingRequest.Id == null).ConfigureAwait(false);
                 return true;
             }
 
@@ -2529,7 +2537,9 @@ namespace Voltaic.Mcp
             public string? ProtocolVersion { get; set; }
         }
 
-        private async Task WriteJsonRpcErrorAsync(HttpListenerContext context, int statusCode, object? id, McpProtocolException error, CancellationToken token)
+        // omitId: the rejected message was a notification (it has no ID), so the error response carries none, as the
+        // transport allows ("a JSON-RPC error response that has no id").
+        private async Task WriteJsonRpcErrorAsync(HttpListenerContext context, int statusCode, object? id, McpProtocolException error, CancellationToken token, bool omitId = false)
         {
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
 
@@ -2539,9 +2549,20 @@ namespace Voltaic.Mcp
                 Id = id
             };
 
+            string json = JsonSerializer.Serialize(response);
+            if (omitId && id == null)
+            {
+                System.Text.Json.Nodes.JsonObject? withoutId = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject;
+                if (withoutId != null)
+                {
+                    withoutId.Remove("id");
+                    json = withoutId.ToJsonString();
+                }
+            }
+
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "application/json";
-            byte[] buffer = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+            byte[] buffer = Encoding.UTF8.GetBytes(json);
             context.Response.ContentLength64 = buffer.Length;
             await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
             context.Response.Close();
@@ -2694,6 +2715,7 @@ namespace Voltaic.Mcp
             }
 
             List<string> responses = (await Task.WhenAll(pending).ConfigureAwait(false)).Where(json => json != null).Select(json => json!).ToList();
+            connection.MarkActivity();
 
             // A request that failed for a missing scope makes the whole response a 403 with the challenge, as
             // authorization errors require an HTTP status; the body still carries every response.
@@ -3087,6 +3109,13 @@ namespace Voltaic.Mcp
 
                     foreach (string sessionId in expiredSessions)
                     {
+                        // Checked again just before removal, so a request that arrived meanwhile keeps the session.
+                        if (!_Sessions.TryGetValue(sessionId, out ClientConnection? candidate)
+                            || candidate.LastActivity >= expirationTime || StateOf(candidate).HasRequestsInFlight)
+                        {
+                            continue;
+                        }
+
                         RemoveSession(sessionId);
                         LogMessage($"Expired session: {sessionId}");
                     }
