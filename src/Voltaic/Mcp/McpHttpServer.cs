@@ -52,10 +52,12 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Gets or sets how long a stateless (<c>2026-07-28</c>) request may run before its response turns into an SSE
-        /// stream that carries a keep-alive comment every interval. A keep-alive that cannot be written means the client
-        /// closed the stream, which that revision defines as cancellation, so the handler's token is cancelled. Default
-        /// is 2000. Minimum is 0 (no keep-alives, so a disconnect is noticed only when the response is written); maximum
-        /// is 600000.
+        /// stream that carries a keep-alive comment every interval, so a client that closed the stream (which that revision
+        /// defines as cancellation) is noticed while the handler runs. Default is 0: no keep-alives, so the response keeps
+        /// its exact HTTP status (for example 400 for <c>-32021</c>) and a closed stream is noticed, and the request
+        /// cancelled, at the next write (a progress or log notification, or the response). A value above 0 notices it
+        /// sooner, but once the first keep-alive is sent the status is 200 and a later error arrives as the final SSE
+        /// event. Minimum is 0; maximum is 600000.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
         public int ResponseKeepAliveMs
@@ -288,6 +290,18 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets whether the Voltaic-specific JSON-RPC endpoint (<c>rpcPath</c>, default <c>/rpc</c>) and its SSE
+        /// endpoint (<c>eventsPath</c>, default <c>/events</c>) are served. Default is true. When false, only the
+        /// Streamable HTTP endpoint (<c>mcpPath</c>) is served and the other two paths return 404. Set before
+        /// <c>StartAsync</c> or at any time; takes effect for the next request.
+        /// </summary>
+        public bool EnableLegacyEndpoints
+        {
+            get => _EnableLegacyEndpoints;
+            set => _EnableLegacyEndpoints = value;
+        }
+
+        /// <summary>
         /// Gets or sets the server version for MCP serverInfo.
         /// Default is "1.0.0".
         /// </summary>
@@ -430,7 +444,8 @@ namespace Voltaic.Mcp
         private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
         private readonly McpMessageProcessor _Processor;
-        private int _ResponseKeepAliveMs = 2000;
+        private int _ResponseKeepAliveMs = 0;
+        private volatile bool _EnableLegacyEndpoints = true;
         private Task? _CleanupTask;
         private int _SessionTimeoutSeconds = 300; // 5 minutes
         private int _MaxQueueSize = 100;
@@ -488,6 +503,12 @@ namespace Voltaic.Mcp
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
             _Endpoint = new McpEndpoint("Voltaic.Mcp.HttpServer");
             _Endpoint.ErrorLog = LogMessage;
+            // Registration changes are announced to initialized clients (notifications/{kind}/list_changed).
+            _Endpoint.ListChanged = kind =>
+            {
+                if (!_Endpoint.SupportsListChangedNotifications) return;
+                _ = McpServerNotifications.ListChangedAsync(Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
+            };
             _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage)
             {
                 RequestReceived = (request, session) =>
@@ -514,9 +535,10 @@ namespace Voltaic.Mcp
         /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
         /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
         /// receives the <c>resultType</c> that revision requires, and cacheable results receive
-        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-        /// serialized unmodified, so a custom method that must serve stateless clients should return an
-        /// <see cref="McpResult"/> subclass.
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+        /// receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+        /// handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+        /// revision (null answers <c>{}</c>).
         /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, object> handler)
@@ -538,9 +560,10 @@ namespace Voltaic.Mcp
         /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
         /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
         /// receives the <c>resultType</c> that revision requires, and cacheable results receive
-        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-        /// serialized unmodified, so a custom method that must serve stateless clients should return an
-        /// <see cref="McpResult"/> subclass.
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+        /// receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+        /// handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+        /// revision (null answers <c>{}</c>).
         /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, Task<object>> handler)
@@ -562,9 +585,10 @@ namespace Voltaic.Mcp
         /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
         /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
         /// receives the <c>resultType</c> that revision requires, and cacheable results receive
-        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-        /// serialized unmodified, so a custom method that must serve stateless clients should return an
-        /// <see cref="McpResult"/> subclass.
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+        /// receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+        /// handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+        /// revision (null answers <c>{}</c>).
         /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, CancellationToken, Task<object>> handler)
@@ -725,9 +749,10 @@ namespace Voltaic.Mcp
         /// When a request is served under the stateless 2026-07-28 revision, a result that derives from
         /// <see cref="McpResult"/> (for example <see cref="McpEmptyResult"/> or <see cref="McpToolCallResult"/>)
         /// receives the <c>resultType</c> that revision requires, and cacheable results receive
-        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-        /// serialized unmodified, so a custom method that must serve stateless clients should return an
-        /// <see cref="McpResult"/> subclass.
+        /// <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+        /// receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+        /// handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+        /// revision (null answers <c>{}</c>).
         /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when name or handler is null.</exception>
         public void RegisterMethod(string name, Func<RpcParameters?, RpcCallContext?, CancellationToken, Task<object>> handler)
@@ -897,14 +922,19 @@ namespace Voltaic.Mcp
                 if (!String.IsNullOrEmpty(_McpPath))
                     LogMessage($"MCP Streamable HTTP endpoint: {_McpPath}");
 
-                while (!_TokenSource.Token.IsCancellationRequested)
+                CancellationToken serverToken = _TokenSource.Token;
+                while (!serverToken.IsCancellationRequested)
                 {
-                    HttpListenerContext? context = await AcceptContextAsync(_TokenSource.Token).ConfigureAwait(false);
+                    HttpListenerContext? context = await AcceptContextAsync(serverToken).ConfigureAwait(false);
                     if (context != null)
                     {
-                        _ = Task.Run(() => HandleRequestAsync(context, _TokenSource.Token));
+                        _ = Task.Run(() => HandleRequestAsync(context, serverToken));
                     }
                 }
+            }
+            catch (Exception ex) when (_IsStopping && (ex is ObjectDisposedException || ex is OperationCanceledException || ex is HttpListenerException))
+            {
+                // Stopping.
             }
             catch (Exception ex)
             {
@@ -1111,6 +1141,7 @@ namespace Voltaic.Mcp
 
             foreach (ClientConnection connection in _Sessions.Values)
             {
+                (connection.ProtocolState as McpSessionState)?.CancelAll();
                 connection.Dispose();
             }
             _Sessions.Clear();
@@ -1400,11 +1431,11 @@ namespace Voltaic.Mcp
                     {
                         await HandleMcpRequestAsync(context, requestBody, token).ConfigureAwait(false);
                     }
-                    else if (IsEndpointPath(path, _RpcPath))
+                    else if (_EnableLegacyEndpoints && IsEndpointPath(path, _RpcPath))
                     {
                         await HandleRpcRequestAsync(context, requestBody, token).ConfigureAwait(false);
                     }
-                    else if (IsEndpointPath(path, _EventsPath))
+                    else if (_EnableLegacyEndpoints && IsEndpointPath(path, _EventsPath))
                     {
                         await HandleSseRequestAsync(context, token).ConfigureAwait(false);
                     }
@@ -1559,13 +1590,15 @@ namespace Voltaic.Mcp
                 prime = negotiated != null && String.CompareOrdinal(negotiated, McpProtocol.ProtocolVersion20251125) >= 0;
             }
 
+            using CancellationTokenSource requestTokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+
+            // On 2026-07-28 a client that closes the response stream cancels the request (found by any failed write).
+            Action? onDisconnect = statelessVersion != null ? () => requestTokenSource.Cancel() : null;
             McpHttpResponseWriter writer = new McpHttpResponseWriter(context, response =>
             {
                 HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
                 if (sessionHeader) SetSessionIdHeaders(response, connection.SessionId);
-            }, openLog, prime, _SseRetryIntervalMs);
-
-            using CancellationTokenSource requestTokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+            }, openLog, prime, _SseRetryIntervalMs, onDisconnect);
             using CancellationTokenSource keepAliveStop = new CancellationTokenSource();
             Task keepAlive = statelessVersion != null && envelope.Kind == McpEnvelopeKind.Request && _ResponseKeepAliveMs > 0
                 ? RunKeepAliveAsync(writer, requestTokenSource, keepAliveStop.Token)
@@ -1682,9 +1715,20 @@ namespace Voltaic.Mcp
         }
 
         // The absolute URL of the protected resource metadata, when it is configured.
+        // The metadata URL clients discover from a challenge (RFC 9728): derived from the configured resource
+        // identifier, which is the server's public URL, so it stays correct behind a TLS-terminating proxy. The
+        // well-known path is inserted between the authority and the resource's path.
         private string? ResourceMetadataUrl(HttpListenerContext context)
         {
-            if (_ProtectedResourceMetadata == null || context.Request.Url == null) return null;
+            if (_ProtectedResourceMetadata == null) return null;
+            if (Uri.TryCreate(_ProtectedResourceMetadata.Resource, UriKind.Absolute, out Uri? resource)
+                && (resource.Scheme == Uri.UriSchemeHttps || resource.Scheme == Uri.UriSchemeHttp))
+            {
+                string resourcePath = resource.AbsolutePath.TrimEnd('/');
+                return resource.GetLeftPart(UriPartial.Authority) + McpProtocol.ProtectedResourceMetadataPath + resourcePath;
+            }
+
+            if (context.Request.Url == null) return null;
             return context.Request.Url.GetLeftPart(UriPartial.Authority) + McpProtocol.ProtectedResourceMetadataPath;
         }
 
@@ -1785,7 +1829,9 @@ namespace Voltaic.Mcp
                     return;
                 }
 
-                if (!ValidateProtocolVersionHeader(context))
+                // initialize negotiates the version itself, so a header on it (for example from a client probing for
+                // 2026-07-28) is not checked against the session.
+                if (!IsInitializeRequest(incomingRequest) && !ValidateProtocolVersionHeader(context))
                 {
                     await SendTextResponseAsync(context, 400, "Unsupported MCP-Protocol-Version", token).ConfigureAwait(false);
                     return;
@@ -1891,7 +1937,8 @@ namespace Voltaic.Mcp
                     ? $"MCP SSE stream {streamLog.StreamId} resumed after event {resumeAfter} for session {sessionId}"
                     : $"MCP SSE connection established for session {sessionId} (stream {streamLog.StreamId})");
 
-                using CancellationTokenSource streamTokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+                // The stream ends when the server stops, a newer connection takes the stream over, or the session ends.
+                using CancellationTokenSource streamTokenSource = CancellationTokenSource.CreateLinkedTokenSource(token, StateOf(connection).Closed);
                 CancellationToken streamToken = streamTokenSource.Token;
                 streamLog.Claim(streamTokenSource);
                 try
@@ -1906,15 +1953,31 @@ namespace Voltaic.Mcp
                     }
                     else
                     {
-                        // Priming event: an event ID and an empty data field, so the client can reconnect with
-                        // Last-Event-ID, plus the reconnection delay (MCP 2025-11-25).
                         string primingId = streamLog.CurrentEventId;
-                        await WriteSseAsync(context.Response, $"id: {primingId}\nretry: {_SseRetryIntervalMs}\ndata:\n\n", token).ConfigureAwait(false);
                         SseStreamLog.TryParseEventId(primingId, out string _, out lastSent);
+
+                        // Priming event: an event ID and an empty data field, so the client can reconnect with
+                        // Last-Event-ID, plus the reconnection delay. MCP 2025-11-25 introduced it; earlier sessions get
+                        // event IDs on their messages only.
+                        _SessionVersions.TryGetValue(sessionId, out string? streamVersion);
+                        if (streamVersion != null && String.CompareOrdinal(streamVersion, McpProtocol.ProtocolVersion20251125) >= 0)
+                        {
+                            await WriteSseAsync(context.Response, $"id: {primingId}\nretry: {_SseRetryIntervalMs}\ndata:\n\n", token).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            // A comment (ignored by SSE clients) sends the response headers now, so the client knows the
+                            // stream is open without waiting for the first message.
+                            await WriteSseAsync(context.Response, ": stream open\n\n", token).ConfigureAwait(false);
+                        }
                     }
 
                     while (!streamToken.IsCancellationRequested)
                     {
+                        // A session that was terminated or expired ends its streams, so the client learns (from the
+                        // 404 on reconnecting) that it must start a new session.
+                        if (!_Sessions.ContainsKey(sessionId)) break;
+
                         foreach (SseLoggedEvent pending in streamLog.After(lastSent))
                         {
                             await WriteSseAsync(context.Response, $"id: {pending.EventId}\ndata: {pending.Data}\n\n", token).ConfigureAwait(false);
@@ -2094,6 +2157,20 @@ namespace Voltaic.Mcp
             CancellationToken token)
         {
             string? bodyMethod = incomingRequest?.Method;
+
+            // The body must be a single JSON-RPC request or notification: 2026-07-28 has no batches, and clients must
+            // not send responses.
+            if (IsBatchBody(requestBody))
+            {
+                await WriteJsonRpcErrorAsync(context, 400, null, new McpProtocolException(-32600, $"Invalid Request: protocol version {protocolVersion} does not allow JSON-RPC batches."), token).ConfigureAwait(false);
+                return;
+            }
+
+            if (String.IsNullOrEmpty(bodyMethod))
+            {
+                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, new McpProtocolException(-32600, $"Invalid Request: the body must be a single JSON-RPC request or notification; clients must not send responses in protocol version {protocolVersion}."), token).ConfigureAwait(false);
+                return;
+            }
 
             // The 2026-07-28 revision defines no header requirements for notification POSTs, so the routing
             // header checks below apply to requests only. A header that is present must still agree with the
@@ -2496,6 +2573,8 @@ namespace Voltaic.Mcp
             context.Response.Close();
         }
 
+        // A handshake-era MCP-Protocol-Version header must name a version this server negotiates (the handshake cap
+        // applies) and, on a session, the version that session negotiated; anything else gets 400.
         private bool ValidateProtocolVersionHeader(HttpListenerContext context)
         {
             string? version = context.Request.Headers[McpProtocol.ProtocolVersionHeader];
@@ -2504,7 +2583,15 @@ namespace Voltaic.Mcp
                 return true;
             }
 
-            return McpProtocol.IsSupportedVersion(version);
+            if (!McpProtocol.IsHandshakeVersion(version) || !_Endpoint.SupportedVersions().Contains(version!)) return false;
+
+            string? sessionId = GetSessionId(context);
+            if (!String.IsNullOrEmpty(sessionId) && _SessionVersions.TryGetValue(sessionId!, out string? negotiated) && !String.IsNullOrEmpty(negotiated))
+            {
+                return StringComparer.Ordinal.Equals(version, negotiated);
+            }
+
+            return true;
         }
 
         private static bool IsJsonContentType(string? contentType)
@@ -2560,8 +2647,17 @@ namespace Voltaic.Mcp
             if (StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath)) return true;
 
             string mcpPath = _McpPath.TrimEnd('/');
-            return !String.IsNullOrEmpty(mcpPath)
-                && StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + mcpPath);
+            if (!String.IsNullOrEmpty(mcpPath) && StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + mcpPath)) return true;
+
+            // The path derived from the configured resource identifier, which a challenge advertises.
+            McpProtectedResourceMetadata? metadata = _ProtectedResourceMetadata;
+            if (metadata != null && Uri.TryCreate(metadata.Resource, UriKind.Absolute, out Uri? resource))
+            {
+                string resourcePath = resource.AbsolutePath.TrimEnd('/');
+                if (resourcePath.Length > 0 && StringComparer.OrdinalIgnoreCase.Equals(trimmed, McpProtocol.ProtectedResourceMetadataPath + resourcePath)) return true;
+            }
+
+            return false;
         }
 
         private async Task HandleProtectedResourceMetadataAsync(HttpListenerContext context, CancellationToken token)
@@ -2659,7 +2755,7 @@ namespace Voltaic.Mcp
             }
             else
             {
-                connection = CreateProvisionalConnection(requireInitialize: false);
+                connection = CreateProvisionalConnection(requireInitialize: true);
                 isProvisional = true;
             }
 
@@ -2670,8 +2766,8 @@ namespace Voltaic.Mcp
                 ? $"RPC request without a session: {requestBody}"
                 : $"RPC request from session {sessionId}: {requestBody}");
 
-            // Voltaic's /rpc endpoint is plain request/response: a sessionless call runs on a fresh state without the
-            // initialization requirement, and only a successful initialize creates a session.
+            // /rpc follows the MCP lifecycle like every transport: without a session only initialize and ping are
+            // served (other requests get -32600), and a successful initialize creates the session.
             await DispatchSingleAsync(context, requestBody, connection, hasSession, isProvisional, null, token).ConfigureAwait(false);
         }
 

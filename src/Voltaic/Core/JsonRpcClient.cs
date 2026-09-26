@@ -309,6 +309,17 @@ namespace Voltaic.Core
                 }
                 _PendingRequests.Clear();
 
+                // Close the connection so the server sees it end.
+                try
+                {
+                    _Stream?.Close();
+                    _TcpClient?.Close();
+                }
+                catch (Exception ex) when (ex is IOException || ex is ObjectDisposedException || ex is SocketException)
+                {
+                }
+
+                OnDisconnected();
                 LogMessage("Disconnected");
                 RaiseDisconnected("Client disconnected");
             }
@@ -447,6 +458,11 @@ namespace Voltaic.Core
         private protected ClientRequestDispatcher RequestDispatcher => _RequestDispatcher;
 
         // Called after the connection opened; return false to disconnect and fail ConnectAsync.
+        // Called after the connection closes; derived clients stop connection-scoped work.
+        private protected virtual void OnDisconnected()
+        {
+        }
+
         private protected virtual Task<bool> OnConnectedAsync(CancellationToken token)
         {
             return Task.FromResult(true);
@@ -622,7 +638,7 @@ namespace Voltaic.Core
             }
         }
 
-        private void LogMessage(string message)
+        private protected void LogMessage(string message)
         {
             string formattedMessage = $"[{DateTime.UtcNow:HH:mm:ss.fffZ}] {message}";
 

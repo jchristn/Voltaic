@@ -308,8 +308,16 @@ namespace Voltaic.Core
                     TcpClient?.Dispose();
                     WebSocket?.Dispose();
 
-                    // Dispose queue resources
-                    _Semaphore.Dispose();
+                    // Wake a reader waiting for a notification so it sees the connection closed (DequeueAsync returns
+                    // null). The semaphore is not disposed: a waiter that is being cancelled at the same moment could
+                    // otherwise never complete. It holds no unmanaged handle, so nothing leaks.
+                    try
+                    {
+                        _Semaphore.Release();
+                    }
+                    catch (SemaphoreFullException)
+                    {
+                    }
                 }
             }
         }

@@ -133,10 +133,10 @@ namespace Test.Shared
 
                     Case(suiteId, "HttpClientAcceptsLegacyPong", "McpHttpClient connects to and pings a server that answers ping with \"pong\" as Voltaic 1.x did", async ct =>
                     {
-                        await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
-                        {
-                            server.RegisterMethod("ping", _ => "pong");
-                        }).ConfigureAwait(false);
+                        // A 1.x server answered ping with "pong"; Voltaic 2.x servers never do, so a fake server stands in.
+                        using FakeStreamableHttpServer fixture = new FakeStreamableHttpServer();
+                        fixture.RequestHandler = (method, idJson, body, response, token) => FakeStreamableHttpServer.WriteJsonAsync(response,
+                            "{\"jsonrpc\":\"2.0\",\"id\":" + idJson + ",\"result\":" + (method == "ping" ? "\"pong\"" : "{}") + "}", token);
 
                         using McpHttpClient streamable = new McpHttpClient();
                         bool streamableConnected = await streamable.ConnectStreamableAsync(fixture.BaseUrl, token: ct).ConfigureAwait(false);

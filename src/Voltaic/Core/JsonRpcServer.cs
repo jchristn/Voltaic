@@ -224,7 +224,7 @@ namespace Voltaic.Core
         /// <param name="parameters">The parameters to pass with the notification. Can be null.</param>
         /// <param name="token">Cancellation token for the operation.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        public async Task BroadcastNotificationAsync(string method, object? parameters = null, CancellationToken token = default)
+        public virtual async Task BroadcastNotificationAsync(string method, object? parameters = null, CancellationToken token = default)
         {
             JsonRpcRequest notification = new JsonRpcRequest
             {

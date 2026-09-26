@@ -189,18 +189,19 @@ namespace Test.Shared
                         TestAssert.Equal(1, fixture.Server.GetActiveSessions().Count, "Exactly one session exists.");
                     }),
 
-                    Case(suiteId, "SessionlessRpcRequestsWorkWithoutSessions", "Sessionless tools/list and tools/call on /rpc succeed without creating sessions", async ct =>
+                    Case(suiteId, "SessionlessRpcRequestsFollowTheLifecycle", "Sessionless /rpc requests other than initialize and ping are rejected with -32600 and create no session; ping is answered", async ct =>
                     {
                         MarkerProbe probe = new MarkerProbe();
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server => RegisterMarker(server, probe)).ConfigureAwait(false);
 
                         RpcResult list = await fixture.PostJsonRpcAsync("/rpc/", "tools/list", new { }, 1, null, ct).ConfigureAwait(false);
                         RpcResult call = await fixture.PostJsonRpcAsync("/rpc/", "tools/call", new { name = "marker", arguments = new { } }, 2, null, ct).ConfigureAwait(false);
+                        RpcResult ping = await fixture.PostJsonRpcAsync("/rpc/", "ping", null, 3, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.OK, list.StatusCode);
-                        TestAssert.Equal(HttpStatusCode.OK, call.StatusCode);
-                        TestAssert.Equal(1, probe.Count, "The tool ran.");
-                        TestAssert.True(list.SessionId == null && call.SessionId == null, "No session header is returned.");
+                        TestAssert.Equal(-32600, list.Error.Get("code").Int(), "tools/list before initialize is rejected.");
+                        TestAssert.Equal(-32600, call.Error.Get("code").Int(), "tools/call before initialize is rejected.");
+                        TestAssert.Equal(0, probe.Count, "The tool did not run.");
+                        TestAssert.True(ping.Result.IsObject, "ping is answered before initialize.");
                         TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "No session is created.");
                     }),
 

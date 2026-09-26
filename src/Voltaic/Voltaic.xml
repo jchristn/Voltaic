@@ -5618,6 +5618,36 @@
             </summary>
             <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpClient.ShutdownGracePeriodMs">
+            <summary>
+            Gets or sets how long <see cref="M:Voltaic.Mcp.McpClient.Shutdown"/> waits for the server to exit after closing its input, in
+            milliseconds. Default is 5000. Minimum is 0; maximum is 300000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 300000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpClient.TerminateGracePeriodMs">
+            <summary>
+            Gets or sets how long <see cref="M:Voltaic.Mcp.McpClient.Shutdown"/> waits for the server to exit after SIGTERM (Linux and macOS)
+            before killing it, in milliseconds. Default is 2000. Minimum is 0; maximum is 300000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 300000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpClient.PingIntervalMs">
+            <summary>
+            Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
+            the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="P:Voltaic.Mcp.McpClient.PingTimeoutMs"/>
+            is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
+            <c>initialize</c>.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpClient.PingTimeoutMs">
+            <summary>
+            Gets or sets how long the client waits for the server to answer its periodic ping, in milliseconds. Default
+            is 10000. Minimum is 100; maximum is 600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpClient.ClientName">
             <summary>
             Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.Client</c>.
@@ -5686,7 +5716,10 @@
         </member>
         <member name="M:Voltaic.Mcp.McpClient.Shutdown">
             <summary>
-            Shuts down the MCP server gracefully by closing stdin.
+            Shuts down the MCP server as the stdio transport specifies: closes its standard input, waits up to
+            <see cref="P:Voltaic.Mcp.McpClient.ShutdownGracePeriodMs"/> for it to exit, then (on Linux and macOS) sends SIGTERM and waits up to
+            <see cref="P:Voltaic.Mcp.McpClient.TerminateGracePeriodMs"/>, and finally kills the process tree. Windows has no SIGTERM, so the kill
+            follows the first wait there.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpClient.Dispose">
@@ -5724,7 +5757,7 @@
             </summary>
             <exception cref="T:System.InvalidOperationException">Thrown when the server answers with an error, or chooses a version this client does not support or a stateless-era version.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpClientHandshake.CapabilitiesFor(Voltaic.Core.ClientRequestDispatcher,System.Collections.Generic.IReadOnlyDictionary{System.String,System.Object})">
+        <member name="M:Voltaic.Mcp.McpClientHandshake.CapabilitiesFor(Voltaic.Core.ClientRequestDispatcher,System.Collections.Generic.IReadOnlyDictionary{System.String,System.Object},System.String)">
             <summary>
             Builds the client capabilities for the request handlers a client has registered.
             </summary>
@@ -6269,6 +6302,11 @@
             Gets the ID as a response ID value (a <see cref="T:System.Text.Json.JsonElement"/>), or null.
             </summary>
         </member>
+        <member name="M:Voltaic.Mcp.McpEnvelope.IsInteger(System.Text.Json.JsonElement)">
+            <summary>
+            Returns true for a JSON number with no fractional part.
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpEnvelope.Parse(System.Text.Json.JsonElement)">
             <summary>
             Validates one message. The element is cloned, so it outlives its document.
@@ -6472,6 +6510,22 @@
             Gets or sets the client version reported in the <c>clientInfo</c> of the <c>initialize</c> handshake
             and in the <c>_meta</c> client info of stateless (2026-07-28) requests. Default is <c>1.0.0</c>.
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.PingIntervalMs">
+            <summary>
+            Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
+            the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="P:Voltaic.Mcp.McpHttpClient.PingTimeoutMs"/>
+            is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
+            <c>initialize</c>.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.PingTimeoutMs">
+            <summary>
+            Gets or sets how long the client waits for the server to answer its periodic ping, in milliseconds. Default
+            is 10000. Minimum is 100; maximum is 600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.IsStateless">
             <summary>
@@ -6813,12 +6867,13 @@
             <c>Last-Event-ID</c>; events keep being logged after the connection breaks. Thread-safe.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpResponseWriter.#ctor(System.Net.HttpListenerContext,System.Action{System.Net.HttpListenerResponse},System.Func{Voltaic.Mcp.SseStreamLog},System.Boolean,System.Int32)">
+        <member name="M:Voltaic.Mcp.McpHttpResponseWriter.#ctor(System.Net.HttpListenerContext,System.Action{System.Net.HttpListenerResponse},System.Func{Voltaic.Mcp.SseStreamLog},System.Boolean,System.Int32,System.Action)">
             <param name="context">The request context.</param>
             <param name="prepareHeaders">Sets CORS and session headers; called once, just before the first write.</param>
             <param name="openLog">Opens the session stream log that makes the SSE stream resumable, or null for a stream without event IDs (stateless requests).</param>
             <param name="prime">True to start the stream with a priming event (MCP 2025-11-25 and later).</param>
             <param name="retryMs">The reconnection delay announced with the priming event.</param>
+            <param name="onDisconnect">Called once when a write finds the client gone (for stateless requests, the disconnect cancels the request), or null.</param>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpResponseWriter.IsStreaming">
             <summary>
@@ -6870,10 +6925,12 @@
         <member name="P:Voltaic.Mcp.McpHttpServer.ResponseKeepAliveMs">
             <summary>
             Gets or sets how long a stateless (<c>2026-07-28</c>) request may run before its response turns into an SSE
-            stream that carries a keep-alive comment every interval. A keep-alive that cannot be written means the client
-            closed the stream, which that revision defines as cancellation, so the handler's token is cancelled. Default
-            is 2000. Minimum is 0 (no keep-alives, so a disconnect is noticed only when the response is written); maximum
-            is 600000.
+            stream that carries a keep-alive comment every interval, so a client that closed the stream (which that revision
+            defines as cancellation) is noticed while the handler runs. Default is 0: no keep-alives, so the response keeps
+            its exact HTTP status (for example 400 for <c>-32021</c>) and a closed stream is noticed, and the request
+            cancelled, at the next write (a progress or log notification, or the response). A value above 0 notices it
+            sooner, but once the first keep-alive is sent the status is 200 and a later error arrives as the final SSE
+            event. Minimum is 0; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
         </member>
@@ -7013,6 +7070,14 @@
             Default is "Voltaic.Mcp.HttpServer".
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.EnableLegacyEndpoints">
+            <summary>
+            Gets or sets whether the Voltaic-specific JSON-RPC endpoint (<c>rpcPath</c>, default <c>/rpc</c>) and its SSE
+            endpoint (<c>eventsPath</c>, default <c>/events</c>) are served. Default is true. When false, only the
+            Streamable HTTP endpoint (<c>mcpPath</c>) is served and the other two paths return 404. Set before
+            <c>StartAsync</c> or at any time; takes effect for the next request.
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.ServerVersion">
             <summary>
             Gets or sets the server version for MCP serverInfo.
@@ -7132,9 +7197,10 @@
             When a request is served under the stateless 2026-07-28 revision, a result that derives from
             <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
             receives the <c>resultType</c> that revision requires, and cacheable results receive
-            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-            serialized unmodified, so a custom method that must serve stateless clients should return an
-            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+            receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+            handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+            revision (null answers <c>{}</c>).
             </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
@@ -7150,9 +7216,10 @@
             When a request is served under the stateless 2026-07-28 revision, a result that derives from
             <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
             receives the <c>resultType</c> that revision requires, and cacheable results receive
-            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-            serialized unmodified, so a custom method that must serve stateless clients should return an
-            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+            receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+            handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+            revision (null answers <c>{}</c>).
             </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
@@ -7168,9 +7235,10 @@
             When a request is served under the stateless 2026-07-28 revision, a result that derives from
             <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
             receives the <c>resultType</c> that revision requires, and cacheable results receive
-            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-            serialized unmodified, so a custom method that must serve stateless clients should return an
-            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+            receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+            handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+            revision (null answers <c>{}</c>).
             </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
@@ -7288,9 +7356,10 @@
             When a request is served under the stateless 2026-07-28 revision, a result that derives from
             <see cref="T:Voltaic.Mcp.McpResult"/> (for example <see cref="T:Voltaic.Mcp.McpEmptyResult"/> or <see cref="T:Voltaic.Mcp.McpToolCallResult"/>)
             receives the <c>resultType</c> that revision requires, and cacheable results receive
-            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other result object is
-            serialized unmodified, so a custom method that must serve stateless clients should return an
-            <see cref="T:Voltaic.Mcp.McpResult"/> subclass.
+            <c>ttlMs</c> and <c>cacheScope</c>, unless the handler already set them. Any other object result also
+            receives <c>resultType</c> and the server's identity in <c>_meta</c>. Every MCP result is a JSON object: a
+            handler that returns something else (a string, number, array, or null) produces <c>-32603</c> on every
+            revision (null answers <c>{}</c>).
             </remarks>
             <exception cref="T:System.ArgumentNullException">Thrown when name or handler is null.</exception>
         </member>
@@ -7751,8 +7820,9 @@
         </member>
         <member name="F:Voltaic.Mcp.McpInsufficientScopeException.ErrorCode">
             <summary>
-            The JSON-RPC error code used for insufficient scope: <c>-32003</c>, in the implementation-defined server
-            error range.
+            The JSON-RPC error code used for insufficient scope: <c>403</c>, an application-defined code outside the
+            range JSON-RPC reserves (-32768 to -32000). MCP defines no code for this condition, and MCP 2026-07-28 asks
+            implementations not to use -32000 to -32019, which earlier drafts used.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpInsufficientScopeException.#ctor(System.String,System.String)">
@@ -7879,7 +7949,7 @@
             <paramref name="send"/>, which must serialize writes.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAndSerializeAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAndSerializeAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task})">
             <summary>
             Handles one validated message and returns its serialized response, or null when there is nothing to send
             (a notification, a client response, or a request the client cancelled).
@@ -7890,8 +7960,9 @@
             <param name="statelessResolved">True when the transport resolved the era itself (HTTP), so <c>_meta</c> is not consulted again.</param>
             <param name="notify">The channel for notifications related to this request, or null.</param>
             <param name="token">The transport's cancellation token.</param>
+            <param name="rawSend">The stream transport's writer, used unchanged for a stateless request's notifications, or null.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task})">
             <summary>
             Handles one validated message and returns the response and the era it was served under, or null when
             nothing is sent.
@@ -7957,6 +8028,37 @@
             <summary>
             Gets or sets an opaque server-owned state string. Clients must echo it verbatim on retry
             and must not inspect, parse, or modify it. Null when the server needs no echoed state.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpPinger">
+            <summary>
+            Sends a <c>ping</c> at a fixed interval to check that the other side of a connection still answers, as the MCP
+            ping utility recommends. A ping that fails or times out is logged; the connection itself is left to the
+            transport. Thread-safe; dispose to stop.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpPinger.Start(System.Int32,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Boolean}},System.Action{System.String})">
+            <summary>
+            Starts pinging every <paramref name="intervalMs"/> milliseconds, or returns null when the interval is 0.
+            </summary>
+            <param name="intervalMs">The interval; 0 disables pinging.</param>
+            <param name="ping">Sends one ping and returns true when it was answered in time.</param>
+            <param name="log">Receives a message when a ping is not answered.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpPinger.Dispose">
+            <summary>
+            Stops pinging.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpProcessSignals">
+            <summary>
+            Sends SIGTERM to a child process on Linux and macOS, the step the MCP stdio shutdown sequence asks for between
+            closing the server's input and killing it. Windows has no SIGTERM. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProcessSignals.TryTerminate(System.Diagnostics.Process)">
+            <summary>
+            Sends SIGTERM to <paramref name="process"/>. Returns false on Windows, or when the signal could not be sent.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpPrompt">
@@ -8748,6 +8850,79 @@
             or null when no caching guidance is provided.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpSchemaDocument">
+            <summary>
+            A schema document prepared for validation: its dialect, and the targets of <c>$ref</c> and
+            <c>$dynamicRef</c> within it (JSON pointers, <c>$anchor</c> and <c>$dynamicAnchor</c> names, and embedded
+            resources identified by <c>$id</c>). References that leave the document cannot be resolved; schemas that use
+            them are rejected rather than treated as permissive. Thread-safe after construction.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpSchemaDocument.Draft202012">
+            <summary>
+            The default dialect (JSON Schema 2020-12), used when a schema has no <c>$schema</c>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.#ctor(System.Text.Json.JsonElement)">
+            <summary>
+            Indexes a schema.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaDocument.Root">
+            <summary>
+            Gets the root schema.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.IsSupportedDialect(System.String)">
+            <summary>
+            Returns true when <paramref name="dialect"/> (a <c>$schema</c> value, or null for the default) is a dialect
+            the validator implements: JSON Schema 2020-12 (the MCP default) or draft-07.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaDocument.Dialect">
+            <summary>
+            Returns the root's <c>$schema</c> value, or null when absent.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.FindUnresolvedReference">
+            <summary>
+            Returns the first <c>$ref</c> or <c>$dynamicRef</c> that cannot be resolved within the document, or null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.TryResolve(System.String,System.Text.Json.JsonElement@)">
+            <summary>
+            Resolves a <c>$ref</c>: a JSON pointer (<c>#/...</c>), an anchor (<c>#name</c>), or an embedded resource
+            named by its <c>$id</c> (absolute or relative to the root <c>$id</c>), optionally followed by a fragment.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.TryResolveDynamic(System.String,System.Text.Json.JsonElement@)">
+            <summary>
+            Resolves a <c>$dynamicRef</c>. Within one document the outermost <c>$dynamicAnchor</c> of that name is the
+            dynamic scope's target; a reference without a matching dynamic anchor resolves like <c>$ref</c>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpSchemaEvaluated">
+            <summary>
+            The object properties and array items of one instance that keywords of a schema evaluated successfully, used
+            by <c>unevaluatedProperties</c> and <c>unevaluatedItems</c> (JSON Schema 2020-12 annotation collection). Not
+            thread-safe; each evaluation uses its own instances.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaEvaluated.Properties">
+            <summary>
+            Gets the names of evaluated properties.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaEvaluated.Items">
+            <summary>
+            Gets the indexes of evaluated items.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaEvaluated.Merge(Voltaic.Mcp.McpSchemaEvaluated)">
+            <summary>
+            Adds the annotations of a subschema that validated the same instance.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpSchemaValidator">
             <summary>
             Validates JSON values (tool arguments and structured tool output) against a JSON Schema, operating
@@ -8759,10 +8934,14 @@
             <c>contains</c>, <c>minContains</c>, <c>maxContains</c>, <c>minItems</c>, <c>maxItems</c>,
             <c>uniqueItems</c>, <c>minLength</c>, <c>maxLength</c>, <c>pattern</c>, <c>minimum</c>, <c>maximum</c>,
             <c>exclusiveMinimum</c>, <c>exclusiveMaximum</c>, <c>multipleOf</c>, <c>allOf</c>, <c>anyOf</c>,
-            <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>, local <c>$ref</c> JSON pointers
-            (such as <c>#/$defs/name</c> and <c>#/definitions/name</c>), and boolean schemas. Unknown keywords
-            (annotations such as <c>format</c>, <c>description</c>, or <c>x-mcp-header</c>) are ignored, and a
-            malformed keyword is ignored on its own without disabling the rest of the schema.
+            <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>, <c>unevaluatedProperties</c>,
+            <c>unevaluatedItems</c>, <c>$ref</c> and <c>$dynamicRef</c> within the schema (JSON pointers such as
+            <c>#/$defs/name</c>, <c>$anchor</c> and <c>$dynamicAnchor</c> names, and embedded resources identified by
+            <c>$id</c>), draft-07 <c>dependencies</c> and <c>definitions</c>, and boolean schemas. The dialect is the
+            schema's <c>$schema</c> (2020-12 by default; draft-07 is also supported); another dialect, or a reference that
+            cannot be resolved within the schema, is reported as an error rather than validated permissively. Annotation
+            keywords (such as <c>format</c>, <c>description</c>, or <c>x-mcp-header</c>) are ignored, and a malformed
+            keyword is ignored on its own without disabling the rest of the schema.
             Thread safety: all members are safe for concurrent use.
             </summary>
         </member>
@@ -8777,6 +8956,14 @@
             <param name="valueJson">The raw JSON of the value, or null when the value is absent.</param>
             <param name="context">A human-readable context prefix for error messages, such as <c>Tool 'x' arguments</c>.</param>
             <exception cref="T:Voltaic.Mcp.McpProtocolException">Thrown when validation fails; the message names the failing path.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaValidator.CheckSchema(System.Object)">
+            <summary>
+            Checks that a schema can be validated as written: its <c>$schema</c> dialect is supported (JSON Schema
+            2020-12, the default, or draft-07) and every <c>$ref</c> and <c>$dynamicRef</c> resolves within it.
+            Returns a description of the first problem, or null when the schema is usable.
+            </summary>
+            <param name="schema">The schema: a <see cref="T:System.Text.Json.JsonElement"/>, a JSON string, or any serializable object.</param>
         </member>
         <member name="T:Voltaic.Mcp.McpServer">
             <summary>
@@ -8846,6 +9033,21 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpServer.PingIntervalMs">
+            <summary>
+            Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
+            check that the connection is healthy (MCP ping utility); a ping that is not answered within
+            <see cref="P:Voltaic.Mcp.McpServer.PingTimeoutMs"/> is logged. Default is 30000. 0 disables pinging. Maximum is 3600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpServer.PingTimeoutMs">
+            <summary>
+            Gets or sets how long the server waits for a client to answer its ping, in milliseconds. Default is 10000.
+            Minimum is 100; maximum is 600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
         </member>
         <member name="E:Voltaic.Mcp.McpServer.Log">
             <summary>
@@ -9250,7 +9452,7 @@
             Returns the in-flight request that carries the progress token, or null.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpSessionState.CancelAll">
+        <member name="M:Voltaic.Mcp.McpSessionState.StartPinging(System.Int32,System.Int32,System.Action{System.String})">
             <summary>
             Cancels every in-flight request, for example when the connection closes.
             </summary>
@@ -9430,6 +9632,22 @@
             </summary>
             <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpTcpClient.PingIntervalMs">
+            <summary>
+            Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
+            the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="P:Voltaic.Mcp.McpTcpClient.PingTimeoutMs"/>
+            is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
+            <c>initialize</c>.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpClient.PingTimeoutMs">
+            <summary>
+            Gets or sets how long the client waits for the server to answer its periodic ping, in milliseconds. Default
+            is 10000. Minimum is 100; maximum is 600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpTcpClient.ClientName">
             <summary>
             Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.TcpClient</c>.
@@ -9529,6 +9747,21 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.PingIntervalMs">
+            <summary>
+            Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
+            check that the connection is healthy (MCP ping utility); a ping that is not answered within
+            <see cref="P:Voltaic.Mcp.McpTcpServer.PingTimeoutMs"/> is logged. Default is 30000. 0 disables pinging. Maximum is 3600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.PingTimeoutMs">
+            <summary>
+            Gets or sets how long the server waits for a client to answer its ping, in milliseconds. Default is 10000.
+            Minimum is 100; maximum is 600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.#ctor(System.Net.IPAddress,System.Int32,System.Boolean)">
             <summary>
@@ -9815,6 +10048,18 @@
             <see cref="T:Voltaic.Core.JsonRpcServer"/>, so a derived class that calls this method gets MCP tools rather than
             bare methods. The constructor calls <see cref="M:Voltaic.Mcp.McpTcpServer.RegisterDiagnosticTools"/> directly.
             </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.BroadcastNotificationAsync(System.String,System.Object,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously broadcasts a notification to connected clients that completed <c>initialize</c> (MCP sends
+            nothing but pings before it). A client whose negotiated revision does not define <paramref name="method"/>
+            is skipped, and the notification is reduced to what each client's revision defines.
+            </summary>
+            <param name="method">The name of the notification method. Must not be null or whitespace.</param>
+            <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that represents the asynchronous operation.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="method"/> is null or whitespace.</exception>
         </member>
         <member name="T:Voltaic.Mcp.McpToolCallContext">
              <summary>
@@ -10355,6 +10600,22 @@
             </summary>
             <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsClient.PingIntervalMs">
+            <summary>
+            Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
+            the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="P:Voltaic.Mcp.McpWebsocketsClient.PingTimeoutMs"/>
+            is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
+            <c>initialize</c>.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsClient.PingTimeoutMs">
+            <summary>
+            Gets or sets how long the client waits for the server to answer its periodic ping, in milliseconds. Default
+            is 10000. Minimum is 100; maximum is 600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.ClientName">
             <summary>
             Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.WebsocketsClient</c>.
@@ -10582,6 +10843,21 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.PingIntervalMs">
+            <summary>
+            Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
+            check that the connection is healthy (MCP ping utility); a ping that is not answered within
+            <see cref="P:Voltaic.Mcp.McpWebsocketsServer.PingTimeoutMs"/> is logged. Default is 30000. 0 disables pinging. Maximum is 3600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.PingTimeoutMs">
+            <summary>
+            Gets or sets how long the server waits for a client to answer its ping, in milliseconds. Default is 10000.
+            Minimum is 100; maximum is 600000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.#ctor(System.String,System.Int32,System.String,System.Boolean)">
             <summary>
@@ -10825,8 +11101,9 @@
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.BroadcastNotificationAsync(System.String,System.Object,System.Threading.CancellationToken)">
             <summary>
-            Asynchronously broadcasts a notification to all connected clients.
-            Notifications are fire-and-forget JSON-RPC requests without an ID.
+            Asynchronously broadcasts a notification to connected clients that completed <c>initialize</c> (MCP sends
+            nothing but pings before it). A client whose negotiated revision does not define <paramref name="method"/>
+            is skipped, and the notification is reduced to what each client's revision defines.
             </summary>
             <param name="method">The name of the notification method.</param>
             <param name="parameters">The parameters to pass with the notification. Can be null.</param>

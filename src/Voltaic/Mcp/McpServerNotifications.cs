@@ -94,6 +94,19 @@ namespace Voltaic.Mcp
             return true;
         }
 
+        // An application-defined broadcast: sent to sessions that completed initialize, skipping sessions whose
+        // negotiated revision does not define the notification, and reduced to what each revision defines.
+        internal static Task BroadcastAsync(IEnumerable<McpSessionState> sessions, string method, object? parameters, CancellationToken token)
+        {
+            if (String.IsNullOrWhiteSpace(method)) throw new ArgumentNullException(nameof(method));
+            JsonRpcRequest notification = new JsonRpcRequest { Method = method, Params = parameters };
+            return SendAsync(
+                sessions.Where(session => session.IsInitialized
+                    && (session.NegotiatedVersion == null || McpVersionCompatibility.IsServerNotificationDefined(method, session.NegotiatedVersion))),
+                notification,
+                token);
+        }
+
         private static async Task SendAsync(IEnumerable<McpSessionState> sessions, JsonRpcRequest notification, CancellationToken token)
         {
             List<Task> sends = new List<Task>();

@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.1.7
+Closes every remaining MUST, MUST NOT, SHOULD, and SHOULD NOT gap found by the v2.1.6 review; see [COMPATIBILITY.md](COMPATIBILITY.md) for the per-revision matrix, now all conforming or not applicable.
+
+### Schemas
+- Tool schemas are validated in their declared dialect: JSON Schema 2020-12 (the default) or draft-07. `unevaluatedProperties`, `unevaluatedItems`, `$anchor`, `$id`, `$dynamicRef`/`$dynamicAnchor`, and draft-07 `dependencies` are enforced. `RegisterTool` rejects another dialect, and any `$ref` that cannot be resolved within the schema, instead of validating permissively.
+- An output schema of any type is accepted; `tools/list` omits a non-object one for sessions before 2026-07-28, whose schema requires an object.
+
+### Lifecycle, JSON-RPC, and cancellation
+- A cancellation that arrives after the response is ignored, so it can never cancel a later request that reuses the ID (2026-07-28 allows reuse).
+- On a connection that completed a handshake, a 2026-07-28 request's notifications follow its own revision.
+- Request IDs must be strings or integers; a notification method sent with an `id` is `-32601`; two concurrent `initialize` requests produce one success; a result that is not a JSON object is `-32603` on every revision.
+- `BroadcastNotificationAsync` on `McpTcpServer` and `McpWebsocketsServer` reaches initialized sessions only, skipping revisions that do not define the notification.
+- Registering or removing tools, resources, templates, and prompts sends `list_changed` automatically.
+- Clients (`McpClient`, `McpTcpClient`, `McpWebsocketsClient`, `McpHttpClient`) and the stdio, TCP, and WebSocket servers ping the other side every `PingIntervalMs` (default 30000) after `initialize`; `PingTimeoutMs` sets the wait.
+- `McpClient.Shutdown` closes the server's input, waits `ShutdownGracePeriodMs`, sends SIGTERM on Linux and macOS and waits `TerminateGracePeriodMs`, then kills the process.
+- Stream clients declare `elicitation` only for revisions that define it. `McpTcpClient.Disconnect` closes its socket.
+
+### 2026-07-28
+- Input requests with `includeContext` require `sampling.context`; an unknown elicitation mode requires that mode's capability.
+- A stateless HTTP client that closed its stream cancels the request at the next write. `ResponseKeepAliveMs` now defaults to 0, so responses keep their exact status (400 for a late `-32021`, 403 for insufficient scope) unless the client asked for notifications.
+- A stateless POST body must be a single request or notification: batches and client responses get 400 `-32600`.
+- `McpHttpClient` retries any stateless request after `-32022` with a version the server lists (when `autoNegotiate` is on).
+- `McpInsufficientScopeException.ErrorCode` is 403, outside the JSON-RPC reserved range (it was -32003, in the range 2026-07-28 reserves).
+
+### HTTP
+- `McpHttpClient` starts a new session after a 404 on every path: requests, notifications, its GET stream, resumed response streams, and answers to server requests.
+- `MCP-Protocol-Version` must name a version the server negotiates (the handshake cap applies) and, on a session, the session's negotiated version; otherwise 400.
+- The `resource_metadata` URL in challenges is derived from `ProtectedResourceMetadata.Resource`, so it is correct behind a TLS-terminating proxy, and the metadata is served at that resource's path.
+- Sessionless `/rpc` requests follow the lifecycle (`initialize` first); `EnableLegacyEndpoints = false` turns `/rpc` and `/events` off.
+- A terminated or expired session's GET stream ends at once, so its client learns to start a new session. `GET /mcp` sends a priming event only from 2025-11-25. Stopping the server no longer logs a spurious error.
+
+### Tests
+- New suites `Mcp.SchemaDialects` (4), `McpStreams.Compliance` (9), and `McpHttp.Compliance` (11); tests of sessionless `/rpc` calls, non-object results, and output schemas were updated (684 in total).
+
 ## v2.1.6
 Fixes the deviations a second specification review of v2.1.5 found. Verified with the MCP Inspector CLI, the official Python MCP SDK (both directions), Claude Code 2.1.281, and the official A2A Python SDK.
 

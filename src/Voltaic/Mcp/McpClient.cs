@@ -76,6 +76,11 @@ namespace Voltaic.Mcp
         private string _ClientVersion = "1.0.0";
         private JsonElement? _InitializeResult;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private int _ShutdownGracePeriodMs = 5000;
+        private int _PingIntervalMs = 30000;
+        private int _PingTimeoutMs = 10000;
+        private McpPinger? _Pinger;
+        private int _TerminateGracePeriodMs = 2000;
         private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
 
         /// <summary>
@@ -294,6 +299,68 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how long <see cref="Shutdown"/> waits for the server to exit after closing its input, in
+        /// milliseconds. Default is 5000. Minimum is 0; maximum is 300000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 300000.</exception>
+        public int ShutdownGracePeriodMs
+        {
+            get => _ShutdownGracePeriodMs;
+            set
+            {
+                if (value < 0 || value > 300000) throw new ArgumentOutOfRangeException(nameof(value), "ShutdownGracePeriodMs must be between 0 and 300000.");
+                _ShutdownGracePeriodMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how long <see cref="Shutdown"/> waits for the server to exit after SIGTERM (Linux and macOS)
+        /// before killing it, in milliseconds. Default is 2000. Minimum is 0; maximum is 300000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 300000.</exception>
+        public int TerminateGracePeriodMs
+        {
+            get => _TerminateGracePeriodMs;
+            set
+            {
+                if (value < 0 || value > 300000) throw new ArgumentOutOfRangeException(nameof(value), "TerminateGracePeriodMs must be between 0 and 300000.");
+                _TerminateGracePeriodMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
+        /// the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="PingTimeoutMs"/>
+        /// is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
+        /// <c>initialize</c>.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        public int PingIntervalMs
+        {
+            get => _PingIntervalMs;
+            set
+            {
+                if (value < 0 || value > 3600000) throw new ArgumentOutOfRangeException(nameof(value), "PingIntervalMs must be between 0 and 3600000.");
+                _PingIntervalMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how long the client waits for the server to answer its periodic ping, in milliseconds. Default
+        /// is 10000. Minimum is 100; maximum is 600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        public int PingTimeoutMs
+        {
+            get => _PingTimeoutMs;
+            set
+            {
+                if (value < 100 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "PingTimeoutMs must be between 100 and 600000.");
+                _PingTimeoutMs = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.Client</c>.
         /// </summary>
         public string ClientName
@@ -348,11 +415,26 @@ namespace Voltaic.Mcp
                 _ProtocolVersion,
                 _ClientName,
                 _ClientVersion,
-                McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities),
+                McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities, _ProtocolVersion),
                 token).ConfigureAwait(false);
 
             _ProtocolVersion = outcome.ProtocolVersion;
             _InitializeResult = outcome.Result;
+
+            // Check the connection's health periodically (MCP ping utility).
+            _Pinger?.Dispose();
+            _Pinger = McpPinger.Start(_PingIntervalMs, async ct =>
+            {
+                try
+                {
+                    await PingAsync(_PingTimeoutMs, ct).ConfigureAwait(false);
+                    return true;
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+                {
+                    return false;
+                }
+            }, LogMessage);
         }
 
         /// <summary>
@@ -387,13 +469,18 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Shuts down the MCP server gracefully by closing stdin.
+        /// Shuts down the MCP server as the stdio transport specifies: closes its standard input, waits up to
+        /// <see cref="ShutdownGracePeriodMs"/> for it to exit, then (on Linux and macOS) sends SIGTERM and waits up to
+        /// <see cref="TerminateGracePeriodMs"/>, and finally kills the process tree. Windows has no SIGTERM, so the kill
+        /// follows the first wait there.
         /// </summary>
         public void Shutdown()
         {
             if (_IsConnected)
             {
                 _IsConnected = false;
+                _Pinger?.Dispose();
+                _Pinger = null;
                 _CancellationTokenSource?.Cancel();
 
                 // Clear pending requests
@@ -406,10 +493,16 @@ namespace Voltaic.Mcp
                 // Close stdin to signal shutdown
                 _StdinWriter?.Close();
 
-                // Wait for process to exit
+                // Wait for the process to exit; then SIGTERM; then SIGKILL.
                 if (_ServerProcess != null && !_ServerProcess.HasExited)
                 {
-                    bool exited = _ServerProcess.WaitForExit(5000);
+                    bool exited = _ServerProcess.WaitForExit(_ShutdownGracePeriodMs);
+                    if (!exited && McpProcessSignals.TryTerminate(_ServerProcess))
+                    {
+                        LogMessage("Server did not exit after its input closed; sent SIGTERM");
+                        exited = _ServerProcess.WaitForExit(_TerminateGracePeriodMs);
+                    }
+
                     if (!exited)
                     {
                         LogMessage("Server did not exit gracefully, killing process");

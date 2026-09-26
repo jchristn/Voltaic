@@ -81,13 +81,13 @@ namespace Voltaic.Mcp
             {
                 _ = Task.Run(async () =>
                 {
-                    string? json = await HandleAndSerializeAsync(envelope, session, null, false, notify, token).ConfigureAwait(false);
+                    string? json = await HandleAndSerializeAsync(envelope, session, null, false, notify, token, send).ConfigureAwait(false);
                     if (json != null) await SafeSendAsync(send, json, token).ConfigureAwait(false);
                 });
                 return;
             }
 
-            string? immediate = await HandleAndSerializeAsync(envelope, session, null, false, notify, token).ConfigureAwait(false);
+            string? immediate = await HandleAndSerializeAsync(envelope, session, null, false, notify, token, send).ConfigureAwait(false);
             if (immediate != null) await SafeSendAsync(send, immediate, token).ConfigureAwait(false);
         }
 
@@ -101,15 +101,17 @@ namespace Voltaic.Mcp
         /// <param name="statelessResolved">True when the transport resolved the era itself (HTTP), so <c>_meta</c> is not consulted again.</param>
         /// <param name="notify">The channel for notifications related to this request, or null.</param>
         /// <param name="token">The transport's cancellation token.</param>
+        /// <param name="rawSend">The stream transport's writer, used unchanged for a stateless request's notifications, or null.</param>
         internal async Task<string?> HandleAndSerializeAsync(
             McpEnvelope envelope,
             McpSessionState session,
             string? statelessVersion,
             bool statelessResolved,
             Func<JsonRpcRequest, CancellationToken, Task>? notify,
-            CancellationToken token)
+            CancellationToken token,
+            Func<string, CancellationToken, Task>? rawSend = null)
         {
-            McpHandledResponse? handled = await HandleAsync(envelope, session, statelessVersion, statelessResolved, notify, token).ConfigureAwait(false);
+            McpHandledResponse? handled = await HandleAsync(envelope, session, statelessVersion, statelessResolved, notify, token, rawSend).ConfigureAwait(false);
             if (handled == null) return null;
             return SerializeResponse(handled.Response, handled.StatelessVersion, envelope.Method, session);
         }
@@ -124,12 +126,14 @@ namespace Voltaic.Mcp
             string? statelessVersion,
             bool statelessResolved,
             Func<JsonRpcRequest, CancellationToken, Task>? notify,
-            CancellationToken token)
+            CancellationToken token,
+            Func<string, CancellationToken, Task>? rawSend = null)
         {
             switch (envelope.Kind)
             {
                 case McpEnvelopeKind.Response:
-                    _Log($"Ignoring a JSON-RPC response from the client (id {envelope.IdKey}); this server sends no requests.");
+                    if (envelope.IdKey != null && session.TryCompletePing(envelope.IdKey)) return null;
+                    _Log($"Ignoring a JSON-RPC response from the client (id {envelope.IdKey}) that answers no request this server sent.");
                     return null;
                 case McpEnvelopeKind.Invalid:
                     if (envelope.Method != null && envelope.Id == null && envelope.Error != null && envelope.Error.Code == -32602)
@@ -166,6 +170,10 @@ namespace Voltaic.Mcp
 
             if (statelessVersion != null)
             {
+                // A stateless request's notifications follow its own revision, never a version negotiated earlier on
+                // the same connection.
+                if (rawSend != null) notify = (notification, ct) => SafeSendAsync(rawSend, JsonSerializer.Serialize(notification), ct);
+
                 McpProtocolException? metaError = ValidateStatelessMeta(envelope, out statelessCapabilities, out requestLogLevel);
                 if (metaError != null)
                 {
@@ -203,8 +211,26 @@ namespace Voltaic.Mcp
                 return null;
             }
 
+            // Notification methods are never requests; one sent with an id is answered as an unknown method.
+            if (method.StartsWith("notifications/", StringComparison.Ordinal))
+            {
+                return Respond(request, MethodNotFound(envelope, $"'{method}' is a notification and cannot be sent as a request."), session, statelessVersion);
+            }
+
+            // Only one initialize may run: a concurrent second one is refused like one sent after the first.
+            bool claimedInitialize = false;
+            if (method == "initialize" && statelessVersion == null && session.RequireInitialize)
+            {
+                if (!session.TryClaimInitialize())
+                {
+                    return Respond(request, Error(envelope, -32600, "The session is already initializing or initialized; initialize may be sent only once."), session, null);
+                }
+
+                claimedInitialize = true;
+            }
+
             JsonElement? progressToken = envelope.GetMeta("progressToken");
-            if (progressToken.HasValue && progressToken.Value.ValueKind != JsonValueKind.String && progressToken.Value.ValueKind != JsonValueKind.Number)
+            if (progressToken.HasValue && progressToken.Value.ValueKind != JsonValueKind.String && !McpEnvelope.IsInteger(progressToken.Value))
             {
                 progressToken = null;
             }
@@ -238,11 +264,17 @@ namespace Voltaic.Mcp
                     return null;
                 }
 
+                if (claimedInitialize && response.Error != null) session.ReleaseInitializeClaim();
+
                 if (method == "initialize" && response.Error == null)
                 {
                     string negotiated = ReadString(response.Result, "protocolVersion") ?? _Endpoint.MaximumHandshakeProtocolVersion;
                     JsonElement? capabilities = envelope.Params.HasValue && envelope.Params.Value.TryGetProperty("capabilities", out JsonElement declared) ? declared.Clone() : (JsonElement?)null;
-                    session.TryCompleteInitialize(negotiated, capabilities);
+                    if (session.TryCompleteInitialize(negotiated, capabilities))
+                    {
+                        // Check the connection's health periodically (MCP ping utility); stream transports only.
+                        session.StartPinging(_Endpoint.PingIntervalMs, _Endpoint.PingTimeoutMs, _Log);
+                    }
                 }
 
                 McpHandledResponse handled = Respond(request, response, session, statelessVersion);
@@ -269,6 +301,16 @@ namespace Voltaic.Mcp
             }
 
             string json = JsonSerializer.Serialize(response);
+            if (response.Error == null && !IsObjectResult(response.Result))
+            {
+                // Every MCP result is a JSON object (a Result); a handler that returned something else is a server fault.
+                return JsonSerializer.Serialize(new JsonRpcResponse
+                {
+                    Id = response.Id,
+                    Error = new JsonRpcError { Code = -32603, Message = $"The handler for '{method}' returned a result that is not a JSON object." }
+                });
+            }
+
             string? version = session.NegotiatedVersion ?? (method == "initialize" ? ReadString(response.Result, "protocolVersion") : null);
             if (version == null || response.Error != null || method == null) return json;
 
@@ -280,6 +322,19 @@ namespace Voltaic.Mcp
             }
 
             return json;
+        }
+
+        private static bool IsObjectResult(object? result)
+        {
+            if (result == null) return false;
+            if (result is McpResult || result is System.Collections.IDictionary) return true;
+            if (result is JsonElement element) return element.ValueKind == JsonValueKind.Object;
+            if (result is string || result is bool || result.GetType().IsPrimitive || result is decimal || result is System.Collections.IEnumerable && !(result is System.Collections.IDictionary))
+            {
+                return false;
+            }
+
+            return JsonSerializer.SerializeToElement(result).ValueKind == JsonValueKind.Object;
         }
 
         /// <summary>
@@ -332,7 +387,7 @@ namespace Voltaic.Mcp
                     continue;
                 }
 
-                pending.Add(HandleAndSerializeAsync(envelope, session, null, false, notify, token));
+                pending.Add(HandleAndSerializeAsync(envelope, session, null, false, notify, token, send));
             }
 
             string?[] results = await Task.WhenAll(pending).ConfigureAwait(false);

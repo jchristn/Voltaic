@@ -232,6 +232,13 @@ namespace Voltaic.Mcp
                 tool.Remove("_meta");
             }
 
+            // Before 2026-07-28 an outputSchema must be an object schema; one of another type is omitted.
+            if (tool["outputSchema"] is JsonObject outputSchema && outputSchema["type"] is JsonValue outputType
+                && (!outputType.TryGetValue(out string? typeName) || typeName != "object"))
+            {
+                tool.Remove("outputSchema");
+            }
+
             // ToolAnnotations was added in 2025-03-26.
             if (revision < _Rev20250326) tool.Remove("annotations");
 

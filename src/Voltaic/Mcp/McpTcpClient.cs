@@ -19,6 +19,10 @@ namespace Voltaic.Mcp
     /// </summary>
     public class McpTcpClient : JsonRpcClient
     {
+        private int _PingIntervalMs = 30000;
+        private int _PingTimeoutMs = 10000;
+        private McpPinger? _Pinger;
+
         private string _ProtocolVersion = McpProtocol.LatestProtocolVersion;
         private string _ClientName = "Voltaic.Mcp.TcpClient";
         private string _ClientVersion = "1.0.0";
@@ -63,6 +67,38 @@ namespace Voltaic.Mcp
                 }
 
                 _ProtocolVersion = version;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
+        /// the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="PingTimeoutMs"/>
+        /// is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
+        /// <c>initialize</c>.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        public int PingIntervalMs
+        {
+            get => _PingIntervalMs;
+            set
+            {
+                if (value < 0 || value > 3600000) throw new ArgumentOutOfRangeException(nameof(value), "PingIntervalMs must be between 0 and 3600000.");
+                _PingIntervalMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how long the client waits for the server to answer its periodic ping, in milliseconds. Default
+        /// is 10000. Minimum is 100; maximum is 600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        public int PingTimeoutMs
+        {
+            get => _PingTimeoutMs;
+            set
+            {
+                if (value < 100 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "PingTimeoutMs must be between 100 and 600000.");
+                _PingTimeoutMs = value;
             }
         }
 
@@ -116,11 +152,32 @@ namespace Voltaic.Mcp
                 _ProtocolVersion,
                 _ClientName,
                 _ClientVersion,
-                McpClientHandshake.CapabilitiesFor(RequestDispatcher, ClientCapabilities),
+                McpClientHandshake.CapabilitiesFor(RequestDispatcher, ClientCapabilities, _ProtocolVersion),
                 token).ConfigureAwait(false);
 
             _ProtocolVersion = outcome.ProtocolVersion;
             _InitializeResult = outcome.Result;
+
+            // Check the connection's health periodically (MCP ping utility).
+            _Pinger?.Dispose();
+            _Pinger = McpPinger.Start(_PingIntervalMs, async ct =>
+            {
+                try
+                {
+                    await CallAsync<object?>("ping", new { }, _PingTimeoutMs, ct).ConfigureAwait(false);
+                    return true;
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+                {
+                    return false;
+                }
+            }, LogMessage);
+        }
+
+        private protected override void OnDisconnected()
+        {
+            _Pinger?.Dispose();
+            _Pinger = null;
         }
 
         private protected override async Task<bool> OnConnectedAsync(CancellationToken token)

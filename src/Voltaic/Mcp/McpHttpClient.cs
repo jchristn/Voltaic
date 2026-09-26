@@ -83,6 +83,38 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
+        /// the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="PingTimeoutMs"/>
+        /// is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
+        /// <c>initialize</c>.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        public int PingIntervalMs
+        {
+            get => _PingIntervalMs;
+            set
+            {
+                if (value < 0 || value > 3600000) throw new ArgumentOutOfRangeException(nameof(value), "PingIntervalMs must be between 0 and 3600000.");
+                _PingIntervalMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how long the client waits for the server to answer its periodic ping, in milliseconds. Default
+        /// is 10000. Minimum is 100; maximum is 600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        public int PingTimeoutMs
+        {
+            get => _PingTimeoutMs;
+            set
+            {
+                if (value < 100 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "PingTimeoutMs must be between 100 and 600000.");
+                _PingTimeoutMs = value;
+            }
+        }
+
+        /// <summary>
         /// Gets a value indicating whether the client is operating in the stateless (2026-07-28)
         /// mode established by <see cref="ConnectStatelessAsync"/>.
         /// </summary>
@@ -203,6 +235,11 @@ namespace Voltaic.Mcp
         private int? _SseRetryMs;
         private bool _HandshakeComplete;
         private bool _Streamable;
+        private readonly SemaphoreSlim _RecoverLock = new SemaphoreSlim(1, 1);
+        private bool _AutoNegotiate = true;
+        private int _PingIntervalMs = 30000;
+        private int _PingTimeoutMs = 10000;
+        private McpPinger? _Pinger;
         private bool _SseWanted;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
         private CancellationTokenSource _ServerRequestTokenSource = new CancellationTokenSource();
@@ -500,6 +537,7 @@ namespace Voltaic.Mcp
                 LogMessage($"Sending request: {requestJson}");
                 RaiseRequestSent(new RequestSentEventArgs(request));
                 bool hadSession = !String.IsNullOrEmpty(SessionId);
+                string? sentSessionId = SessionId;
 
                 using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
@@ -513,12 +551,9 @@ namespace Voltaic.Mcp
                         if ((int)httpResponse.StatusCode == 404 && hadSession && attempt == 0 && method != "initialize" && _Streamable)
                         {
                             httpResponse.Dispose();
-                            LogMessage($"Session {SessionId} was not found; starting a new session and retrying {method}");
-                            SessionId = null;
-                            _HandshakeComplete = false;
-                            await PerformHandshakeAsync(token).ConfigureAwait(false);
-                            if (_SseWanted) await StartSseAsync(token).ConfigureAwait(false);
-                            continue;
+                            LogMessage($"Retrying {method} on a new session");
+                            if (await RecoverSessionAsync(sentSessionId, token).ConfigureAwait(false)) continue;
+                            throw McpProtocolException.SessionNotFound();
                         }
 
                         httpResponse.EnsureSuccessStatusCode();
@@ -535,6 +570,12 @@ namespace Voltaic.Mcp
 
                         RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
                         return response;
+                    }
+                    catch (McpProtocolException lost) when (lost.Code == -32001 && hadSession && attempt == 0 && method != "initialize" && _Streamable)
+                    {
+                        // A resumed response stream found the session gone: start a new session and send the request again.
+                        LogMessage($"Retrying {method} on a new session after its response stream was lost");
+                        if (!await RecoverSessionAsync(sentSessionId, token).ConfigureAwait(false)) throw;
                     }
                     catch (OperationCanceledException) when (method != "initialize" && method != "notifications/cancelled")
                     {
@@ -592,6 +633,7 @@ namespace Voltaic.Mcp
                 _RpcUrl = $"{_BaseUrl}{mcpPath}";
                 _EventsUrl = _RpcUrl;
                 _Stateless = true;
+                _AutoNegotiate = autoNegotiate;
                 _ProtocolVersion = String.IsNullOrWhiteSpace(protocolVersion) ? McpProtocol.NewestProtocolVersion : protocolVersion!;
 
                 McpDiscoverResult discover;
@@ -687,6 +729,18 @@ namespace Voltaic.Mcp
             if (String.IsNullOrEmpty(method)) throw new ArgumentNullException(nameof(method));
 
             JsonRpcResponse response = await SendStatelessCoreAsync(method, parameters, name, token).ConfigureAwait(false);
+            if (response.Error != null && response.Error.Code == -32022 && _AutoNegotiate)
+            {
+                // The server no longer supports the version in use: switch to one it lists and send the request again.
+                string? fallback = PickSupportedStatelessVersion(response.Error.Data);
+                if (fallback != null && !StringComparer.Ordinal.Equals(fallback, _ProtocolVersion))
+                {
+                    LogMessage($"The server does not support {_ProtocolVersion}; retrying {method} with {fallback}");
+                    _ProtocolVersion = fallback;
+                    response = await SendStatelessCoreAsync(method, parameters, name, token).ConfigureAwait(false);
+                }
+            }
+
             if (StringComparer.Ordinal.Equals(method, "tools/call") && response.Error != null && response.Error.Code == -32020)
             {
                 LogMessage($"tools/call was rejected with HeaderMismatch ({response.Error.Message}); refreshing tool definitions and retrying once");
@@ -902,8 +956,22 @@ namespace Voltaic.Mcp
             {
                 cts.CancelAfter(timeoutMs);
 
+                string? sentSessionId = SessionId;
                 using HttpRequestMessage httpRequest = CreatePostRequest(requestJson);
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
+                if ((int)httpResponse.StatusCode == 404 && !String.IsNullOrEmpty(sentSessionId) && _Streamable)
+                {
+                    // The session is gone: start a new one. A notification about the old session (initialized or a
+                    // cancellation) means nothing to the new one; anything else is sent again.
+                    httpResponse.Dispose();
+                    bool recovered = await RecoverSessionAsync(sentSessionId, token).ConfigureAwait(false);
+                    if (!recovered) throw McpProtocolException.SessionNotFound();
+                    if (method == "notifications/initialized" || method == "notifications/cancelled") return;
+
+                    using HttpRequestMessage retry = CreatePostRequest(requestJson);
+                    httpResponse = await _HttpClient.SendAsync(retry, cts.Token).ConfigureAwait(false);
+                }
+
                 httpResponse.EnsureSuccessStatusCode();
                 CaptureSessionId(httpResponse);
             }
@@ -914,6 +982,8 @@ namespace Voltaic.Mcp
         /// </summary>
         public void Disconnect()
         {
+            _Pinger?.Dispose();
+            _Pinger = null;
             CancellationTokenSource previousRequests = Interlocked.Exchange(ref _ServerRequestTokenSource, new CancellationTokenSource());
             previousRequests.Cancel();
             previousRequests.Dispose();
@@ -977,9 +1047,28 @@ namespace Voltaic.Mcp
                         using HttpRequestMessage request = CreateStreamRequest(_SseLastEventId);
                         using HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
                         int status = (int)response.StatusCode;
+                        if (status == 404 && _Streamable && !String.IsNullOrEmpty(SessionId))
+                        {
+                            // The session is gone: start a new one, which reopens the stream on it.
+                            string? lost = SessionId;
+                            LogMessage("SSE stream found the session gone; starting a new session");
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    await RecoverSessionAsync(lost, CancellationToken.None).ConfigureAwait(false);
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogMessage($"Could not start a new session: {ex.Message}");
+                                }
+                            });
+                            return;
+                        }
+
                         if (status >= 400 && status < 500)
                         {
-                            // 404 (session gone), 405 (no GET stream), or another client error: retrying cannot help.
+                            // 405 (no GET stream) or another client error: retrying cannot help.
                             LogMessage($"SSE stream rejected with HTTP {status}; not reconnecting");
                             return;
                         }
@@ -1097,12 +1186,28 @@ namespace Voltaic.Mcp
 
             _HandshakeComplete = true;
             await NotifyAsync("notifications/initialized", null, _RequestTimeoutMs, token).ConfigureAwait(false);
+
+            // Check the connection's health periodically (MCP ping utility).
+            _Pinger?.Dispose();
+            _Pinger = McpPinger.Start(_PingIntervalMs, async ct =>
+            {
+                try
+                {
+                    await PingAsync(_PingTimeoutMs, ct).ConfigureAwait(false);
+                    return true;
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+                {
+                    return false;
+                }
+            }, LogMessage);
         }
 
-        // Declares the client capabilities whose requests have handlers, so servers know they may send them.
+        // Declares the client capabilities whose requests have handlers, so servers know they may send them, limited to
+        // those the requested protocol version defines.
         private Dictionary<string, object?> BuildClientCapabilities()
         {
-            return McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities);
+            return McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities, _ProtocolVersion);
         }
 
         private Dictionary<string, object?> BuildStatelessParams(IReadOnlyDictionary<string, object?>? parameters)
@@ -1360,6 +1465,12 @@ namespace Voltaic.Mcp
                 {
                     using HttpRequestMessage request = CreateStreamRequest(lastEventId);
                     using HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                    if ((int)response.StatusCode == 404 && _Streamable)
+                    {
+                        LogMessage("Response stream resumption found the session gone");
+                        throw McpProtocolException.SessionNotFound();
+                    }
+
                     if (!response.IsSuccessStatusCode)
                     {
                         LogMessage($"Response stream resumption rejected with HTTP {(int)response.StatusCode}");
@@ -1467,14 +1578,45 @@ namespace Voltaic.Mcp
                 using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
                     cts.CancelAfter(_RequestTimeoutMs);
+                    string? sentSessionId = SessionId;
                     using HttpRequestMessage post = CreatePostRequest(responseJson);
                     using HttpResponseMessage reply = await _HttpClient!.SendAsync(post, cts.Token).ConfigureAwait(false);
                     LogMessage($"Answered server request {request.Method} (HTTP {(int)reply.StatusCode}): {responseJson}");
+                    if ((int)reply.StatusCode == 404 && _Streamable && !String.IsNullOrEmpty(sentSessionId))
+                    {
+                        // The answer belonged to a session that no longer exists; start a new one.
+                        await RecoverSessionAsync(sentSessionId, token).ConfigureAwait(false);
+                    }
                 }
             }
             catch (Exception ex)
             {
                 LogMessage($"Could not answer server request {request.Method}: {ex.Message}");
+            }
+        }
+
+        // A 404 to a request that carried a session means the server ended the session; Streamable HTTP clients must
+        // start a new one. Concurrent callers that saw the same lost session share one new session. Returns true when
+        // a session is available afterwards.
+        private async Task<bool> RecoverSessionAsync(string? lostSessionId, CancellationToken token)
+        {
+            if (!_Streamable || String.IsNullOrEmpty(lostSessionId)) return false;
+            await _RecoverLock.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (!StringComparer.Ordinal.Equals(SessionId, lostSessionId)) return !String.IsNullOrEmpty(SessionId);
+
+                LogMessage($"Session {lostSessionId} was not found; starting a new session");
+                SessionId = null;
+                _HandshakeComplete = false;
+                _SseLastEventId = null;
+                await PerformHandshakeAsync(token).ConfigureAwait(false);
+                if (_SseWanted) await StartSseAsync(token).ConfigureAwait(false);
+                return !String.IsNullOrEmpty(SessionId) || _HandshakeComplete;
+            }
+            finally
+            {
+                _RecoverLock.Release();
             }
         }
 

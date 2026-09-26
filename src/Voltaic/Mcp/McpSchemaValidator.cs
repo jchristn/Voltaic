@@ -19,10 +19,14 @@ namespace Voltaic.Mcp
     /// <c>contains</c>, <c>minContains</c>, <c>maxContains</c>, <c>minItems</c>, <c>maxItems</c>,
     /// <c>uniqueItems</c>, <c>minLength</c>, <c>maxLength</c>, <c>pattern</c>, <c>minimum</c>, <c>maximum</c>,
     /// <c>exclusiveMinimum</c>, <c>exclusiveMaximum</c>, <c>multipleOf</c>, <c>allOf</c>, <c>anyOf</c>,
-    /// <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>, local <c>$ref</c> JSON pointers
-    /// (such as <c>#/$defs/name</c> and <c>#/definitions/name</c>), and boolean schemas. Unknown keywords
-    /// (annotations such as <c>format</c>, <c>description</c>, or <c>x-mcp-header</c>) are ignored, and a
-    /// malformed keyword is ignored on its own without disabling the rest of the schema.
+    /// <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>, <c>unevaluatedProperties</c>,
+    /// <c>unevaluatedItems</c>, <c>$ref</c> and <c>$dynamicRef</c> within the schema (JSON pointers such as
+    /// <c>#/$defs/name</c>, <c>$anchor</c> and <c>$dynamicAnchor</c> names, and embedded resources identified by
+    /// <c>$id</c>), draft-07 <c>dependencies</c> and <c>definitions</c>, and boolean schemas. The dialect is the
+    /// schema's <c>$schema</c> (2020-12 by default; draft-07 is also supported); another dialect, or a reference that
+    /// cannot be resolved within the schema, is reported as an error rather than validated permissively. Annotation
+    /// keywords (such as <c>format</c>, <c>description</c>, or <c>x-mcp-header</c>) are ignored, and a malformed
+    /// keyword is ignored on its own without disabling the rest of the schema.
     /// Thread safety: all members are safe for concurrent use.
     /// </summary>
     internal static class McpSchemaValidator
@@ -68,6 +72,13 @@ namespace Voltaic.Mcp
                 return;
             }
 
+            McpSchemaDocument document = new McpSchemaDocument(root);
+            string? schemaProblem = Check(document);
+            if (schemaProblem != null)
+            {
+                throw McpProtocolException.ValidationError($"{path} cannot be validated: {schemaProblem}");
+            }
+
             int budget = _EvaluationBudget;
             string? error;
 
@@ -78,23 +89,23 @@ namespace Voltaic.Mcp
                     throw McpProtocolException.ValidationError($"{path} is required.");
                 }
 
-                error = Evaluate(root, _EmptyObject, path, root, 0, 0, ref budget);
+                error = Evaluate(root, _EmptyObject, path, document, 0, 0, ref budget);
             }
             else
             {
-                JsonDocument document;
+                JsonDocument parsed;
                 try
                 {
-                    document = JsonDocument.Parse(valueJson!, _DocumentOptions);
+                    parsed = JsonDocument.Parse(valueJson!, _DocumentOptions);
                 }
                 catch (JsonException)
                 {
                     throw McpProtocolException.ValidationError($"{path} is not valid JSON.");
                 }
 
-                using (document)
+                using (parsed)
                 {
-                    error = Evaluate(root, document.RootElement, path, root, 0, 0, ref budget);
+                    error = Evaluate(root, parsed.RootElement, path, document, 0, 0, ref budget);
                 }
             }
 
@@ -109,6 +120,36 @@ namespace Voltaic.Mcp
             {
                 throw McpProtocolException.ValidationError(error);
             }
+        }
+
+        /// <summary>
+        /// Checks that a schema can be validated as written: its <c>$schema</c> dialect is supported (JSON Schema
+        /// 2020-12, the default, or draft-07) and every <c>$ref</c> and <c>$dynamicRef</c> resolves within it.
+        /// Returns a description of the first problem, or null when the schema is usable.
+        /// </summary>
+        /// <param name="schema">The schema: a <see cref="JsonElement"/>, a JSON string, or any serializable object.</param>
+        public static string? CheckSchema(object? schema)
+        {
+            if (schema == null || !TryGetSchemaElement(schema, out JsonElement root)) return null;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            return Check(new McpSchemaDocument(root));
+        }
+
+        private static string? Check(McpSchemaDocument document)
+        {
+            string? dialect = document.Dialect;
+            if (!McpSchemaDocument.IsSupportedDialect(dialect))
+            {
+                return $"the JSON Schema dialect '{dialect}' is not supported (supported: {McpSchemaDocument.Draft202012}, the default, and draft-07).";
+            }
+
+            string? unresolved = document.FindUnresolvedReference();
+            if (unresolved != null)
+            {
+                return $"the reference '{unresolved}' cannot be resolved within the schema; external references are not supported.";
+            }
+
+            return null;
         }
 
         private static bool TryGetSchemaElement(object schema, out JsonElement root)
@@ -169,7 +210,7 @@ namespace Voltaic.Mcp
             return names.Count == 0 || names.Contains("object");
         }
 
-        private static string? Evaluate(JsonElement schema, JsonElement instance, string path, JsonElement root, int depth, int chain, ref int budget)
+        private static string? Evaluate(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, int chain, ref int budget, McpSchemaEvaluated? evaluated = null)
         {
             if (budget < 0)
             {
@@ -200,7 +241,10 @@ namespace Voltaic.Mcp
                 return null;
             }
 
-            string? error = CheckReference(schema, instance, path, root, depth, chain, ref budget);
+            // Properties and items this schema's keywords evaluated, for unevaluatedProperties and unevaluatedItems.
+            McpSchemaEvaluated local = new McpSchemaEvaluated();
+
+            string? error = CheckReference(schema, instance, path, root, depth, chain, ref budget, local);
             if (error != null) return error;
 
             error = CheckType(schema, instance, path);
@@ -212,10 +256,10 @@ namespace Voltaic.Mcp
             switch (instance.ValueKind)
             {
                 case JsonValueKind.Object:
-                    error = CheckObject(schema, instance, path, root, depth, chain, ref budget);
+                    error = CheckObject(schema, instance, path, root, depth, chain, ref budget, local);
                     break;
                 case JsonValueKind.Array:
-                    error = CheckArray(schema, instance, path, root, depth, ref budget);
+                    error = CheckArray(schema, instance, path, root, depth, ref budget, local);
                     break;
                 case JsonValueKind.String:
                     error = CheckString(schema, instance, path);
@@ -227,25 +271,88 @@ namespace Voltaic.Mcp
 
             if (error != null) return error;
 
-            return CheckComposition(schema, instance, path, root, depth, chain, ref budget);
+            error = CheckComposition(schema, instance, path, root, depth, chain, ref budget, local);
+            if (error != null) return error;
+
+            error = CheckUnevaluated(schema, instance, path, root, depth, ref budget, local);
+            if (error != null) return error;
+
+            evaluated?.Merge(local);
+            return null;
+        }
+
+        // unevaluatedProperties and unevaluatedItems apply to what no other keyword of this schema (including its
+        // in-place subschemas that passed) evaluated.
+        private static string? CheckUnevaluated(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, ref int budget, McpSchemaEvaluated local)
+        {
+            if (instance.ValueKind == JsonValueKind.Object && schema.TryGetProperty("unevaluatedProperties", out JsonElement unevaluatedProperties) && IsSchema(unevaluatedProperties))
+            {
+                foreach (JsonProperty member in instance.EnumerateObject())
+                {
+                    if (local.Properties.Contains(member.Name)) continue;
+                    if (unevaluatedProperties.ValueKind == JsonValueKind.False)
+                    {
+                        return $"{path} has unexpected property '{member.Name}'; the schema does not allow unevaluated properties.";
+                    }
+
+                    string? error = Evaluate(unevaluatedProperties, member.Value, $"{path}.{member.Name}", root, depth + 1, 0, ref budget);
+                    if (error != null) return error;
+                    local.Properties.Add(member.Name);
+                }
+            }
+
+            if (instance.ValueKind == JsonValueKind.Array && schema.TryGetProperty("unevaluatedItems", out JsonElement unevaluatedItems) && IsSchema(unevaluatedItems))
+            {
+                int index = 0;
+                foreach (JsonElement item in instance.EnumerateArray())
+                {
+                    if (!local.Items.Contains(index))
+                    {
+                        if (unevaluatedItems.ValueKind == JsonValueKind.False)
+                        {
+                            return $"{path}[{index}] is not allowed; the schema does not allow unevaluated items.";
+                        }
+
+                        string? error = Evaluate(unevaluatedItems, item, $"{path}[{index}]", root, depth + 1, 0, ref budget);
+                        if (error != null) return error;
+                        local.Items.Add(index);
+                    }
+
+                    index++;
+                }
+            }
+
+            return null;
         }
 
         #region Keywords
 
-        private static string? CheckReference(JsonElement schema, JsonElement instance, string path, JsonElement root, int depth, int chain, ref int budget)
+        private static string? CheckReference(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, int chain, ref int budget, McpSchemaEvaluated local)
         {
-            if (!schema.TryGetProperty("$ref", out JsonElement reference) || reference.ValueKind != JsonValueKind.String)
+            if (schema.TryGetProperty("$ref", out JsonElement reference) && reference.ValueKind == JsonValueKind.String)
             {
-                return null;
+                // An unresolvable reference fails validation instead of being treated as permissive.
+                if (!root.TryResolve(reference.GetString(), out JsonElement target))
+                {
+                    return $"{path} cannot be validated: the schema reference '{reference.GetString()}' cannot be resolved.";
+                }
+
+                string? error = Evaluate(target, instance, path, root, depth + 1, chain + 1, ref budget, local);
+                if (error != null) return error;
             }
 
-            // Only local references can be resolved; any other reference is ignored rather than failing the schema.
-            if (!TryResolveReference(root, reference.GetString(), out JsonElement target))
+            if (schema.TryGetProperty("$dynamicRef", out JsonElement dynamicReference) && dynamicReference.ValueKind == JsonValueKind.String)
             {
-                return null;
+                if (!root.TryResolveDynamic(dynamicReference.GetString(), out JsonElement target))
+                {
+                    return $"{path} cannot be validated: the schema reference '{dynamicReference.GetString()}' cannot be resolved.";
+                }
+
+                string? error = Evaluate(target, instance, path, root, depth + 1, chain + 1, ref budget, local);
+                if (error != null) return error;
             }
 
-            return Evaluate(target, instance, path, root, depth + 1, chain + 1, ref budget);
+            return null;
         }
 
         private static string? CheckType(JsonElement schema, JsonElement instance, string path)
@@ -297,7 +404,7 @@ namespace Voltaic.Mcp
             return null;
         }
 
-        private static string? CheckObject(JsonElement schema, JsonElement instance, string path, JsonElement root, int depth, int chain, ref int budget)
+        private static string? CheckObject(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, int chain, ref int budget, McpSchemaEvaluated local)
         {
             HashSet<string> names = new HashSet<string>(StringComparer.Ordinal);
             int memberCount = 0;
@@ -356,8 +463,34 @@ namespace Voltaic.Mcp
                 {
                     if (!names.Contains(dependency.Name)) continue;
 
-                    string? error = Evaluate(dependency.Value, instance, path, root, depth + 1, chain + 1, ref budget);
+                    string? error = Evaluate(dependency.Value, instance, path, root, depth + 1, chain + 1, ref budget, local);
                     if (error != null) return error;
+                }
+            }
+
+            // draft-07 dependencies: an array lists required properties, a schema applies to the whole object.
+            if (schema.TryGetProperty("dependencies", out JsonElement dependencies) && dependencies.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty dependency in dependencies.EnumerateObject())
+                {
+                    if (!names.Contains(dependency.Name)) continue;
+                    if (dependency.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (JsonElement dependent in dependency.Value.EnumerateArray())
+                        {
+                            if (dependent.ValueKind != JsonValueKind.String) continue;
+                            string? dependentName = dependent.GetString();
+                            if (!String.IsNullOrEmpty(dependentName) && !names.Contains(dependentName))
+                            {
+                                return $"{path} has property '{dependency.Name}', which requires property '{dependentName}'.";
+                            }
+                        }
+                    }
+                    else if (IsSchema(dependency.Value))
+                    {
+                        string? error = Evaluate(dependency.Value, instance, path, root, depth + 1, chain + 1, ref budget, local);
+                        if (error != null) return error;
+                    }
                 }
             }
 
@@ -388,6 +521,7 @@ namespace Voltaic.Mcp
                 if (hasProperties && properties.TryGetProperty(member.Name, out JsonElement propertySchema))
                 {
                     declared = true;
+                    local.Properties.Add(member.Name);
                     string? error = Evaluate(propertySchema, member.Value, memberPath, root, depth + 1, 0, ref budget);
                     if (error != null) return error;
                 }
@@ -406,6 +540,7 @@ namespace Voltaic.Mcp
                         if (matched != true) continue;
 
                         matchedPattern = true;
+                        local.Properties.Add(member.Name);
                         string? error = Evaluate(pattern.Value, member.Value, memberPath, root, depth + 1, 0, ref budget);
                         if (error != null) return error;
                     }
@@ -415,6 +550,8 @@ namespace Voltaic.Mcp
                 {
                     continue;
                 }
+
+                local.Properties.Add(member.Name);
 
                 if (additional.ValueKind == JsonValueKind.False)
                 {
@@ -431,7 +568,7 @@ namespace Voltaic.Mcp
             return null;
         }
 
-        private static string? CheckArray(JsonElement schema, JsonElement instance, string path, JsonElement root, int depth, ref int budget)
+        private static string? CheckArray(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, ref int budget, McpSchemaEvaluated local)
         {
             int length = instance.GetArrayLength();
 
@@ -506,10 +643,12 @@ namespace Voltaic.Mcp
                     string? error = null;
                     if (index < positionalCount)
                     {
+                        local.Items.Add(index);
                         error = Evaluate(positional[index], item, $"{path}[{index}]", root, depth + 1, 0, ref budget);
                     }
                     else if (hasRest)
                     {
+                        local.Items.Add(index);
                         if (rest.ValueKind == JsonValueKind.False)
                         {
                             return $"{path} must contain at most {positionalCount} {Plural(positionalCount, "item", "items")}.";
@@ -536,6 +675,7 @@ namespace Voltaic.Mcp
                     if (Evaluate(contains, item, $"{path}[{index}]", root, depth + 1, 0, ref budget) == null)
                     {
                         matches++;
+                        local.Items.Add(index);
                     }
 
                     index++;
@@ -650,13 +790,13 @@ namespace Voltaic.Mcp
             return null;
         }
 
-        private static string? CheckComposition(JsonElement schema, JsonElement instance, string path, JsonElement root, int depth, int chain, ref int budget)
+        private static string? CheckComposition(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, int chain, ref int budget, McpSchemaEvaluated local)
         {
             if (schema.TryGetProperty("allOf", out JsonElement allOf) && allOf.ValueKind == JsonValueKind.Array)
             {
                 foreach (JsonElement subschema in allOf.EnumerateArray())
                 {
-                    string? error = Evaluate(subschema, instance, path, root, depth + 1, chain + 1, ref budget);
+                    string? error = Evaluate(subschema, instance, path, root, depth + 1, chain + 1, ref budget, local);
                     if (error != null) return error;
                 }
             }
@@ -665,13 +805,16 @@ namespace Voltaic.Mcp
             {
                 string? firstError = null;
                 bool matched = false;
+                // Every passing branch contributes annotations, so all branches are evaluated.
                 foreach (JsonElement subschema in anyOf.EnumerateArray())
                 {
-                    string? error = Evaluate(subschema, instance, path, root, depth + 1, chain + 1, ref budget);
+                    McpSchemaEvaluated branch = new McpSchemaEvaluated();
+                    string? error = Evaluate(subschema, instance, path, root, depth + 1, chain + 1, ref budget, branch);
                     if (error == null)
                     {
                         matched = true;
-                        break;
+                        local.Merge(branch);
+                        continue;
                     }
 
                     firstError ??= error;
@@ -687,12 +830,15 @@ namespace Voltaic.Mcp
             {
                 string? firstError = null;
                 int matches = 0;
+                McpSchemaEvaluated? passing = null;
                 foreach (JsonElement subschema in oneOf.EnumerateArray())
                 {
-                    string? error = Evaluate(subschema, instance, path, root, depth + 1, chain + 1, ref budget);
+                    McpSchemaEvaluated branch = new McpSchemaEvaluated();
+                    string? error = Evaluate(subschema, instance, path, root, depth + 1, chain + 1, ref budget, branch);
                     if (error == null)
                     {
                         matches++;
+                        passing = branch;
                         if (matches > 1) break;
                     }
                     else
@@ -710,6 +856,8 @@ namespace Voltaic.Mcp
                 {
                     return $"{path} must match exactly one of the 'oneOf' schemas but matches more than one.";
                 }
+
+                if (passing != null) local.Merge(passing);
             }
 
             if (schema.TryGetProperty("not", out JsonElement not) && IsSchema(not))
@@ -722,11 +870,13 @@ namespace Voltaic.Mcp
 
             if (schema.TryGetProperty("if", out JsonElement condition) && IsSchema(condition))
             {
-                bool conditionHolds = Evaluate(condition, instance, path, root, depth + 1, chain + 1, ref budget) == null;
+                McpSchemaEvaluated conditionAnnotations = new McpSchemaEvaluated();
+                bool conditionHolds = Evaluate(condition, instance, path, root, depth + 1, chain + 1, ref budget, conditionAnnotations) == null;
+                if (conditionHolds) local.Merge(conditionAnnotations);
                 string branchName = conditionHolds ? "then" : "else";
                 if (schema.TryGetProperty(branchName, out JsonElement branch) && IsSchema(branch))
                 {
-                    string? error = Evaluate(branch, instance, path, root, depth + 1, chain + 1, ref budget);
+                    string? error = Evaluate(branch, instance, path, root, depth + 1, chain + 1, ref budget, local);
                     if (error != null) return error;
                 }
             }
@@ -983,60 +1133,6 @@ namespace Voltaic.Mcp
 
             _RegexCache[pattern] = regex;
             return regex;
-        }
-
-        // Resolves a local JSON pointer reference ("#", "#/$defs/name", "#/definitions/name", or any "#/..." pointer)
-        // against the root schema. Other references (remote URIs, anchors) are not resolved.
-        private static bool TryResolveReference(JsonElement root, string? reference, out JsonElement target)
-        {
-            target = root;
-            if (String.IsNullOrEmpty(reference) || reference[0] != '#')
-            {
-                return false;
-            }
-
-            if (reference.Length == 1)
-            {
-                return true;
-            }
-
-            if (reference[1] != '/')
-            {
-                return false;
-            }
-
-            string pointer;
-            try
-            {
-                pointer = Uri.UnescapeDataString(reference.Substring(2));
-            }
-            catch (UriFormatException)
-            {
-                return false;
-            }
-
-            JsonElement current = root;
-            foreach (string rawToken in pointer.Split('/'))
-            {
-                string token = rawToken.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
-                if (current.ValueKind == JsonValueKind.Object)
-                {
-                    if (!current.TryGetProperty(token, out JsonElement next)) return false;
-                    current = next;
-                }
-                else if (current.ValueKind == JsonValueKind.Array)
-                {
-                    if (!Int32.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out int index) || index >= current.GetArrayLength()) return false;
-                    current = current[index];
-                }
-                else
-                {
-                    return false;
-                }
-            }
-
-            target = current;
-            return true;
         }
 
         // JSON equality for enum and const: numbers compare by value (1 equals 1.0), objects ignore member order.

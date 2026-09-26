@@ -57,7 +57,7 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Builds the client capabilities for the request handlers a client has registered.
         /// </summary>
-        internal static Dictionary<string, object?> CapabilitiesFor(ClientRequestDispatcher dispatcher, IReadOnlyDictionary<string, object?>? extra)
+        internal static Dictionary<string, object?> CapabilitiesFor(ClientRequestDispatcher dispatcher, IReadOnlyDictionary<string, object?>? extra, string? protocolVersion = null)
         {
             Dictionary<string, object?> capabilities = new Dictionary<string, object?>(StringComparer.Ordinal);
             if (extra != null)
@@ -68,6 +68,14 @@ namespace Voltaic.Mcp
             if (dispatcher.HasHandler("roots/list") && !capabilities.ContainsKey("roots")) capabilities["roots"] = new Dictionary<string, object?>(StringComparer.Ordinal);
             if (dispatcher.HasHandler("sampling/createMessage") && !capabilities.ContainsKey("sampling")) capabilities["sampling"] = new Dictionary<string, object?>(StringComparer.Ordinal);
             if (dispatcher.HasHandler("elicitation/create") && !capabilities.ContainsKey("elicitation")) capabilities["elicitation"] = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+            // elicitation was added in 2025-06-18; an older revision's ClientCapabilities has no such member.
+            if (protocolVersion != null && McpProtocol.IsHandshakeVersion(protocolVersion)
+                && String.CompareOrdinal(protocolVersion, McpProtocol.ProtocolVersion20250618) < 0)
+            {
+                capabilities.Remove("elicitation");
+            }
+
             return capabilities;
         }
 

@@ -66,14 +66,14 @@ namespace Test.Shared
                         TestAssert.Null(list.SessionId, "A rejected stateless request carries no session id.");
                     }),
 
-                    Case(suiteId, "RpcPathWithoutVersionHeaderUnchanged", "A plain JSON-RPC request to the JSON-RPC path gets handshake results, no stateless fields, and no session", async ct =>
+                    Case(suiteId, "RpcPathWithoutVersionHeaderUnchanged", "A JSON-RPC request on the JSON-RPC path's session gets handshake results with no stateless fields", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, RegisterSurface, ct).ConfigureAwait(false);
+                        string? session = await fixture.InitializeSessionAsync(ct, "/rpc/").ConfigureAwait(false);
 
                         RpcResult list = await McpHttpTestRequests.SendAsync(
-                            fixture, McpHttpTestRequests.BuildBody("tools/list", 1, null), new Dictionary<string, string>(), false, ct, "/rpc/").ConfigureAwait(false);
+                            fixture, McpHttpTestRequests.BuildBody("tools/list", 1, null), new Dictionary<string, string> { { McpProtocol.SessionIdHeader, session! } }, false, ct, "/rpc/").ConfigureAwait(false);
                         TestAssert.Equal(HttpStatusCode.OK, list.StatusCode, $"tools/list should succeed. Body: {list.Body}");
-                        TestAssert.True(list.SessionId == null, "A sessionless JSON-RPC request is not issued a session.");
                         TestAssert.False(list.Result.Has("resultType"), "Handshake-era results carry no resultType.");
                         TestAssert.True(list.Result.Get("tools").EnumerateArray().Any(tool => tool.Get("name").String() == "echo-tool"), "tools/list returns the registered tools.");
                     }),

@@ -23,7 +23,7 @@ namespace Voltaic.Mcp
         private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
         private readonly McpMessageProcessor _Processor;
-        private readonly McpSessionState _Session = new McpSessionState();
+        private readonly McpSessionState _Session = new McpSessionState { CanPingClient = true };
         private readonly SemaphoreSlim _WriteLock = new SemaphoreSlim(1, 1);
         private StreamWriter? _Stdout;
         private bool _IsDisposed = false;
@@ -131,6 +131,37 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
+        /// check that the connection is healthy (MCP ping utility); a ping that is not answered within
+        /// <see cref="PingTimeoutMs"/> is logged. Default is 30000. 0 disables pinging. Maximum is 3600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        public int PingIntervalMs
+        {
+            get => _Endpoint.PingIntervalMs;
+            set
+            {
+                if (value < 0 || value > 3600000) throw new ArgumentOutOfRangeException(nameof(value), "PingIntervalMs must be between 0 and 3600000.");
+                _Endpoint.PingIntervalMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how long the server waits for a client to answer its ping, in milliseconds. Default is 10000.
+        /// Minimum is 100; maximum is 600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        public int PingTimeoutMs
+        {
+            get => _Endpoint.PingTimeoutMs;
+            set
+            {
+                if (value < 100 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "PingTimeoutMs must be between 100 and 600000.");
+                _Endpoint.PingTimeoutMs = value;
+            }
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
@@ -149,6 +180,12 @@ namespace Voltaic.Mcp
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
             _Endpoint = new McpEndpoint("Voltaic.Mcp.StdioServer");
             _Endpoint.ErrorLog = LogToStderr;
+            // Registration changes are announced to initialized clients (notifications/{kind}/list_changed).
+            _Endpoint.ListChanged = kind =>
+            {
+                if (!_Endpoint.SupportsListChangedNotifications) return;
+                _ = McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/" + kind + "/list_changed", CancellationToken.None);
+            };
             _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogToStderr);
             _Session.Push = WriteLineAsync;
             RegisterProtocolMethods();

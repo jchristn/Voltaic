@@ -22,6 +22,7 @@ namespace Voltaic.Mcp
         private readonly Func<SseStreamLog>? _OpenLog;
         private readonly bool _Prime;
         private readonly int _RetryMs;
+        private readonly Action? _OnDisconnect;
         private readonly SemaphoreSlim _Lock = new SemaphoreSlim(1, 1);
         private readonly CancellationTokenSource _WriterToken = new CancellationTokenSource();
         private SseStreamLog? _Log;
@@ -34,8 +35,10 @@ namespace Voltaic.Mcp
         /// <param name="openLog">Opens the session stream log that makes the SSE stream resumable, or null for a stream without event IDs (stateless requests).</param>
         /// <param name="prime">True to start the stream with a priming event (MCP 2025-11-25 and later).</param>
         /// <param name="retryMs">The reconnection delay announced with the priming event.</param>
-        internal McpHttpResponseWriter(HttpListenerContext context, Action<HttpListenerResponse> prepareHeaders, Func<SseStreamLog>? openLog = null, bool prime = false, int retryMs = 1000)
+        /// <param name="onDisconnect">Called once when a write finds the client gone (for stateless requests, the disconnect cancels the request), or null.</param>
+        internal McpHttpResponseWriter(HttpListenerContext context, Action<HttpListenerResponse> prepareHeaders, Func<SseStreamLog>? openLog = null, bool prime = false, int retryMs = 1000, Action? onDisconnect = null)
         {
+            _OnDisconnect = onDisconnect;
             _Context = context;
             _PrepareHeaders = prepareHeaders;
             _OpenLog = openLog;
@@ -82,7 +85,7 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex) when (IsDisconnect(ex))
             {
-                _Broken = true;
+                MarkBroken();
                 return false;
             }
             finally
@@ -192,7 +195,7 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex) when (IsDisconnect(ex))
             {
-                _Broken = true;
+                MarkBroken();
             }
         }
 
@@ -200,7 +203,17 @@ namespace Voltaic.Mcp
         {
             if (_Log == null)
             {
-                await WriteAsync(Encoding.UTF8.GetBytes("event: message\ndata: " + json + "\n\n"), token).ConfigureAwait(false);
+                if (_Broken) return;
+                try
+                {
+                    await WriteAsync(Encoding.UTF8.GetBytes("event: message\ndata: " + json + "\n\n"), token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsDisconnect(ex))
+                {
+                    // The client closed the stream: the request is cancelled rather than failing the handler's write.
+                    MarkBroken();
+                }
+
                 return;
             }
 
@@ -214,7 +227,20 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex) when (IsDisconnect(ex))
             {
-                _Broken = true;
+                MarkBroken();
+            }
+        }
+
+        private void MarkBroken()
+        {
+            if (_Broken) return;
+            _Broken = true;
+            try
+            {
+                _OnDisconnect?.Invoke();
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
 

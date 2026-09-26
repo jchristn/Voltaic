@@ -40,6 +40,22 @@ namespace Voltaic.Mcp
 
         public Action<string>? ErrorLog { get; set; }
 
+        // Raised with "tools", "resources", or "prompts" when a registration changes the list clients see, so the
+        // server can send notifications/{kind}/list_changed (MCP: servers that declare listChanged should).
+        public Action<string>? ListChanged { get; set; }
+
+        private void RaiseListChanged(string kind)
+        {
+            try
+            {
+                ListChanged?.Invoke(kind);
+            }
+            catch (Exception ex)
+            {
+                ErrorLog?.Invoke($"list_changed notification failed: {ex.Message}");
+            }
+        }
+
         public string? ServerInstructions { get; set; }
 
         public long? ListCacheTtlMs { get; set; }
@@ -53,6 +69,10 @@ namespace Voltaic.Mcp
         public string? DiscoverCacheScope { get; set; }
 
         public int PageSize { get; set; } = DefaultPageSize;
+
+        public int PingIntervalMs { get; set; } = 30000;
+
+        public int PingTimeoutMs { get; set; } = 10000;
 
         public McpEndpoint(string serverName)
         {
@@ -153,10 +173,14 @@ namespace Voltaic.Mcp
         {
             if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
 
+            bool removed;
             lock (_Lock)
             {
-                return _Tools.RemoveAll(tool => StringComparer.Ordinal.Equals(tool.Definition.Name, name)) > 0;
+                removed = _Tools.RemoveAll(tool => StringComparer.Ordinal.Equals(tool.Definition.Name, name)) > 0;
             }
+
+            if (removed) RaiseListChanged("tools");
+            return removed;
         }
 
         public List<McpHeaderParameter>? GetToolHeaderParameters(string name)
@@ -183,6 +207,7 @@ namespace Voltaic.Mcp
                 _Tools.Add(new ToolRegistration(definition, handler));
             }
 
+            RaiseListChanged("tools");
             return definition;
         }
 
@@ -197,6 +222,7 @@ namespace Voltaic.Mcp
                 _Resources.Add(new ResourceRegistration(resource, handler));
             }
 
+            RaiseListChanged("resources");
             return resource;
         }
 
@@ -213,6 +239,7 @@ namespace Voltaic.Mcp
                 _ResourceTemplates.Add(new ResourceTemplateRegistration(template, new McpUriTemplate(template.UriTemplate), handler));
             }
 
+            RaiseListChanged("resources");
             return template;
         }
 
@@ -227,6 +254,7 @@ namespace Voltaic.Mcp
                 _Prompts.Add(new PromptRegistration(prompt, handler));
             }
 
+            RaiseListChanged("prompts");
             return prompt;
         }
 
@@ -426,26 +454,29 @@ namespace Voltaic.Mcp
             List<string> missingPaths = new List<string>();
             foreach (KeyValuePair<string, McpInputRequest> entry in result.InputRequests!)
             {
-                string? path = RequiredCapabilityPath(entry.Value, declared);
-                if (path == null)
+                List<string>? paths = RequiredCapabilityPaths(entry.Value, declared);
+                if (paths == null)
                 {
                     throw new McpProtocolException(-32603, $"Tool '{toolName}' requested input with unsupported method '{entry.Value.Method}'; only elicitation/create, sampling/createMessage, and roots/list are allowed.");
                 }
 
-                if (McpClientCapabilityPath.IsDeclared(declared, path) || missingPaths.Contains(path)) continue;
-                missingPaths.Add(path);
-
-                // requiredCapabilities mirrors the ClientCapabilities shape, for example {"elicitation":{"url":{}}}.
-                Dictionary<string, object> level = missing;
-                foreach (string segment in path.Split('.'))
+                foreach (string path in paths)
                 {
-                    if (!level.TryGetValue(segment, out object? child) || child is not Dictionary<string, object> next)
-                    {
-                        next = new Dictionary<string, object>(StringComparer.Ordinal);
-                        level[segment] = next;
-                    }
+                    if (McpClientCapabilityPath.IsDeclared(declared, path) || missingPaths.Contains(path)) continue;
+                    missingPaths.Add(path);
 
-                    level = next;
+                    // requiredCapabilities mirrors the ClientCapabilities shape, for example {"elicitation":{"url":{}}}.
+                    Dictionary<string, object> level = missing;
+                    foreach (string segment in path.Split('.'))
+                    {
+                        if (!level.TryGetValue(segment, out object? child) || child is not Dictionary<string, object> next)
+                        {
+                            next = new Dictionary<string, object>(StringComparer.Ordinal);
+                            level[segment] = next;
+                        }
+
+                        level = next;
+                    }
                 }
             }
 
@@ -457,10 +488,11 @@ namespace Voltaic.Mcp
             }
         }
 
-        // The client capability an input request needs, as a dotted path: elicitation.url for URL-mode elicitation,
+        // The client capabilities an input request needs, as dotted paths: elicitation.url for URL-mode elicitation,
         // elicitation.form for form mode when the client lists modes (an empty elicitation object means form only),
-        // sampling.tools for sampling that offers tools, else the method's capability. Null for other methods.
-        private static string? RequiredCapabilityPath(McpInputRequest request, JsonElement? declared)
+        // sampling.tools for sampling that offers tools and sampling.context for sampling that asks to include context,
+        // else the method's capability. Null for other methods.
+        private static List<string>? RequiredCapabilityPaths(McpInputRequest request, JsonElement? declared)
         {
             JsonElement parameters = request.Params == null ? default : (request.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(request.Params));
             bool hasParams = parameters.ValueKind == JsonValueKind.Object;
@@ -470,16 +502,22 @@ namespace Voltaic.Mcp
                     string mode = hasParams && parameters.TryGetProperty("mode", out JsonElement modeElement) && modeElement.ValueKind == JsonValueKind.String
                         ? modeElement.GetString() ?? "form"
                         : "form";
-                    if (mode == "url") return "elicitation.url";
+                    if (mode == "url") return new List<string> { "elicitation.url" };
+                    if (mode != "form") return new List<string> { "elicitation." + mode };
                     bool listsModes = declared.HasValue && declared.Value.ValueKind == JsonValueKind.Object
                         && declared.Value.TryGetProperty("elicitation", out JsonElement elicitation)
                         && elicitation.ValueKind == JsonValueKind.Object && elicitation.EnumerateObject().Any();
-                    return listsModes ? "elicitation.form" : "elicitation";
+                    return new List<string> { listsModes ? "elicitation.form" : "elicitation" };
                 case "sampling/createMessage":
+                    List<string> sampling = new List<string> { "sampling" };
                     bool offersTools = hasParams && parameters.TryGetProperty("tools", out JsonElement tools) && tools.ValueKind == JsonValueKind.Array && tools.GetArrayLength() > 0;
-                    return offersTools ? "sampling.tools" : "sampling";
+                    if (offersTools) sampling.Add("sampling.tools");
+                    bool includesContext = hasParams && parameters.TryGetProperty("includeContext", out JsonElement context) && context.ValueKind == JsonValueKind.String
+                        && (context.GetString() == "thisServer" || context.GetString() == "allServers");
+                    if (includesContext) sampling.Add("sampling.context");
+                    return sampling;
                 case "roots/list":
-                    return "roots";
+                    return new List<string> { "roots" };
                 default:
                     return null;
             }
@@ -827,9 +865,20 @@ namespace Voltaic.Mcp
                 throw new ArgumentException($"Tool '{toolName}' {kind} schema must be a JSON object.");
             }
 
+            // The schema must be one the validator can enforce as written: a supported dialect, and references that
+            // resolve within it (an unresolvable reference would otherwise validate permissively).
+            string? problem = McpSchemaValidator.CheckSchema(element);
+            if (problem != null)
+            {
+                throw new ArgumentException($"Tool '{toolName}' {kind} schema: {problem}");
+            }
+
             if (element.TryGetProperty("type", out JsonElement type))
             {
-                if (type.ValueKind != JsonValueKind.String || type.GetString() != "object")
+                // Input schemas are objects in every revision. An output schema of another type is allowed from
+                // 2026-07-28; tools/list omits it for older sessions, whose schema requires an object.
+                bool isObject = type.ValueKind == JsonValueKind.String && type.GetString() == "object";
+                if (!isObject && kind == "input")
                 {
                     throw new ArgumentException($"Tool '{toolName}' {kind} schema must have \"type\": \"object\".");
                 }

@@ -22,12 +22,20 @@ namespace Voltaic.Mcp
         // are handled in order), kept briefly so the request is cancelled when it begins.
         private readonly ConcurrentDictionary<string, DateTime> _EarlyCancels = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly TimeSpan _EarlyCancelLifetime = TimeSpan.FromSeconds(30);
+        // IDs of requests that finished recently: a cancellation for one of them arrived too late and is ignored, so
+        // it can never cancel a later request that reuses the ID (allowed once the response was sent).
+        private readonly ConcurrentDictionary<string, DateTime> _Completed = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        // Pings this server sent to the client, by request ID JSON, completed by the client's response.
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _PendingPings = new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.Ordinal);
+        private McpPinger? _Pinger;
+        private readonly CancellationTokenSource _Closed = new CancellationTokenSource();
         private const int _MaxEarlyCancels = 256;
         private string? _NegotiatedVersion;
         private JsonElement? _ClientCapabilities;
         private string? _LogLevel;
         private bool _IsInitialized;
         private bool _ClientInitialized;
+        private int _InitializeClaimed;
 
         /// <param name="requireInitialize">True when requests other than <c>initialize</c> and <c>ping</c> must wait for the handshake (MCP connections); false for Voltaic's sessionless <c>/rpc</c> endpoint.</param>
         internal McpSessionState(bool requireInitialize = true)
@@ -44,6 +52,9 @@ namespace Voltaic.Mcp
         /// Gets whether handshake-era requests must follow a successful <c>initialize</c>.
         /// </summary>
         internal bool RequireInitialize { get; }
+
+        // True for stream transports, whose connection can carry a ping request to the client at any time.
+        internal bool CanPingClient { get; set; }
 
         /// <summary>
         /// Gets or sets how server-initiated messages (list changes, resource updates, log messages) reach the client, or
@@ -96,6 +107,19 @@ namespace Voltaic.Mcp
             }
         }
 
+        // Claims the right to run initialize; false when one already ran or is running.
+        internal bool TryClaimInitialize()
+        {
+            if (IsInitialized) return false;
+            return Interlocked.CompareExchange(ref _InitializeClaimed, 1, 0) == 0;
+        }
+
+        // Releases the claim after an initialize that failed, so the client may try again.
+        internal void ReleaseInitializeClaim()
+        {
+            Interlocked.Exchange(ref _InitializeClaimed, 0);
+        }
+
         internal void Subscribe(string uri)
         {
             lock (_Lock) _Subscriptions.Add(uri);
@@ -119,6 +143,7 @@ namespace Voltaic.Mcp
             McpInFlightRequest request = new McpInFlightRequest(idKey, method, progressToken, parent);
             if (_InFlight.TryAdd(idKey, request))
             {
+                _Completed.TryRemove(idKey, out DateTime _);
                 if (method != "initialize" && _EarlyCancels.TryRemove(idKey, out DateTime _)) request.Cancel();
                 return request;
             }
@@ -131,6 +156,8 @@ namespace Voltaic.Mcp
         {
             request.MarkCompleted();
             _InFlight.TryRemove(new KeyValuePair<string, McpInFlightRequest>(request.IdKey, request));
+            _Completed[request.IdKey] = DateTime.UtcNow;
+            Prune(_Completed);
             request.Dispose();
         }
 
@@ -146,8 +173,27 @@ namespace Voltaic.Mcp
                 return true;
             }
 
-            if (request == null) RememberEarlyCancel(idKey);
+            if (request == null && !_Completed.ContainsKey(idKey)) RememberEarlyCancel(idKey);
             return false;
+        }
+
+        private static void Prune(ConcurrentDictionary<string, DateTime> entries)
+        {
+            if (entries.Count < _MaxEarlyCancels) return;
+            DateTime now = DateTime.UtcNow;
+            foreach (KeyValuePair<string, DateTime> entry in entries)
+            {
+                if (now - entry.Value > _EarlyCancelLifetime) entries.TryRemove(entry.Key, out DateTime _);
+            }
+
+            // Keep the set bounded even when many requests finish quickly: drop the oldest entries.
+            if (entries.Count >= _MaxEarlyCancels * 4)
+            {
+                foreach (KeyValuePair<string, DateTime> oldest in entries.OrderBy(entry => entry.Value).Take(entries.Count - (_MaxEarlyCancels * 2)).ToList())
+                {
+                    entries.TryRemove(oldest.Key, out DateTime _);
+                }
+            }
         }
 
         private void RememberEarlyCancel(string idKey)
@@ -174,8 +220,58 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Cancels every in-flight request, for example when the connection closes.
         /// </summary>
+        // Starts periodic pings to the client (stream transports, after initialize).
+        internal void StartPinging(int intervalMs, int timeoutMs, Action<string> log)
+        {
+            if (Push == null || !CanPingClient) return;
+            McpPinger? pinger = McpPinger.Start(intervalMs, token => PingAsync(timeoutMs, token), log);
+            Interlocked.Exchange(ref _Pinger, pinger)?.Dispose();
+        }
+
+        // Sends one ping request to the client and waits for its response.
+        internal async Task<bool> PingAsync(int timeoutMs, CancellationToken token)
+        {
+            Func<string, CancellationToken, Task>? push = Push;
+            if (push == null) return false;
+
+            string id = "voltaic-ping-" + Guid.NewGuid().ToString("N");
+            string idKey = JsonSerializer.Serialize(id);
+            TaskCompletionSource<bool> answered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _PendingPings[idKey] = answered;
+            try
+            {
+                await push("{\"jsonrpc\":\"2.0\",\"id\":" + idKey + ",\"method\":\"ping\"}", token).ConfigureAwait(false);
+                Task finished = await Task.WhenAny(answered.Task, Task.Delay(timeoutMs, token)).ConfigureAwait(false);
+                return finished == answered.Task;
+            }
+            finally
+            {
+                _PendingPings.TryRemove(idKey, out TaskCompletionSource<bool>? _);
+            }
+        }
+
+        // Completes a ping this server sent; returns false when the response answers something else.
+        internal bool TryCompletePing(string idKey)
+        {
+            if (!_PendingPings.TryRemove(idKey, out TaskCompletionSource<bool>? answered)) return false;
+            answered.TrySetResult(true);
+            return true;
+        }
+
+        // Cancelled when the session ends, so work tied to it (such as an open GET stream) stops.
+        internal CancellationToken Closed => _Closed.Token;
+
         internal void CancelAll()
         {
+            try
+            {
+                _Closed.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            Interlocked.Exchange(ref _Pinger, null)?.Dispose();
             foreach (McpInFlightRequest request in _InFlight.Values)
             {
                 request.Cancel();

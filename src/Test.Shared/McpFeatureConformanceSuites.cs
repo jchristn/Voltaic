@@ -216,19 +216,27 @@ namespace Test.Shared
                         return Task.CompletedTask;
                     }),
 
-                    Case(suiteId, "ToolSchemasMustBeObjects", "An input schema without a type gets \"type\": \"object\"; a schema of another type is rejected at registration", async ct =>
+                    Case(suiteId, "ToolSchemasMustBeObjects", "An input schema without a type gets \"type\": \"object\" and one of another type is rejected; output schemas of any type are accepted (omitted before 2026-07-28); unsupported dialects and unresolvable references are rejected", async ct =>
                     {
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct, s =>
                         {
                             s.RegisterTool("untyped", "No type", new { properties = new { a = new { type = "string" } } }, args => "ok");
                             TestAssert.Throws<ArgumentException>(() => s.RegisterTool("arrayed", "Array", new { type = "array" }, args => "x"), "An array input schema is rejected.");
-                            TestAssert.Throws<ArgumentException>(() => s.RegisterTool("badout", "Output", new { type = "object" }, new { type = "string" }, args => "x"), "A non-object output schema is rejected.");
+                            s.RegisterTool("listout", "Array output", new { type = "object" }, new { type = "array", items = new { type = "integer" } }, args => McpToolCallResult.FromStructured(new[] { 1, 2 }));
+                            TestAssert.Throws<ArgumentException>(() => s.RegisterTool("dialect", "Old dialect", new Dictionary<string, object> { { "$schema", "http://json-schema.org/draft-04/schema#" }, { "type", "object" } }, args => "x"), "An unsupported dialect is rejected.");
+                            TestAssert.Throws<ArgumentException>(() => s.RegisterTool("remote", "Remote ref", new Dictionary<string, object> { { "type", "object" }, { "properties", new { a = new Dictionary<string, object> { { "$ref", "https://example.com/a.json" } } } } }, args => "x"), "An unresolvable reference is rejected.");
                         }).ConfigureAwait(false);
                         using McpTcpClient client = await ConnectAsync(fixture, ct).ConfigureAwait(false);
                         JsonProbe tools = await CallAsync(client, "tools/list", new { }, ct).ConfigureAwait(false);
                         JsonProbe schema = tools.Get("tools").EnumerateArray().First(t => t.Get("name").String() == "untyped").Get("inputSchema");
                         TestAssert.Equal("object", schema.Get("type").String(), "type object is added.");
                         TestAssert.True(schema.Get("properties").Has("a"), "The rest of the schema is kept.");
+                        TestAssert.False(tools.Get("tools").EnumerateArray().First(t => t.Get("name").String() == "listout").Has("outputSchema"), "A non-object output schema is omitted for 2025-11-25 sessions.");
+
+                        using RawLineClient stateless = await RawLineClient.ConnectAsync(fixture.Port, ct).ConfigureAwait(false);
+                        await stateless.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientInfo\":{\"name\":\"t\",\"version\":\"1\"},\"io.modelcontextprotocol/clientCapabilities\":{}}}}").ConfigureAwait(false);
+                        JsonProbe statelessTools = Next(stateless).Get("result").Get("tools");
+                        TestAssert.Equal("array", statelessTools.EnumerateArray().First(t => t.Get("name").String() == "listout").Get("outputSchema").Get("type").String(), "2026-07-28 allows any output schema.");
                     }),
 
                     Case(suiteId, "OutputSchemaRequiresStructuredContent", "A tool that declares an output schema must return structured content; returning only text is an internal error", async ct =>

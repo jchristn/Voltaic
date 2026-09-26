@@ -53,6 +53,16 @@ namespace Voltaic.Mcp
         internal object? ResponseId => Id.HasValue ? (object)Id.Value : null;
 
         /// <summary>
+        /// Returns true for a JSON number with no fractional part.
+        /// </summary>
+        internal static bool IsInteger(JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Number) return false;
+            if (element.TryGetInt64(out long _)) return true;
+            return element.TryGetDecimal(out decimal value) && value == Math.Truncate(value);
+        }
+
+        /// <summary>
         /// Validates one message. The element is cloned, so it outlives its document.
         /// </summary>
         internal static McpEnvelope Parse(JsonElement element)
@@ -65,7 +75,8 @@ namespace Voltaic.Mcp
 
             JsonElement? id = null;
             bool hasId = message.TryGetProperty("id", out JsonElement idElement);
-            bool validId = hasId && (idElement.ValueKind == JsonValueKind.String || idElement.ValueKind == JsonValueKind.Number);
+            // MCP request IDs are strings or integers (never null, never fractional).
+            bool validId = hasId && (idElement.ValueKind == JsonValueKind.String || IsInteger(idElement));
             if (validId) id = idElement;
 
             if (!message.TryGetProperty("jsonrpc", out JsonElement version) || version.ValueKind != JsonValueKind.String || version.GetString() != "2.0")
@@ -92,7 +103,7 @@ namespace Voltaic.Mcp
             string method = methodElement.GetString()!;
             if (hasId && !validId)
             {
-                return Invalid(message, null, "A request ID must be a string or a number; null is not allowed.");
+                return Invalid(message, null, "A request ID must be a string or an integer; null and fractional numbers are not allowed.");
             }
 
             JsonElement? parameters = null;

@@ -121,6 +121,37 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
+        /// check that the connection is healthy (MCP ping utility); a ping that is not answered within
+        /// <see cref="PingTimeoutMs"/> is logged. Default is 30000. 0 disables pinging. Maximum is 3600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 3600000.</exception>
+        public int PingIntervalMs
+        {
+            get => _Endpoint.PingIntervalMs;
+            set
+            {
+                if (value < 0 || value > 3600000) throw new ArgumentOutOfRangeException(nameof(value), "PingIntervalMs must be between 0 and 3600000.");
+                _Endpoint.PingIntervalMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how long the server waits for a client to answer its ping, in milliseconds. Default is 10000.
+        /// Minimum is 100; maximum is 600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        public int PingTimeoutMs
+        {
+            get => _Endpoint.PingTimeoutMs;
+            set
+            {
+                if (value < 100 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "PingTimeoutMs must be between 100 and 600000.");
+                _Endpoint.PingTimeoutMs = value;
+            }
+        }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="McpTcpServer"/> class.
         /// </summary>
         /// <param name="ip">The IP address to listen on.</param>
@@ -138,6 +169,12 @@ namespace Voltaic.Mcp
         {
             _Endpoint = new McpEndpoint("Voltaic.Mcp.TcpServer");
             _Endpoint.ErrorLog = WriteLog;
+            // Registration changes are announced to initialized clients (notifications/{kind}/list_changed).
+            _Endpoint.ListChanged = kind =>
+            {
+                if (!_Endpoint.SupportsListChangedNotifications) return;
+                _ = McpServerNotifications.ListChangedAsync(Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
+            };
             _Processor = new McpMessageProcessor(_Endpoint, Methods, WriteLog)
             {
                 RequestReceived = (request, session) => { if (session.Owner is ClientConnection client) RaiseRequestReceivedFor(client, request); },
@@ -626,7 +663,7 @@ namespace Voltaic.Mcp
 
         private protected override void OnClientConnected(ClientConnection client)
         {
-            McpSessionState session = new McpSessionState { Owner = client };
+            McpSessionState session = new McpSessionState { Owner = client, CanPingClient = true };
             session.Push = (json, token) => WriteToClientAsync(client, json, token);
             client.ProtocolState = session;
         }
@@ -642,6 +679,21 @@ namespace Voltaic.Mcp
         {
             McpSessionState session = client.ProtocolState as McpSessionState ?? new McpSessionState { Owner = client };
             return _Processor.ProcessAsync(message, session, (json, ct) => WriteToClientAsync(client, json, ct), token);
+        }
+
+        /// <summary>
+        /// Asynchronously broadcasts a notification to connected clients that completed <c>initialize</c> (MCP sends
+        /// nothing but pings before it). A client whose negotiated revision does not define <paramref name="method"/>
+        /// is skipped, and the notification is reduced to what each client's revision defines.
+        /// </summary>
+        /// <param name="method">The name of the notification method. Must not be null or whitespace.</param>
+        /// <param name="parameters">The parameters to pass with the notification. Can be null.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null or whitespace.</exception>
+        public override Task BroadcastNotificationAsync(string method, object? parameters = null, CancellationToken token = default)
+        {
+            return McpServerNotifications.BroadcastAsync(Sessions(), method, parameters, token);
         }
 
         private IEnumerable<McpSessionState> Sessions()

@@ -97,7 +97,8 @@ namespace Test.McpServer
             {
                 string key = args?.GetString("key") ?? "default";
                 await Task.Delay(100, token);
-                return (object)$"value-for-{key}";
+                // MCP results are JSON objects.
+                return (object)new { value = $"value-for-{key}" };
             });
 
             server.RegisterResource(

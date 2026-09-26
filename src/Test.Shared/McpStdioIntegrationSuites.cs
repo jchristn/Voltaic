@@ -59,7 +59,8 @@ namespace Test.Shared
                         JsonProbe echo = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "echo", arguments = new { message = "test message" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe add = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "add", arguments = new { a = 5.0, b = 3.0 } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe multiply = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "multiply", arguments = new { x = 7.0, y = 6.0 } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
-                        string lookup = await client.CallAsync<string>("asyncLookup", new { key = "alpha" }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
+                        JsonProbe lookupResult = JsonProbe.From(await client.CallAsync<object?>("asyncLookup", new { key = "alpha" }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        string? lookup = lookupResult.Get("value").String();
 
                         TestAssert.Equal("test message", echo.Get("content")[0].Get("text").String());
                         TestAssert.Equal("8", add.Get("content")[0].Get("text").String());

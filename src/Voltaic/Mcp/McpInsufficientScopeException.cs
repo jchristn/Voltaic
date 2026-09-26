@@ -13,10 +13,11 @@ namespace Voltaic.Mcp
     public class McpInsufficientScopeException : McpProtocolException
     {
         /// <summary>
-        /// The JSON-RPC error code used for insufficient scope: <c>-32003</c>, in the implementation-defined server
-        /// error range.
+        /// The JSON-RPC error code used for insufficient scope: <c>403</c>, an application-defined code outside the
+        /// range JSON-RPC reserves (-32768 to -32000). MCP defines no code for this condition, and MCP 2026-07-28 asks
+        /// implementations not to use -32000 to -32019, which earlier drafts used.
         /// </summary>
-        public const int ErrorCode = -32003;
+        public const int ErrorCode = 403;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpInsufficientScopeException"/> class.
