@@ -86,8 +86,24 @@ namespace Voltaic.Core
 
         private readonly ConcurrentQueue<JsonRpcRequest> _Queue;
         private readonly SemaphoreSlim _Semaphore;
+        private readonly SemaphoreSlim _WriteLock = new SemaphoreSlim(1, 1);
         private int _MaxQueueSize = 100;
         private bool _IsDisposed = false;
+
+        /// <summary>
+        /// Gets the lock that serializes writes to this connection, so concurrent responses never interleave.
+        /// </summary>
+        internal SemaphoreSlim WriteLock => _WriteLock;
+
+        /// <summary>
+        /// Gets or sets whether this TCP connection uses newline-delimited framing instead of Content-Length framing.
+        /// </summary>
+        internal bool NewlineFraming { get; set; }
+
+        /// <summary>
+        /// Gets or sets protocol state a server keeps for this connection (for example the MCP session state).
+        /// </summary>
+        internal object? ProtocolState { get; set; }
 
         #endregion Private-Members
 

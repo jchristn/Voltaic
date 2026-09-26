@@ -95,8 +95,25 @@ namespace Voltaic.Core
         /// <returns>A failed authentication result carrying the challenge header.</returns>
         public static AuthenticationResult BearerChallenge(string? resourceMetadataUrl = null, string? error = null, string? errorDescription = null, string? errorMessage = null)
         {
+            return BearerChallenge(resourceMetadataUrl, error, errorDescription, errorMessage, null);
+        }
+
+        /// <summary>
+        /// Creates a failed result for bearer-token authentication with a <c>scope</c> parameter: status 401 and a
+        /// <c>WWW-Authenticate: Bearer</c> challenge naming the scopes a token needs, as the MCP authorization
+        /// specification (2025-11-25) recommends so clients can request them.
+        /// </summary>
+        /// <param name="resourceMetadataUrl">Optional protected resource metadata URL (RFC 9728). Null or empty omits it.</param>
+        /// <param name="error">Optional RFC 6750 error code. Null or empty omits it.</param>
+        /// <param name="errorDescription">Optional human-readable error description. Null or empty omits it.</param>
+        /// <param name="errorMessage">Optional response body text. Null sends no body.</param>
+        /// <param name="scope">Space-separated scopes the resource requires. Null or empty omits it.</param>
+        /// <returns>A failed authentication result carrying the challenge header.</returns>
+        public static AuthenticationResult BearerChallenge(string? resourceMetadataUrl, string? error, string? errorDescription, string? errorMessage, string? scope)
+        {
             List<string> parameters = new List<string>();
             if (!String.IsNullOrEmpty(resourceMetadataUrl)) parameters.Add($"resource_metadata=\"{EscapeQuoted(resourceMetadataUrl!)}\"");
+            if (!String.IsNullOrEmpty(scope)) parameters.Add($"scope=\"{EscapeQuoted(scope!)}\"");
             if (!String.IsNullOrEmpty(error)) parameters.Add($"error=\"{EscapeQuoted(error!)}\"");
             if (!String.IsNullOrEmpty(errorDescription)) parameters.Add($"error_description=\"{EscapeQuoted(errorDescription!)}\"");
 
@@ -109,6 +126,26 @@ namespace Voltaic.Core
                 ErrorMessage = errorMessage
             };
             result.Headers["WWW-Authenticate"] = challenge;
+            return result;
+        }
+
+        /// <summary>
+        /// Creates a failed result for a valid token that lacks a required scope: status 403 and
+        /// <c>WWW-Authenticate: Bearer error="insufficient_scope", scope="..."</c> (RFC 6750 section 3.1), as the MCP
+        /// authorization specification recommends, so the client can obtain a token with the scope. To reject a single
+        /// tool call instead of a whole request, throw <c>McpInsufficientScopeException</c> from the handler.
+        /// </summary>
+        /// <param name="scope">Space-separated scopes required. Must not be null or whitespace.</param>
+        /// <param name="resourceMetadataUrl">Optional protected resource metadata URL (RFC 9728). Null or empty omits it.</param>
+        /// <param name="errorDescription">Optional human-readable description. Null or empty omits it.</param>
+        /// <param name="errorMessage">Optional response body text. Null sends no body.</param>
+        /// <returns>A failed authentication result with status 403.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="scope"/> is null or whitespace.</exception>
+        public static AuthenticationResult InsufficientScope(string scope, string? resourceMetadataUrl = null, string? errorDescription = null, string? errorMessage = null)
+        {
+            if (String.IsNullOrWhiteSpace(scope)) throw new ArgumentNullException(nameof(scope));
+            AuthenticationResult result = BearerChallenge(resourceMetadataUrl, "insufficient_scope", errorDescription, errorMessage, scope);
+            result.StatusCode = 403;
             return result;
         }
 

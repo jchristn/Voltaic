@@ -81,6 +81,17 @@ namespace Test.McpServer
                     return x * y;
                 });
 
+            // A tool that writes to the console: the stdio server must keep this off stdout.
+            server.RegisterTool("chatty",
+                "Writes to the console and returns done",
+                new { type = "object", properties = new { } },
+                (args) =>
+                {
+                    Console.WriteLine("chatty tool output that must not reach stdout");
+                    Console.Out.Flush();
+                    return "done";
+                });
+
             // Register an async method with cancellation support
             server.RegisterMethod("asyncLookup", async (RpcParameters? args, CancellationToken token) =>
             {

@@ -71,10 +71,10 @@ namespace Test.Shared
 
                     Case(suiteId, "InitializeRequesting20260728NegotiatesHandshake", "The stdio server answers an initialize for 2026-07-28 with 2025-11-25", async ct =>
                     {
-                        using McpClient client = new McpClient();
+                        using McpClient client = new McpClient { AutoInitialize = false };
                         await LaunchTestServerAsync(client, ct).ConfigureAwait(false);
 
-                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20260728 }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20260728, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         TestAssert.Equal(McpProtocol.ProtocolVersion20251125, initialize.Get("protocolVersion").String(), "stdio initialize must not agree to the stateless revision.");
 
                         client.Shutdown();
@@ -82,10 +82,10 @@ namespace Test.Shared
 
                     Case(suiteId, "InitializeToolsResourcesAndPrompts", "McpClient exercises MCP initialize, tools, resources, and prompts over stdio", async ct =>
                     {
-                        using McpClient client = new McpClient();
+                        using McpClient client = new McpClient { AutoInitialize = false };
                         await LaunchTestServerAsync(client, ct).ConfigureAwait(false);
 
-                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe tools = JsonProbe.From(await client.CallAsync<object?>("tools/list", new { }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe toolCall = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "echo", arguments = new { message = "hello stdio" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe staticResource = JsonProbe.From(await client.CallAsync<object?>("resources/read", new { uri = "voltaic://stdio/static" }, timeoutMs: 15000, token: ct).ConfigureAwait(false));

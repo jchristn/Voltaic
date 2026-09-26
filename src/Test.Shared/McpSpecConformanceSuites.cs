@@ -84,7 +84,7 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.OK, answered.StatusCode, $"Body: {answered.Body}");
                         TestAssert.Equal(1, answered.Root.Length, "Only the request is answered.");
                         TestAssert.Equal(7, answered.Root[0].Get("id").Int(), "The answer is for the ping.");
-                        TestAssert.Equal(-32700, malformed.Root[0].Get("error").Get("code").Int(), "A malformed batch gets a parse error.");
+                        TestAssert.Equal(-32700, malformed.Root.Get("error").Get("code").Int(), "A malformed batch gets a single parse error (JSON-RPC 2.0).");
                     }),
 
                     Case(suiteId, "HeaderlessBatchAssumes20250326", "A session that negotiated 2025-03-26 may batch without the version header; a batch without a session gets 400", async ct =>
@@ -111,7 +111,7 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.BadRequest, result.StatusCode, "2025-11-25 does not allow batching.");
                     }),
 
-                    Case(suiteId, "StatelessRequestWithoutMetaGetsHeaderMismatch", "A 2026-07-28 request whose body has no _meta protocol version gets 400 -32020 on /mcp and /rpc", async ct =>
+                    Case(suiteId, "StatelessRequestWithoutMetaGetsHeaderMismatch", "A 2026-07-28 request whose body has no _meta protocol version is malformed: 400 -32602 on /mcp and /rpc", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
                         Dictionary<string, string> headers = new Dictionary<string, string>
@@ -124,9 +124,9 @@ namespace Test.Shared
                         RpcResult rpc = await McpHttpTestRequests.SendAsync(fixture, McpHttpTestRequests.BuildBody("tools/list", 2, new { }), headers, true, ct, "/rpc/").ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.BadRequest, mcp.StatusCode, $"Body: {mcp.Body}");
-                        TestAssert.Equal(-32020, mcp.Error.Get("code").Int(), "The error is HeaderMismatch.");
+                        TestAssert.Equal(-32602, mcp.Error.Get("code").Int(), "A missing required _meta field is invalid params.");
                         TestAssert.Equal(HttpStatusCode.BadRequest, rpc.StatusCode, $"Body: {rpc.Body}");
-                        TestAssert.Equal(-32020, rpc.Error.Get("code").Int(), "The JSON-RPC endpoint applies the same rule.");
+                        TestAssert.Equal(-32602, rpc.Error.Get("code").Int(), "The JSON-RPC endpoint applies the same rule.");
                     }),
 
                     Case(suiteId, "StatelessRequestWithMatchingMetaSucceeds", "A 2026-07-28 request with matching header and _meta versions succeeds", async ct =>
@@ -327,6 +327,7 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server => RegisterConfirmTool((n, d, sc, h) => server.RegisterTool(n, d, sc, h), observed)).ConfigureAwait(false);
 
                         using McpHttpClient client = new McpHttpClient();
+                        client.ClientCapabilities["elicitation"] = new { };
                         TestAssert.True(await client.ConnectStatelessAsync(fixture.BaseUrl, token: ct).ConfigureAwait(false), "The stateless client connects.");
                         JsonRpcResponse response = await client.CallToolStatelessAsync("confirm", new { path = "a.txt" },
                             inputRequired => new Dictionary<string, object?> { { "confirm", new { action = "accept", content = new { } } } }, 3, ct).ConfigureAwait(false);
@@ -423,7 +424,7 @@ namespace Test.Shared
                     Case(suiteId, "UnknownVersionNegotiatesOnWebSocket", "initialize with an unknown version negotiates the cap on the WebSocket transport too", async ct =>
                     {
                         await using WebSocketMcpFixture fixture = await WebSocketMcpFixture.StartAsync(ct).ConfigureAwait(false);
-                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
+                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct, autoInitialize: false).ConfigureAwait(false);
 
                         System.Text.Json.JsonElement result = await client.CallAsync<System.Text.Json.JsonElement>("initialize", new { protocolVersion = "2099-01-01", capabilities = new { }, clientInfo = new { name = "t", version = "1" } }, token: ct).ConfigureAwait(false);
                         TestAssert.Equal(McpProtocol.NewestHandshakeProtocolVersion, result.GetProperty("protocolVersion").GetString());

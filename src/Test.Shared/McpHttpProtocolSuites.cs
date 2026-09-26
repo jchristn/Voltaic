@@ -26,6 +26,7 @@ namespace Test.Shared
                         RpcResult response = await fixture.PostRpcAsync("initialize", new
                         {
                             protocolVersion = McpProtocol.LatestProtocolVersion,
+                            capabilities = new { },
                             clientInfo = new { name = "test-client", version = "1.0.0" }
                         }, 1, null, ct).ConfigureAwait(false);
 
@@ -45,7 +46,9 @@ namespace Test.Shared
 
                         RpcResult response = await fixture.PostRpcAsync("initialize", new
                         {
-                            protocolVersion = "1900-01-01"
+                            protocolVersion = "1900-01-01",
+                            capabilities = new { },
+                            clientInfo = new { name = "test-client", version = "1.0.0" }
                         }, 2, null, ct).ConfigureAwait(false);
 
                         JsonProbe json = JsonProbe.Parse(response.Body);
@@ -186,6 +189,7 @@ namespace Test.Shared
                 RpcResult response = await PostRpcAsync("initialize", new
                 {
                     protocolVersion = McpProtocol.LatestProtocolVersion,
+                    capabilities = new { },
                     clientInfo = new { name = "test-client", version = "1.0.0" }
                 }, "initialize", null, token).ConfigureAwait(false);
                 return response.SessionId;

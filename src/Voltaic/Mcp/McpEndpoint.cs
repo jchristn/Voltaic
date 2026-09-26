@@ -1,6 +1,5 @@
 namespace Voltaic.Mcp
 {
-    using Voltaic.Core;
     using System;
     using System.Collections.Generic;
     using System.Linq;
@@ -9,6 +8,7 @@ namespace Voltaic.Mcp
     using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks;
+    using Voltaic.Core;
 
     internal sealed class McpEndpoint
     {
@@ -20,7 +20,7 @@ namespace Voltaic.Mcp
         private readonly List<ResourceTemplateRegistration> _ResourceTemplates = new List<ResourceTemplateRegistration>();
         private readonly List<PromptRegistration> _Prompts = new List<PromptRegistration>();
         private readonly List<CompletionRegistration> _CompletionProviders = new List<CompletionRegistration>();
-        private readonly HashSet<string> _ResourceSubscriptions = new HashSet<string>(StringComparer.Ordinal);
+        private static readonly Regex _ToolNamePattern = new Regex("^[A-Za-z0-9_.-]{1,128}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         public string ProtocolVersion { get; set; } = McpProtocol.LatestProtocolVersion;
 
@@ -35,8 +35,6 @@ namespace Voltaic.Mcp
         public bool SupportsResourceSubscriptions { get; set; } = true;
 
         public bool SupportsLogging { get; set; } = true;
-
-        public bool EnforceInitializationOrdering { get; set; }
 
         public bool IncludeToolExceptionMessages { get; set; }
 
@@ -54,10 +52,6 @@ namespace Voltaic.Mcp
 
         public string? DiscoverCacheScope { get; set; }
 
-        public McpSessionLifecycleState State { get; private set; } = McpSessionLifecycleState.Created;
-
-        public string MinimumLogLevel { get; private set; } = "info";
-
         public int PageSize { get; set; } = DefaultPageSize;
 
         public McpEndpoint(string serverName)
@@ -67,40 +61,61 @@ namespace Voltaic.Mcp
 
         public object Initialize(RpcParameters? args)
         {
-            // The configured default applies when the client requests no version. It is capped like a
-            // requested version so a stateless-era default can never be agreed through initialize.
-            string clientProtocolVersion = McpProtocol.IsSupportedVersion(ProtocolVersion)
-                ? McpProtocol.NegotiateHandshakeVersion(ProtocolVersion, MaximumHandshakeProtocolVersion)
-                : ProtocolVersion;
-            McpInitializeParams? initialize = args?.Deserialize<McpInitializeParams>();
-            if (initialize != null && !String.IsNullOrEmpty(initialize.ProtocolVersion))
+            // The initialize request must carry protocolVersion, capabilities, and clientInfo (name and version).
+            JsonElement root = ParseObjectParams(args, "initialize");
+            if (!root.TryGetProperty("protocolVersion", out JsonElement requested) || requested.ValueKind != JsonValueKind.String || String.IsNullOrWhiteSpace(requested.GetString()))
             {
-                // The specification requires a server that does not support the requested version to answer
-                // with another version it supports (the client disconnects if it cannot use it), so an unknown
-                // version, such as one newer than this server knows, negotiates to the cap instead of failing.
-                clientProtocolVersion = McpProtocol.IsSupportedVersion(initialize.ProtocolVersion!)
-                    ? McpProtocol.NegotiateHandshakeVersion(initialize.ProtocolVersion, MaximumHandshakeProtocolVersion)
-                    : MaximumHandshakeProtocolVersion;
+                throw McpProtocolException.InvalidParams("initialize requires a protocolVersion string.");
             }
 
-            State = McpSessionLifecycleState.Initializing;
-
-            return new
+            if (!root.TryGetProperty("capabilities", out JsonElement capabilities) || capabilities.ValueKind != JsonValueKind.Object)
             {
-                protocolVersion = clientProtocolVersion,
-                capabilities = BuildCapabilities(),
-                serverInfo = new McpImplementation
-                {
-                    Name = ServerName,
-                    Version = ServerVersion
-                }
+                throw McpProtocolException.InvalidParams("initialize requires a capabilities object.");
+            }
+
+            if (!root.TryGetProperty("clientInfo", out JsonElement clientInfo) || clientInfo.ValueKind != JsonValueKind.Object
+                || !clientInfo.TryGetProperty("name", out JsonElement clientName) || clientName.ValueKind != JsonValueKind.String
+                || !clientInfo.TryGetProperty("version", out JsonElement clientVersion) || clientVersion.ValueKind != JsonValueKind.String)
+            {
+                throw McpProtocolException.InvalidParams("initialize requires a clientInfo object with name and version strings.");
+            }
+
+            // The specification requires a server that does not support the requested version to answer with another
+            // version it supports (the client disconnects if it cannot use it), so an unknown version, such as one newer
+            // than this server knows, negotiates to the cap instead of failing.
+            string requestedVersion = requested.GetString()!;
+            string negotiated = McpProtocol.IsSupportedVersion(requestedVersion)
+                ? McpProtocol.NegotiateHandshakeVersion(requestedVersion, MaximumHandshakeProtocolVersion)
+                : MaximumHandshakeProtocolVersion;
+
+            Dictionary<string, object?> result = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                { "protocolVersion", negotiated },
+                { "capabilities", BuildCapabilities() },
+                { "serverInfo", new McpImplementation { Name = ServerName, Version = ServerVersion } }
             };
+
+            if (!String.IsNullOrEmpty(ServerInstructions)) result["instructions"] = ServerInstructions;
+            return result;
         }
 
         public object Initialized(RpcParameters? args)
         {
-            State = McpSessionLifecycleState.Initialized;
             return new McpEmptyResult();
+        }
+
+        /// <summary>
+        /// Returns the revisions this server supports: the handshake-era revisions up to the handshake cap, and every
+        /// stateless-era revision.
+        /// </summary>
+        public IReadOnlyList<string> SupportedVersions()
+        {
+            McpProtocolVersionInfo? cap = McpProtocol.GetVersionInfo(MaximumHandshakeProtocolVersion);
+            int capIndex = cap == null ? -1 : McpProtocol.SupportedVersions.ToList().IndexOf(cap);
+            return McpProtocol.SupportedVersions
+                .Where((info, index) => info.Era == McpProtocolEra.Stateless || index <= capIndex)
+                .Select(info => info.Version)
+                .ToList();
         }
 
         public McpDiscoverResult Discover(RpcParameters? args)
@@ -112,7 +127,7 @@ namespace Voltaic.Mcp
 
             McpDiscoverResult result = new McpDiscoverResult
             {
-                SupportedVersions = McpProtocol.SupportedVersionStrings().ToList(),
+                SupportedVersions = SupportedVersions().ToList(),
                 Capabilities = capabilities,
                 Instructions = ServerInstructions,
                 TtlMs = DiscoverCacheTtlMs,
@@ -159,6 +174,8 @@ namespace Voltaic.Mcp
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             ValidateToolDefinition(definition);
+            definition.InputSchema = NormalizeObjectSchema(definition.InputSchema!, definition.Name, "input");
+            if (definition.OutputSchema != null) definition.OutputSchema = NormalizeObjectSchema(definition.OutputSchema, definition.Name, "output");
 
             lock (_Lock)
             {
@@ -193,7 +210,7 @@ namespace Voltaic.Mcp
             lock (_Lock)
             {
                 _ResourceTemplates.RemoveAll(existing => StringComparer.Ordinal.Equals(existing.Template.UriTemplate, template.UriTemplate));
-                _ResourceTemplates.Add(new ResourceTemplateRegistration(template, CreateTemplateRegex(template.UriTemplate), handler));
+                _ResourceTemplates.Add(new ResourceTemplateRegistration(template, new McpUriTemplate(template.UriTemplate), handler));
             }
 
             return template;
@@ -240,7 +257,7 @@ namespace Voltaic.Mcp
                 tools = _Tools.Select(tool => tool.Definition).ToList();
             }
 
-            Page<ToolDefinition> page = PageItems(tools, GetCursor(args));
+            Page<ToolDefinition> page = PageItems(tools, GetCursor(args), tool => tool.Name);
             return new McpListToolsResult
             {
                 Tools = page.Items,
@@ -267,6 +284,11 @@ namespace Voltaic.Mcp
             if (String.IsNullOrWhiteSpace(toolName))
             {
                 throw McpProtocolException.InvalidParams("tools/call name must be a non-empty string.");
+            }
+
+            if (call.Arguments != null && JsonSerializer.SerializeToElement(call.Arguments).ValueKind != JsonValueKind.Object)
+            {
+                throw McpProtocolException.InvalidParams("tools/call arguments must be a JSON object.");
             }
 
             RpcParameters? toolArguments = call.Arguments == null ? null : RpcParameters.FromObject(call.Arguments);
@@ -299,7 +321,7 @@ namespace Voltaic.Mcp
             // Make the MRTR retry state (inputResponses, requestState) available to the handler.
             object result;
             string? statelessVersion = McpRequestProtocol.StatelessVersion;
-            using (McpToolCallContext.Push(new McpToolCallContext(toolName, call.InputResponses, call.RequestState, statelessVersion != null)))
+            using (McpToolCallContext.Push(new McpToolCallContext(toolName, call.InputResponses, call.RequestState, statelessVersion != null, McpRequestScope.Current)))
             {
                 try
                 {
@@ -340,11 +362,18 @@ namespace Voltaic.Mcp
             // a tool result.
             if (result is McpInputRequiredResult inputRequired)
             {
+                ValidateInputRequired(toolName, inputRequired);
                 return inputRequired;
             }
 
             if (result is McpToolCallResult toolCallResult)
             {
+                // A tool with an output schema must return structured content that conforms to it (except on errors).
+                if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent == null && toolCallResult.IsError != true)
+                {
+                    throw new McpProtocolException(-32603, $"Tool '{toolName}' declares an output schema but returned no structured content.");
+                }
+
                 if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent != null)
                 {
                     ValidateOutput(tool.Definition.OutputSchema, toolCallResult.StructuredContent, $"Tool '{toolName}' structured output");
@@ -380,6 +409,47 @@ namespace Voltaic.Mcp
             }
         }
 
+        // An input-required result (2026-07-28) must carry inputRequests or requestState, may ask only for elicitation,
+        // sampling, or roots, and may ask only for what the client declared (else -32021, MissingRequiredClientCapability).
+        private static void ValidateInputRequired(string toolName, McpInputRequiredResult result)
+        {
+            bool hasRequests = result.InputRequests != null && result.InputRequests.Count > 0;
+            if (!hasRequests && String.IsNullOrEmpty(result.RequestState))
+            {
+                throw new McpProtocolException(-32603, $"Tool '{toolName}' returned an input-required result with neither inputRequests nor requestState.");
+            }
+
+            if (!hasRequests) return;
+
+            JsonElement? declared = McpRequestScope.Current?.ClientCapabilities;
+            Dictionary<string, object> missing = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, McpInputRequest> entry in result.InputRequests!)
+            {
+                string? capability = entry.Value.Method switch
+                {
+                    "elicitation/create" => "elicitation",
+                    "sampling/createMessage" => "sampling",
+                    "roots/list" => "roots",
+                    _ => null
+                };
+
+                if (capability == null)
+                {
+                    throw new McpProtocolException(-32603, $"Tool '{toolName}' requested input with unsupported method '{entry.Value.Method}'; only elicitation/create, sampling/createMessage, and roots/list are allowed.");
+                }
+
+                bool supported = declared.HasValue && declared.Value.ValueKind == JsonValueKind.Object && declared.Value.TryGetProperty(capability, out JsonElement _);
+                if (!supported) missing[capability] = new Dictionary<string, object>();
+            }
+
+            if (missing.Count > 0)
+            {
+                throw McpProtocolException.MissingRequiredClientCapability(
+                    $"Tool '{toolName}' needs the client capabilities {String.Join(", ", missing.Keys)}, which the request did not declare.",
+                    missing);
+            }
+        }
+
         // Tool outputs must be sanitized (MCP security considerations): only McpToolException messages, which the
         // handler wrote for the model, are shown unless IncludeToolExceptionMessages is set. Details go to the log.
         private static string FormatToolError(string toolName, Exception error, bool includeMessages, Action<string>? log)
@@ -410,7 +480,7 @@ namespace Voltaic.Mcp
                 resources = _Resources.Select(resource => resource.Resource).ToList();
             }
 
-            Page<McpResource> page = PageItems(resources, GetCursor(args));
+            Page<McpResource> page = PageItems(resources, GetCursor(args), resource => resource.Uri);
             return new McpListResourcesResult
             {
                 Resources = page.Items,
@@ -428,7 +498,7 @@ namespace Voltaic.Mcp
                 templates = _ResourceTemplates.Select(template => template.Template).ToList();
             }
 
-            Page<McpResourceTemplate> page = PageItems(templates, GetCursor(args));
+            Page<McpResourceTemplate> page = PageItems(templates, GetCursor(args), template => template.UriTemplate);
             return new McpListResourceTemplatesResult
             {
                 ResourceTemplates = page.Items,
@@ -468,23 +538,20 @@ namespace Voltaic.Mcp
 
             foreach (ResourceTemplateRegistration template in templates)
             {
-                Match match = template.Pattern.Match(uri);
-                if (match.Success)
+                if (template.Pattern.TryMatch(uri, out Dictionary<string, string> variables))
                 {
-                    Dictionary<string, string> variables = new Dictionary<string, string>(StringComparer.Ordinal);
-                    foreach (string groupName in template.Pattern.GetGroupNames())
-                    {
-                        if (!Int32.TryParse(groupName, out _) && match.Groups[groupName].Success)
-                        {
-                            variables[groupName] = Uri.UnescapeDataString(match.Groups[groupName].Value);
-                        }
-                    }
-
                     return await template.Handler(uri, variables, token).ConfigureAwait(false);
                 }
             }
 
-            throw McpProtocolException.InvalidParams($"Resource '{uri}' was not found.");
+            // Resource not found: -32002 through 2025-11-25, -32602 from 2026-07-28.
+            string? version = McpRequestScope.Current?.ProtocolVersion;
+            if (version != null && McpProtocol.GetVersionInfo(version)?.Era == McpProtocolEra.Stateless)
+            {
+                throw McpProtocolException.InvalidParams($"Resource '{uri}' was not found.", new { uri });
+            }
+
+            throw new McpProtocolException(-32002, $"Resource '{uri}' was not found.", new { uri });
         }
 
         public McpListPromptsResult ListPrompts(RpcParameters? args)
@@ -495,7 +562,7 @@ namespace Voltaic.Mcp
                 prompts = _Prompts.Select(prompt => prompt.Prompt).ToList();
             }
 
-            Page<McpPrompt> page = PageItems(prompts, GetCursor(args));
+            Page<McpPrompt> page = PageItems(prompts, GetCursor(args), prompt => prompt.Name);
             return new McpListPromptsResult
             {
                 Prompts = page.Items,
@@ -532,6 +599,23 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams($"Prompt '{promptName}' was not found.");
             }
 
+            if (request.Arguments != null)
+            {
+                JsonElement provided = JsonSerializer.SerializeToElement(request.Arguments);
+                if (provided.ValueKind != JsonValueKind.Object)
+                {
+                    throw McpProtocolException.InvalidParams("prompts/get arguments must be a JSON object.");
+                }
+
+                foreach (JsonProperty argument in provided.EnumerateObject())
+                {
+                    if (argument.Value.ValueKind != JsonValueKind.String)
+                    {
+                        throw McpProtocolException.InvalidParams($"Prompt argument '{argument.Name}' must be a string.");
+                    }
+                }
+            }
+
             ValidateRequiredPromptArguments(prompt.Prompt, promptArguments);
             return await prompt.Handler(promptArguments, token).ConfigureAwait(false);
         }
@@ -550,6 +634,7 @@ namespace Voltaic.Mcp
             }
 
             ValidateCompletionRequest(request);
+            EnsureCompletionReferenceExists(request);
 
             string? referenceId = request.Ref.Type == "ref/prompt" ? request.Ref.Name : request.Ref.Uri;
             CompletionRegistration? provider;
@@ -575,10 +660,13 @@ namespace Voltaic.Mcp
             }
 
             McpCompleteResult result = await provider.Handler(request, token).ConfigureAwait(false);
+
+            // At most 100 values may be returned; total and hasMore describe everything the provider found.
+            int available = result.Completion.Values.Count;
             result.Completion.Values = result.Completion.Values.Take(100).ToList();
             if (result.Completion.Total == null)
             {
-                result.Completion.Total = result.Completion.Values.Count;
+                result.Completion.Total = available;
             }
 
             if (result.Completion.HasMore == null)
@@ -592,27 +680,23 @@ namespace Voltaic.Mcp
         public object SubscribeResource(RpcParameters? args)
         {
             string uri = GetRequiredUri(args, "resources/subscribe");
-            lock (_Lock)
-            {
-                _ResourceSubscriptions.Add(uri);
-            }
-
+            if (!SupportsResourceSubscriptions) throw new McpProtocolException(-32601, "Method not found: resources/subscribe (resource subscriptions are not supported).");
+            McpRequestScope.Current?.Session.Subscribe(uri);
             return new McpEmptyResult();
         }
 
         public object UnsubscribeResource(RpcParameters? args)
         {
             string uri = GetRequiredUri(args, "resources/unsubscribe");
-            lock (_Lock)
-            {
-                _ResourceSubscriptions.Remove(uri);
-            }
-
+            if (!SupportsResourceSubscriptions) throw new McpProtocolException(-32601, "Method not found: resources/unsubscribe (resource subscriptions are not supported).");
+            McpRequestScope.Current?.Session.Unsubscribe(uri);
             return new McpEmptyResult();
         }
 
         public object SetLogLevel(RpcParameters? args)
         {
+            if (!SupportsLogging) throw new McpProtocolException(-32601, "Method not found: logging/setLevel (logging is not supported).");
+
             McpLevelParams? parameters = args?.Deserialize<McpLevelParams>();
             if (parameters == null || parameters.Level == null)
             {
@@ -625,7 +709,8 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams($"Invalid log level '{level}'.");
             }
 
-            MinimumLogLevel = level;
+            McpSessionState? session = McpRequestScope.Current?.Session;
+            if (session != null) session.LogLevel = level;
             return new McpEmptyResult();
         }
 
@@ -643,37 +728,24 @@ namespace Voltaic.Mcp
                 _ResourceTemplates.Clear();
                 _Prompts.Clear();
                 _CompletionProviders.Clear();
-                _ResourceSubscriptions.Clear();
             }
-
-            State = McpSessionLifecycleState.Closed;
         }
 
         private McpServerCapabilities BuildCapabilities(bool includeChangeNotifications = true)
         {
-            bool hasTools;
-            bool hasResources;
-            bool hasPrompts;
-            bool hasCompletions;
-
-            lock (_Lock)
-            {
-                hasTools = _Tools.Count > 0;
-                hasResources = _Resources.Count > 0 || _ResourceTemplates.Count > 0;
-                hasPrompts = _Prompts.Count > 0;
-                hasCompletions = _CompletionProviders.Count > 0;
-            }
-
+            // Every feature is declared whether or not anything is registered yet: a capability declared at initialize
+            // cannot be added later, so tools, resources, or prompts registered afterwards would otherwise be
+            // unreachable for that session. Empty lists are valid answers.
             McpServerCapabilities capabilities = new McpServerCapabilities
             {
-                Tools = hasTools ? new McpListChangedCapability { ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null } : null,
-                Resources = hasResources ? new McpResourceCapability
+                Tools = new McpListChangedCapability { ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null },
+                Resources = new McpResourceCapability
                 {
                     ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null,
                     Subscribe = includeChangeNotifications ? SupportsResourceSubscriptions : null
-                } : null,
-                Prompts = hasPrompts ? new McpListChangedCapability { ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null } : null,
-                Completions = hasCompletions ? new { } : null,
+                },
+                Prompts = new McpListChangedCapability { ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null },
+                Completions = new { },
                 Logging = SupportsLogging ? new { } : null
             };
 
@@ -694,6 +766,10 @@ namespace Voltaic.Mcp
             if (String.IsNullOrWhiteSpace(definition.Name)) throw new ArgumentException("Tool definition must include a name.", nameof(definition));
             if (String.IsNullOrWhiteSpace(definition.Description)) throw new ArgumentException("Tool definition must include a description.", nameof(definition));
             if (definition.InputSchema == null) throw new ArgumentException("Tool definition must include an input schema.", nameof(definition));
+            if (!_ToolNamePattern.IsMatch(definition.Name))
+            {
+                throw new ArgumentException($"Tool name '{definition.Name}' is invalid: tool names must be 1 to 128 characters of A-Z, a-z, 0-9, underscore, hyphen, and dot.", nameof(definition));
+            }
 
             // An invalid x-mcp-header annotation makes the whole definition invalid (clients must drop the tool).
             try
@@ -704,6 +780,36 @@ namespace Voltaic.Mcp
             {
                 throw new ArgumentException($"Tool '{definition.Name}' input schema: {ex.Message}", nameof(definition), ex);
             }
+        }
+
+        // Tool input and output schemas must describe JSON objects. A schema without a type gets "type": "object";
+        // any other type is rejected.
+        private static JsonElement NormalizeObjectSchema(object schema, string toolName, string kind)
+        {
+            JsonElement element = schema is JsonElement json ? json : JsonSerializer.SerializeToElement(schema);
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                throw new ArgumentException($"Tool '{toolName}' {kind} schema must be a JSON object.");
+            }
+
+            if (element.TryGetProperty("type", out JsonElement type))
+            {
+                if (type.ValueKind != JsonValueKind.String || type.GetString() != "object")
+                {
+                    throw new ArgumentException($"Tool '{toolName}' {kind} schema must have \"type\": \"object\".");
+                }
+
+                return element.Clone();
+            }
+
+            System.Text.Json.Nodes.JsonObject withType = System.Text.Json.Nodes.JsonObject.Create(element) ?? new System.Text.Json.Nodes.JsonObject();
+            System.Text.Json.Nodes.JsonObject copy = new System.Text.Json.Nodes.JsonObject { ["type"] = "object" };
+            foreach (KeyValuePair<string, System.Text.Json.Nodes.JsonNode?> property in withType.ToList())
+            {
+                copy[property.Key] = property.Value?.DeepClone();
+            }
+
+            return JsonSerializer.SerializeToElement(copy);
         }
 
         private static void ValidateResource(McpResource resource)
@@ -743,18 +849,51 @@ namespace Voltaic.Mcp
             }
         }
 
-        private Page<T> PageItems<T>(List<T> items, string? cursor)
+        // Cursors are opaque to clients. Each encodes the position and key of the last item returned, so a page resumes
+        // after that item even when earlier items were added or removed in between.
+        private Page<T> PageItems<T>(List<T> items, string? cursor, Func<T, string> key)
         {
             int offset = 0;
-            if (!String.IsNullOrEmpty(cursor) && (!Int32.TryParse(cursor, out offset) || offset < 0))
+            if (!String.IsNullOrEmpty(cursor))
             {
-                throw McpProtocolException.InvalidParams($"Invalid cursor '{cursor}'.");
+                string decoded;
+                try
+                {
+                    decoded = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+                }
+                catch (FormatException)
+                {
+                    throw McpProtocolException.InvalidParams($"Invalid cursor '{cursor}'.");
+                }
+
+                int separator = decoded.IndexOf(':');
+                if (separator <= 0 || !Int32.TryParse(decoded.Substring(0, separator), out int position) || position < 0)
+                {
+                    throw McpProtocolException.InvalidParams($"Invalid cursor '{cursor}'.");
+                }
+
+                string lastKey = decoded.Substring(separator + 1);
+                int found = items.FindIndex(item => StringComparer.Ordinal.Equals(key(item), lastKey));
+                offset = found >= 0 ? found + 1 : Math.Min(position, items.Count);
             }
 
             int pageSize = Math.Max(1, PageSize);
             List<T> pageItems = items.Skip(offset).Take(pageSize).ToList();
             int nextOffset = offset + pageItems.Count;
-            return new Page<T>(pageItems, nextOffset < items.Count ? nextOffset.ToString() : null);
+            string? nextCursor = nextOffset < items.Count && pageItems.Count > 0
+                ? Convert.ToBase64String(Encoding.UTF8.GetBytes(nextOffset.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + key(pageItems[pageItems.Count - 1])))
+                : null;
+            return new Page<T>(pageItems, nextCursor);
+        }
+
+        private static JsonElement ParseObjectParams(RpcParameters? args, string method)
+        {
+            if (args == null || !args.HasValue) throw McpProtocolException.InvalidParams($"{method} requires params.");
+            using (JsonDocument document = JsonDocument.Parse(args.RawJson!))
+            {
+                if (document.RootElement.ValueKind != JsonValueKind.Object) throw McpProtocolException.InvalidParams($"{method} params must be a JSON object.");
+                return document.RootElement.Clone();
+            }
         }
 
         private static string? GetCursor(RpcParameters? args)
@@ -807,6 +946,24 @@ namespace Voltaic.Mcp
             }
         }
 
+        // completion/complete must name a prompt or resource (template) this server has (-32602 otherwise).
+        private void EnsureCompletionReferenceExists(McpCompleteRequest request)
+        {
+            lock (_Lock)
+            {
+                if (request.Ref.Type == "ref/prompt")
+                {
+                    PromptRegistration? prompt = _Prompts.FirstOrDefault(existing => StringComparer.Ordinal.Equals(existing.Prompt.Name, request.Ref.Name));
+                    if (prompt == null) throw McpProtocolException.InvalidParams($"Prompt '{request.Ref.Name}' was not found.");
+                    return;
+                }
+
+                bool known = _Resources.Any(existing => StringComparer.Ordinal.Equals(existing.Resource.Uri, request.Ref.Uri))
+                    || _ResourceTemplates.Any(existing => StringComparer.Ordinal.Equals(existing.Template.UriTemplate, request.Ref.Uri));
+                if (!known) throw McpProtocolException.InvalidParams($"Resource or resource template '{request.Ref.Uri}' was not found.");
+            }
+        }
+
         private static bool IsValidLogLevel(string? level)
         {
             return level == "debug" ||
@@ -819,43 +976,13 @@ namespace Voltaic.Mcp
                 level == "emergency";
         }
 
-        private static Regex CreateTemplateRegex(string uriTemplate)
-        {
-            StringBuilder pattern = new StringBuilder();
-            for (int i = 0; i < uriTemplate.Length; i++)
-            {
-                if (uriTemplate[i] == '{')
-                {
-                    int end = uriTemplate.IndexOf('}', i + 1);
-                    if (end <= i + 1)
-                    {
-                        throw new ArgumentException("Resource template variables must use {name} syntax.", nameof(uriTemplate));
-                    }
-
-                    string variableName = uriTemplate.Substring(i + 1, end - i - 1);
-                    if (!Regex.IsMatch(variableName, "^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant))
-                    {
-                        throw new ArgumentException($"Invalid resource template variable '{variableName}'.", nameof(uriTemplate));
-                    }
-
-                    pattern.Append("(?<").Append(variableName).Append(">[^/?#]+)");
-                    i = end;
-                    continue;
-                }
-
-                pattern.Append(Regex.Escape(uriTemplate[i].ToString()));
-            }
-
-            return new Regex("^" + pattern + "$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
-        }
-
         private sealed record ToolRegistration(ToolDefinition Definition, Func<RpcParameters?, CancellationToken, Task<object>> Handler);
 
         private sealed record ResourceRegistration(McpResource Resource, Func<string, CancellationToken, Task<McpReadResourceResult>> Handler);
 
         private sealed record ResourceTemplateRegistration(
             McpResourceTemplate Template,
-            Regex Pattern,
+            McpUriTemplate Pattern,
             Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<McpReadResourceResult>> Handler);
 
         private sealed record PromptRegistration(McpPrompt Prompt, Func<RpcParameters?, CancellationToken, Task<McpGetPromptResult>> Handler);

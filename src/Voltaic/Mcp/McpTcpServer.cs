@@ -16,14 +16,15 @@ namespace Voltaic.Mcp
     public class McpTcpServer : JsonRpcServer
     {
         private readonly McpEndpoint _Endpoint;
+        private readonly McpMessageProcessor _Processor;
 
         /// <summary>
-        /// Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
-        /// request names no version. It does not cap negotiation; see
-        /// <see cref="MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
-        /// <see cref="MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
-        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
+        /// Obsolete and has no effect. <c>initialize</c> must name a protocol version (a request without one gets
+        /// <c>-32602</c>), so there is no version to fall back to; negotiation is capped by
+        /// <see cref="MaximumHandshakeProtocolVersion"/>. The value is stored and returned for compatibility. Default is
+        /// <see cref="McpProtocol.LatestProtocolVersion"/>; setting null restores the default.
         /// </summary>
+        [Obsolete("initialize must name a protocol version, so this setting has no effect. Use MaximumHandshakeProtocolVersion to cap negotiation.")]
         public string ProtocolVersion
         {
             get => _Endpoint.ProtocolVersion;
@@ -94,6 +95,32 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets optional natural-language instructions describing how to use the server, returned in the
+        /// <c>initialize</c> result and by <c>server/discover</c> (2026-07-28). Null (the default) omits them.
+        /// </summary>
+        public string? ServerInstructions
+        {
+            get => _Endpoint.ServerInstructions;
+            set => _Endpoint.ServerInstructions = value;
+        }
+
+        /// <summary>
+        /// Gets or sets how many items one page of <c>tools/list</c>, <c>resources/list</c>,
+        /// <c>resources/templates/list</c>, or <c>prompts/list</c> returns before a <c>nextCursor</c> is issued.
+        /// Default is 100. Minimum is 1.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        public int PageSize
+        {
+            get => _Endpoint.PageSize;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "PageSize must be at least 1.");
+                _Endpoint.PageSize = value;
+            }
+        }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="McpTcpServer"/> class.
         /// </summary>
         /// <param name="ip">The IP address to listen on.</param>
@@ -111,6 +138,11 @@ namespace Voltaic.Mcp
         {
             _Endpoint = new McpEndpoint("Voltaic.Mcp.TcpServer");
             _Endpoint.ErrorLog = WriteLog;
+            _Processor = new McpMessageProcessor(_Endpoint, Methods, WriteLog)
+            {
+                RequestReceived = (request, session) => { if (session.Owner is ClientConnection client) RaiseRequestReceivedFor(client, request); },
+                ResponseProduced = (request, response, session) => { if (session.Owner is ClientConnection client) RaiseResponseSentFor(client, request, response); }
+            };
 
             RegisterProtocolMethods();
             if (includeDiagnosticTools) RegisterDiagnosticTools();
@@ -368,99 +400,94 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Notifies connected TCP clients that the tool list changed.
+        /// Notifies connected clients that completed <c>initialize</c> that the tool list changed.
         /// </summary>
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyToolsChangedAsync(CancellationToken token = default)
         {
-            return BroadcastNotificationAsync("notifications/tools/list_changed", null, token);
+            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/tools/list_changed", token);
         }
 
         /// <summary>
-        /// Notifies connected TCP clients that the resource list changed.
+        /// Notifies connected clients that completed <c>initialize</c> that the resource list changed.
         /// </summary>
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyResourcesChangedAsync(CancellationToken token = default)
         {
-            return BroadcastNotificationAsync("notifications/resources/list_changed", null, token);
+            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/resources/list_changed", token);
         }
 
         /// <summary>
-        /// Notifies connected TCP clients that a resource was updated.
+        /// Sends <c>notifications/resources/updated</c> to the clients subscribed to <paramref name="uri"/> with
+        /// <c>resources/subscribe</c>.
         /// </summary>
-        /// <param name="uri">Updated resource URI.</param>
+        /// <param name="uri">Updated resource URI. Must not be null or empty.</param>
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="uri"/> is null or empty.</exception>
         public Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)
         {
-            if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
-            return BroadcastNotificationAsync("notifications/resources/updated", new { uri }, token);
+            return McpServerNotifications.ResourceUpdatedAsync(Sessions(), uri, token);
         }
 
         /// <summary>
-        /// Notifies connected TCP clients that the prompt list changed.
+        /// Notifies connected clients that completed <c>initialize</c> that the prompt list changed.
         /// </summary>
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyPromptsChangedAsync(CancellationToken token = default)
         {
-            return BroadcastNotificationAsync("notifications/prompts/list_changed", null, token);
+            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/prompts/list_changed", token);
         }
 
         /// <summary>
-        /// Notifies connected TCP clients about request progress.
+        /// Sends <c>notifications/progress</c> to the client whose in-flight request carries
+        /// <paramref name="progressToken"/>; nothing is sent when no active request carries it. Tool handlers can use
+        /// <see cref="McpToolCallContext.ReportProgressAsync"/> instead.
         /// </summary>
-        /// <param name="progressToken">Progress token from request metadata.</param>
-        /// <param name="progress">Current progress value.</param>
+        /// <param name="progressToken">Progress token from the request's <c>_meta</c>. Must not be null.</param>
+        /// <param name="progress">Current progress value. Must increase with every notification.</param>
         /// <param name="total">Optional total progress value.</param>
         /// <param name="message">Optional human-readable progress text.</param>
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        public Task NotifyProgressAsync(object progressToken, double progress, double? total = null, string? message = null, CancellationToken token = default)
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="progressToken"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="progress"/> does not increase.</exception>
+        public async Task NotifyProgressAsync(object progressToken, double progress, double? total = null, string? message = null, CancellationToken token = default)
         {
-            return BroadcastNotificationAsync("notifications/progress", new McpProgressNotification
-            {
-                ProgressToken = progressToken,
-                Progress = progress,
-                Total = total,
-                Message = message
-            }, token);
+            await McpServerNotifications.ProgressAsync(Sessions(), progressToken, progress, total, message, token).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Notifies connected TCP clients that a request was cancelled.
+        /// Obsolete and does nothing. <c>notifications/cancelled</c> may only reference a request the sender issued, and
+        /// an MCP server issues no requests to clients, so the server has nothing it may cancel.
         /// </summary>
-        /// <param name="requestId">Cancelled request ID.</param>
-        /// <param name="reason">Optional cancellation reason.</param>
-        /// <param name="token">Cancellation token.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <param name="requestId">Ignored.</param>
+        /// <param name="reason">Ignored.</param>
+        /// <param name="token">Ignored.</param>
+        /// <returns>A completed task.</returns>
+        [Obsolete("A server may only cancel requests it sent, and MCP servers send none. This method does nothing.")]
         public Task NotifyCancelledAsync(object requestId, string? reason = null, CancellationToken token = default)
         {
-            return BroadcastNotificationAsync("notifications/cancelled", new McpCancelledNotification
-            {
-                RequestId = requestId,
-                Reason = reason
-            }, token);
+            return Task.CompletedTask;
         }
 
         /// <summary>
-        /// Sends an MCP log message notification to connected TCP clients.
+        /// Sends a <c>notifications/message</c> log entry to connected clients that completed <c>initialize</c>, when
+        /// <paramref name="level"/> meets the level each set with <c>logging/setLevel</c> (everything when none was set).
+        /// To log about a specific tool call, use <see cref="McpToolCallContext.LogAsync"/>.
         /// </summary>
-        /// <param name="level">Syslog-style level.</param>
+        /// <param name="level">One of debug, info, notice, warning, error, critical, alert, emergency.</param>
         /// <param name="data">JSON-serializable log data.</param>
         /// <param name="logger">Optional logger name.</param>
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="level"/> is not an MCP log level.</exception>
         public Task NotifyLogMessageAsync(string level, object? data, string? logger = null, CancellationToken token = default)
         {
-            return BroadcastNotificationAsync("notifications/message", new McpLogMessageNotification
-            {
-                Level = level,
-                Logger = logger,
-                Data = data
-            }, token);
+            return McpServerNotifications.LogAsync(Sessions(), level, data, logger, token);
         }
 
         private static ToolDefinition CreateToolDefinition(string name, string description, object inputSchema, object? outputSchema)
@@ -592,16 +619,32 @@ namespace Voltaic.Mcp
             RegisterDiagnosticTools();
         }
     
-        // Selects the protocol era for a request: a request whose _meta names the stateless revision (2026-07-28) is served statelessly. An unsupported _meta version is rejected with -32022.
-        private protected override object? PrepareRequest(string requestJson, JsonRpcRequest request)
+        // MCP over TCP accepts newline-delimited JSON (the stdio framing) as well as Content-Length framing.
+        private protected override bool AcceptNewlineFraming => true;
+
+        private protected override void OnClientConnected(ClientConnection client)
         {
-            return McpStatelessDispatcher.ResolveStatelessVersion(requestJson, request.Method);
+            McpSessionState session = new McpSessionState { Owner = client };
+            session.Push = (json, token) => WriteToClientAsync(client, json, token);
+            client.ProtocolState = session;
         }
 
-        // Adds the fields the stateless era requires (resultType, and ttlMs/cacheScope for cacheable results) to responses to stateless-era requests.
-        private protected override string SerializeResponse(JsonRpcResponse response, object? requestContext)
+        private protected override void OnClientDisconnected(ClientConnection client)
         {
-            return McpStatelessDispatcher.SerializeResponse(response, requestContext as string);
+            (client.ProtocolState as McpSessionState)?.CancelAll();
+        }
+
+        // Every message goes through the shared MCP processor: batches, initialization order, concurrent requests,
+        // cancellation, and per-version serialization.
+        private protected override Task ProcessMessageAsync(ClientConnection client, string message, CancellationToken token)
+        {
+            McpSessionState session = client.ProtocolState as McpSessionState ?? new McpSessionState { Owner = client };
+            return _Processor.ProcessAsync(message, session, (json, ct) => WriteToClientAsync(client, json, ct), token);
+        }
+
+        private IEnumerable<McpSessionState> Sessions()
+        {
+            return ConnectedClients.Select(client => client.ProtocolState).OfType<McpSessionState>().ToList();
         }
 }
 }

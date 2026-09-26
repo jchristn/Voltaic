@@ -49,7 +49,8 @@ namespace Test.Shared
                     await using StreamCaller caller = await StreamCaller.StartAsync(t, ct).ConfigureAwait(false);
                     JsonElement list = await caller.CallAsync("tools/list", Meta(), ct).ConfigureAwait(false);
                     JsonElement call = await caller.CallAsync("tools/call", Meta(new Dictionary<string, object?> { { "name", "echo" }, { "arguments", new { message = "stateless" } } }), ct).ConfigureAwait(false);
-                    JsonElement ping = await caller.CallAsync("ping", Meta(), ct).ConfigureAwait(false);
+                    JsonElement discover = await caller.CallAsync("server/discover", Meta(), ct).ConfigureAwait(false);
+                    Exception? ping = await CaptureAsync(() => caller.CallAsync("ping", Meta(), ct)).ConfigureAwait(false);
 
                     TestAssert.Equal("complete", list.GetProperty("resultType").GetString());
                     TestAssert.Equal("private", list.GetProperty("cacheScope").GetString(), "The conservative cache default applies.");
@@ -57,7 +58,8 @@ namespace Test.Shared
                     TestAssert.True(list.GetProperty("tools").EnumerateArray().Any(tool => tool.GetProperty("name").GetString() == "echo"), "Tools are listed.");
                     TestAssert.Equal("complete", call.GetProperty("resultType").GetString());
                     TestAssert.True(call.GetProperty("content")[0].GetProperty("text").GetString()!.Contains("stateless"), "The tool ran.");
-                    TestAssert.Equal("complete", ping.GetProperty("resultType").GetString(), "ping carries resultType.");
+                    TestAssert.Equal("complete", discover.GetProperty("resultType").GetString(), "server/discover carries resultType.");
+                    TestAssert.True(ping != null && ping.Message.Contains("-32601"), $"ping does not exist in 2026-07-28: {ping?.Message}");
                 }));
 
                 cases.Add(Case(suiteId, $"StatelessInvalidArgumentsAreToolErrors_{t}", $"Invalid arguments on a stateless request on {t} are a tool execution error with resultType", async ct =>
@@ -80,7 +82,7 @@ namespace Test.Shared
 
                 cases.Add(Case(suiteId, $"HandshakeRequestsUnchanged_{t}", $"On {t}, initialize (even with a 2026-07-28 _meta) and requests without _meta keep handshake-era semantics on the same connection", async ct =>
                 {
-                    await using StreamCaller caller = await StreamCaller.StartAsync(t, ct).ConfigureAwait(false);
+                    await using StreamCaller caller = await StreamCaller.StartAsync(t, ct, autoInitialize: false).ConfigureAwait(false);
                     Dictionary<string, object?> initializeParams = Meta(new Dictionary<string, object?>
                     {
                         { "protocolVersion", "2026-07-28" },
@@ -152,7 +154,7 @@ namespace Test.Shared
             private readonly List<IAsyncDisposable> _AsyncDisposables = new List<IAsyncDisposable>();
             private readonly List<IDisposable> _Disposables = new List<IDisposable>();
 
-            public static async Task<StreamCaller> StartAsync(string transport, CancellationToken token, Action<string, object, Func<string, object, Func<RpcParameters?, object>, bool>>? registerTool = null)
+            public static async Task<StreamCaller> StartAsync(string transport, CancellationToken token, Action<string, object, Func<string, object, Func<RpcParameters?, object>, bool>>? registerTool = null, bool autoInitialize = true)
             {
                 StreamCaller caller = new StreamCaller();
                 object schema = new { type = "object" };
@@ -165,7 +167,7 @@ namespace Test.Shared
                             registerTool?.Invoke("shared", schema, (name, s, handler) => { server.RegisterTool(name, "Reused result", s, handler); return true; });
                         }, includeDiagnosticTools: true).ConfigureAwait(false);
                         caller._AsyncDisposables.Add(tcp);
-                        JsonRpcClient tcpClient = await tcp.ConnectClientAsync(token).ConfigureAwait(false);
+                        JsonRpcClient tcpClient = await tcp.ConnectClientAsync(token, autoInitialize).ConfigureAwait(false);
                         caller._Disposables.Add(tcpClient);
                         caller._Call = (method, parameters, ct) => tcpClient.CallAsync<JsonElement>(method, parameters, token: ct);
                         break;
@@ -176,13 +178,13 @@ namespace Test.Shared
                             registerTool?.Invoke("shared", schema, (name, s, handler) => { server.RegisterTool(name, "Reused result", s, handler); return true; });
                         }, includeDiagnosticTools: true).ConfigureAwait(false);
                         caller._AsyncDisposables.Add(ws);
-                        McpWebsocketsClient wsClient = await ws.ConnectClientAsync(token).ConfigureAwait(false);
+                        McpWebsocketsClient wsClient = await ws.ConnectClientAsync(token, autoInitialize).ConfigureAwait(false);
                         caller._Disposables.Add(wsClient);
                         caller._Call = (method, parameters, ct) => wsClient.CallAsync<JsonElement>(method, parameters, token: ct);
                         break;
 
                     case "stdio":
-                        McpClient stdio = new McpClient();
+                        McpClient stdio = new McpClient { AutoInitialize = autoInitialize };
                         caller._Disposables.Add(stdio);
                         await McpStdioIntegrationSuites.LaunchTestServerAsync(stdio, token).ConfigureAwait(false);
                         caller._Call = (method, parameters, ct) => stdio.CallAsync<JsonElement>(method, parameters, token: ct);

@@ -89,6 +89,30 @@ namespace Voltaic.Mcp
     public class McpAnnotations
     {
         /// <summary>
+        /// Gets or sets who the content or resource is intended for: <c>user</c>, <c>assistant</c>, or both. Applies to
+        /// content blocks and resources; null omits it.
+        /// </summary>
+        [JsonPropertyName("audience")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<string>? Audience { get; set; }
+
+        /// <summary>
+        /// Gets or sets how important the content or resource is, from 0 (least) to 1 (most important). Applies to
+        /// content blocks and resources; null omits it.
+        /// </summary>
+        [JsonPropertyName("priority")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public double? Priority { get; set; }
+
+        /// <summary>
+        /// Gets or sets when the content or resource was last modified, as an ISO 8601 timestamp (MCP 2025-06-18 and
+        /// later; omitted for older clients). Null omits it.
+        /// </summary>
+        [JsonPropertyName("lastModified")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? LastModified { get; set; }
+
+        /// <summary>
         /// Gets or sets a display title.
         /// </summary>
         [JsonPropertyName("title")]

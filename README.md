@@ -28,7 +28,7 @@ An `initialize` handshake negotiates at most the newest handshake-era revision, 
 
 Voltaic is a protocol library, not an application framework. It provides:
 
-- JSON-RPC 2.0 clients and servers over TCP with LSP-style `Content-Length` framing
+- JSON-RPC 2.0 clients and servers over TCP with LSP-style `Content-Length` framing (MCP over TCP also accepts newline-delimited JSON)
 - MCP stdio servers and clients for subprocess-hosted tools
 - MCP Streamable HTTP on `/mcp` with `MCP-Session-Id` sessions and SSE notifications
 - MCP TCP and WebSocket transports for networked or full-duplex scenarios
@@ -87,7 +87,7 @@ An MCP server publishes only the tools your application registers. `tools/list` 
 
 - **Diagnostic tools are opt-in.** Pass `includeDiagnosticTools: true` to a server constructor to also publish `echo` and `getTime`. They are useful while developing a server and are off by default. Voltaic no longer ships a `getSessions`/`getClients` tool, because it disclosed other clients' session identifiers.
 - **Tools are invoked only through `tools/call`.** `tools/call` validates arguments against the tool's input schema before your handler runs. A tool is not callable as a bare JSON-RPC method, so the schema check cannot be skipped. A tool may share a name with a protocol method (for example, a tool named `ping`) without replacing it.
-- **Tools can be removed.** `UnregisterTool(name)` removes a tool and returns `true` if it existed. Registering and unregistering tools does not notify clients by itself; call `NotifyToolsChanged()` (HTTP) or `NotifyToolsChangedAsync()` (TCP, WebSocket) afterwards to send `notifications/tools/list_changed`.
+- **Tools can be removed.** `UnregisterTool(name)` removes a tool and returns `true` if it existed. Registering and unregistering tools does not notify clients by itself; call `NotifyToolsChanged()` (HTTP) or `NotifyToolsChangedAsync()` (stdio, TCP, WebSocket) afterwards to send `notifications/tools/list_changed`.
 
 ```csharp
 McpHttpServer server = new McpHttpServer("localhost", 8080);                               // only your tools
@@ -144,9 +144,30 @@ server.MaximumHandshakeProtocolVersion = McpProtocol.ProtocolVersion20250618;
 
 Every Voltaic MCP server also serves `2026-07-28` without a handshake. On `McpHttpServer` that is the stateless HTTP path. On stdio, TCP, and WebSocket, a request is treated as `2026-07-28` when its `params._meta["io.modelcontextprotocol/protocolVersion"]` names that revision; `server/discover` is available, and an unknown version in `_meta` gets `-32022` with the supported list. Requests without that `_meta` field, and `initialize`, keep the handshake-era behavior, so one server serves both eras, deciding per request. Under that revision every result carries `resultType`: `complete` for a final result, `input_required` for a Multi Round-Trip result, or `task` for a created task. Cacheable results (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `resources/read`, and `server/discover`) also carry `ttlMs` and `cacheScope`. Voltaic fills these in on the way out. Values a handler sets itself are kept, as are `ListCacheTtlMs` and `ListCacheScope` when configured. Otherwise the defaults are `ttlMs: 0` and `cacheScope: "private"`, which mean "do not cache; the result is specific to the caller". Handshake-era responses never include these fields.
 
-`server/discover` does not advertise `listChanged` or `resources.subscribe`. Under `2026-07-28` those notifications are delivered through `subscriptions/listen`, which Voltaic does not implement yet. Handshake-era sessions still advertise and deliver them over SSE.
+`server/discover` does not advertise `listChanged` or `resources.subscribe`. Under `2026-07-28` those notifications are delivered through `subscriptions/listen`, which Voltaic does not implement yet. Handshake-era sessions still advertise and receive them.
 
 A method you register yourself with `RegisterMethod` gets the same treatment when it returns an `McpResult` subclass (for example `McpEmptyResult` or `McpToolCallResult`). A plain object, such as an anonymous type, is serialized unmodified, so a custom method that stateless clients call should return an `McpResult` subclass.
+
+### Progress and logging from a tool
+
+A tool handler reports progress and log entries through `McpToolCallContext.Current`, and they reach only the client that made the call:
+
+```csharp
+server.RegisterTool("import", "Imports files", new { type = "object" }, async (RpcParameters? args, CancellationToken token) =>
+{
+    McpToolCallContext call = McpToolCallContext.Current!;
+    for (int i = 1; i <= 10; i++)
+    {
+        await ImportBatchAsync(i, token);
+        await call.ReportProgressAsync(i, 10, $"batch {i} of 10", token);
+    }
+
+    await call.LogAsync("info", new { imported = 10 }, "import", token);
+    return "done";
+});
+```
+
+Progress is sent only when the request carried a `progressToken`, and each value must be larger than the last. Log entries are sent when they meet the level the client set with `logging/setLevel` (all entries until it sets one; or, on `2026-07-28`, the `io.modelcontextprotocol/logLevel` in the request's `_meta`; without it no log entries are sent). Over Streamable HTTP, the POST response becomes an SSE stream when the first notification is sent. A cancelled request (`notifications/cancelled`, or a closed `2026-07-28` response stream) cancels `token`.
 
 ### Asking the user for input (Multi Round-Trip Requests)
 
@@ -195,7 +216,7 @@ server.RegisterTool("delete_file", "Deletes a file after confirmation", schema, 
 });
 ```
 
-Handshake-era clients cannot receive an input request. If a handler returns `McpInputRequiredResult` for one anyway, Voltaic answers with a tool result with `isError: true` explaining that the tool needs `2026-07-28`, rather than sending a result the client cannot parse. `McpToolCallContext.Current` is null outside a tool call and is scoped to the call, including its awaited continuations. `McpHttpClient.CallToolStatelessAsync` drives the client side of the exchange.
+Handshake-era clients cannot receive an input request. If a handler returns `McpInputRequiredResult` for one anyway, Voltaic answers with a tool result with `isError: true` explaining that the tool needs `2026-07-28`, rather than sending a result the client cannot parse. `McpToolCallContext.Current` is null outside a tool call and is scoped to the call, including its awaited continuations. `McpHttpClient.CallToolStatelessAsync` drives the client side of the exchange; declare the kinds of input it can answer first (for example `client.ClientCapabilities["elicitation"] = new { };`), because a server may request only declared kinds and answers `-32021` otherwise.
 
 ## A2A Endpoint Requirements
 
@@ -540,19 +561,11 @@ using Voltaic.Mcp;
 
 using McpHttpClient client = new McpHttpClient();
 
-await client.ConnectStreamableAsync("http://localhost:8080");
+client.ClientName = "CalculatorClient";
+client.ClientVersion = "1.0.0";
 
-await client.CallAsync("initialize", new
-{
-    protocolVersion = "2025-11-25",
-    capabilities = new { },
-    clientInfo = new
-    {
-        name = "CalculatorClient",
-        version = "1.0.0"
-    }
-});
-await client.NotifyAsync("notifications/initialized");
+// Sends initialize and notifications/initialized, and stores the session.
+await client.ConnectStreamableAsync("http://localhost:8080");
 
 JsonRpcResponse tools = await client.CallAsync("tools/list");
 Console.WriteLine(tools.Result);
@@ -857,7 +870,8 @@ using Voltaic.Mcp;
 
 McpClient client = new McpClient();
 
-// Launch an MCP server as a subprocess
+// Launch an MCP server as a subprocess; the client sends initialize and notifications/initialized
+// (set AutoInitialize = false to do it yourself with InitializeAsync)
 await client.LaunchServerAsync("dotnet", new[] { "run", "--project", "MyMcpServer" });
 
 // Call methods on the server
@@ -920,7 +934,8 @@ McpTcpClient client = new McpTcpClient();
 client.NotificationReceived += (sender, request) =>
     Console.WriteLine($"Server notification: {request.Method}");
 
-// Connect to the TCP server
+// Connect to the TCP server; the client sends initialize and notifications/initialized.
+// Messages are newline-delimited JSON; set NewlineDelimited = false for Voltaic servers before 2.1.5.
 await client.ConnectAsync("localhost", 8080);
 
 // Call methods on the server
@@ -1101,15 +1116,12 @@ client.NotificationReceived += (sender, request) =>
 // Optional: credentials for a server with an AuthenticationHandler (sent on the upgrade request)
 client.SetRequestHeader("Authorization", "Bearer " + token);
 
-// Connect to the WebSocket server
+// Connect to the WebSocket server; the client sends initialize and notifications/initialized
 await client.ConnectAsync("ws://localhost:8080/mcp");
 
 // Call methods on the server
 object? result = await client.CallAsync<object>("tools/list");
 Console.WriteLine(result);
-
-// Send a notification
-await client.NotifyAsync("log", new { message = "Hello from WebSocket client" });
 ```
 
 ---
@@ -1127,7 +1139,7 @@ Voltaic servers usually run on a developer workstation or next to data they expo
 | JSON bodies on `POST /mcp` | `McpHttpServer` | A `Content-Type` other than `application/json` gets 415. A request with no `Content-Type` is accepted only without an `Origin` header (a non-browser client), because a browser can send such a body without a CORS preflight. A missing `Accept` header counts as `*/*` | None needed |
 | Webhook targets | `A2AHttpServer`, `A2AGrpcServer` | Push notification URLs must not target loopback, private, or link-local addresses; checked when the config is created and again when connecting | `PushNotificationUrlValidator` |
 | Initialize-only sessions, principal binding | `McpHttpServer` | See [Sessions](#sessions) | None (since v2.1.4 `RequireInitializedSessions` is obsolete and ignored) |
-| Strict LSP framing | `JsonRpcServer`, `McpTcpServer`, `JsonRpcClient`, `McpTcpClient` | Only `Content-Length` and `Content-Type` header lines (1024 bytes at most) are accepted, so an HTTP request from a browser `fetch()` is dropped before anything runs | None; Voltaic and LSP-style clients send only those headers |
+| Strict framing | `JsonRpcServer`, `McpTcpServer`, `JsonRpcClient`, `McpTcpClient` | Only `Content-Length` and `Content-Type` header lines (1024 bytes at most) are accepted, and `McpTcpServer` also accepts newline-delimited JSON but closes the connection on a line that is not JSON, so an HTTP request from a browser `fetch()` is dropped before anything runs | None; Voltaic, LSP-style, and newline-delimited MCP clients send only those |
 
 ```csharp
 McpHttpServer server = new McpHttpServer("localhost", 8080);
@@ -1348,41 +1360,60 @@ public async Task ExecuteAsync(A2ARequestContext context, A2AAgentEventQueue eve
 
 ## Specification conformance
 
-Voltaic implements the MCP revisions `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and `2026-07-28`. The table lists where it deliberately differs from the specification text, and the optional features it does not implement.
+Voltaic implements the MCP revisions `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and `2026-07-28`, and follows their MUST and SHOULD requirements on every transport (stdio, TCP, WebSocket, and Streamable HTTP). This section lists the optional features Voltaic does not implement and the few places where it is deliberately more lenient than the specification.
+
+**Optional features not implemented.**
 
 | Area | Voltaic behavior | Specification |
 |---|---|---|
-| HTTP+SSE transport (2024-11-05) | Not implemented; `/rpc` and `/events` are different, Voltaic-specific endpoints | Deprecated since 2025-03-26. `2024-11-05` itself is supported over Streamable HTTP, stdio, TCP, and WebSocket. |
-| Server-to-client requests (sampling, elicitation, roots) on handshake-era sessions | Not sent | Optional. On `2026-07-28`, handlers can return `McpInputRequiredResult` (see [Multi Round-Trip Requests](#asking-the-user-for-input-multi-round-trip-requests)); a handshake-era caller gets an `isError` result instead. |
-| `subscriptions/listen` (2026-07-28) | Not implemented; `server/discover` does not advertise `listChanged` or `subscribe` | Optional, capability-driven. Handshake-era sessions still receive change notifications over SSE. |
-| OAuth authorization | Resource-server plumbing only: `ProtectedResourceMetadata`, `BearerChallenge`, and `AuthenticationHandler` | The authorization server and token validation are application responsibilities. See [OAuth and protected resource metadata](#oauth-and-protected-resource-metadata). |
+| HTTP+SSE transport (2024-11-05) | Not implemented, and `McpHttpClient` does not fall back to it; `/rpc` and `/events` are different, Voltaic-specific endpoints | Deprecated since 2025-03-26. `2024-11-05` itself is supported over Streamable HTTP, stdio, TCP, and WebSocket. |
+| Server-to-client requests (sampling, elicitation, roots) on handshake-era sessions | Not sent by Voltaic servers | Optional. On `2026-07-28`, tool handlers can return `McpInputRequiredResult` (see [Multi Round-Trip Requests](#asking-the-user-for-input-multi-round-trip-requests)); a handshake-era caller gets an `isError` result instead. Voltaic clients answer such requests from other servers through `RegisterRequestHandler`. |
+| Multi Round-Trip input for `resources/read` and `prompts/get` (2026-07-28) | Only `tools/call` handlers can request input | Optional. |
+| `subscriptions/listen` (2026-07-28) | Not implemented; `server/discover` does not advertise `listChanged` or `subscribe` | Optional, capability-driven. Handshake-era sessions receive change notifications. |
+| Tasks (2025-11-25 and the 2026-07-28 extension) | Models only; the server does not run tools as tasks | Optional. |
+| OAuth authorization | Resource-server plumbing only: `ProtectedResourceMetadata`, `BearerChallenge`, `InsufficientScope`, `McpInsufficientScopeException`, and `AuthenticationHandler` | The authorization server, token validation, and audience checks are application responsibilities. See [OAuth and protected resource metadata](#oauth-and-protected-resource-metadata). |
 
-**Known gaps.** A review of every revision against Voltaic 2.1.4 found these remaining differences. They are tracked for future releases:
+**Deliberate leniency.** Each of these accepts input the specification says a client should not send, without weakening any security check:
 
-| Area | Gap |
-|---|---|
-| Stream transport clients | `McpClient`, `McpTcpClient`, and `McpWebsocketsClient` do not send `initialize`; call it yourself with `CallAsync("initialize", ...)` and `NotifyAsync("notifications/initialized")`. No client accepts JSON-RPC batches (2025-03-26), and clients do not send `notifications/cancelled` when a call times out. |
-| Stream transport servers | stdio, TCP, and WebSocket servers answer a JSON-RPC batch (2025-03-26) with `-32700`, handle one request at a time per connection (a `ping` waits behind a long call), treat `notifications/cancelled` as a no-op, and do not require `initialize` first. `NotifyProgressAsync`, `NotifyCancelledAsync`, and `NotifyLogMessageAsync` on TCP and WebSocket broadcast to every connection. |
-| HTTP client | `McpHttpClient` does not start a new session when a request gets 404, and does not send `DELETE` when it disconnects. |
-| HTTP server | `DELETE /mcp` does not check that the session belongs to the caller. A 401 carries `WWW-Authenticate` only when the `AuthenticationHandler` supplies it (use `AuthenticationResult.BearerChallenge`); there is no helper for 403 `insufficient_scope`. Progress for a request travels on the GET stream, because POST responses are always JSON. |
-| 2026-07-28 | The server does not require `_meta` `clientCapabilities` and never returns `-32021`; results of methods registered with `RegisterMethod` that are not `McpResult` subclasses lack `resultType`; `ping`, `logging/setLevel`, and `resources/subscribe` are still served; a client disconnect does not cancel the handler; `serverInfo` is only in `server/discover`. `McpHttpClient` does not reject unknown `resultType` values and does not retry after `-32022`. |
-| Schemas and features | Content and resource `annotations` use the tool annotation type (no `audience`, `priority`, `lastModified`); `resource_link.name` is optional; `inputSchema` and `outputSchema` are not forced to `type: object`; results are not downgraded for older negotiated versions (for example audio content to a 2024-11-05 client); resource-not-found is `-32602` on every version (the handshake-era revisions recommend `-32002`); log levels set with `logging/setLevel` are not applied; completion `total` is computed after truncating to 100 values; tool names are not validated against the 2025-11-25 rules. |
+- A missing `Accept` header counts as `*/*`, and media ranges such as `application/*` match.
+- `POST /mcp` without `Content-Type` is accepted when there is no `Origin` header (a non-browser client). Browser requests without it get 415.
+- On `2026-07-28`, notification POSTs need no routing headers, and unknown notifications get 202.
+- `McpHttpClient` treats a `2026-07-28` result without `resultType` as complete, for servers that predate the field. Unknown `resultType` values are rejected.
+- Tool arguments that fail the input schema produce a tool result with `isError: true` on every revision (the model can correct them); older revisions allowed either this or `-32602`.
+- The TCP server accepts newline-delimited JSON (the stdio framing) as well as `Content-Length` framing, and closes a connection that sends a line that is not JSON (a cross-protocol request).
 
-Behavior that follows the specification, for reference:
+**Behavior that follows the specification**, for reference:
 
-- Invalid `Origin` gets 403; sessions come only from a successful `initialize`; a missing session gets 400 and an unknown or terminated one gets 404; `DELETE` ends a session; notifications and client-sent responses get 202 with no body; a batch with nothing to answer gets 202.
-- A missing `MCP-Protocol-Version` header, with no negotiated version, is treated as `2025-03-26`; an unsupported value gets 400.
-- `initialize` with a version the server does not know is answered with `MaximumHandshakeProtocolVersion`, never an error.
-- Tool arguments that fail the input schema produce a tool result with `isError: true` and a message naming the problem (a tool execution error the model can correct); the handler does not run. Unknown tools and malformed `tools/call` requests are JSON-RPC protocol errors.
-- On `2026-07-28`, notification POSTs need no routing headers (the revision defines none for them); requests do.
-- `2026-07-28` is served on every transport; stdio, TCP, and WebSocket servers recognize it from the request's `_meta` protocol version, as the stdio transport's `server/discover` probe expects, and serve the handshake era to everyone else.
-- `McpHttpClient` accepts both `application/json` and SSE responses to POST requests.
-- Every client answers requests from the server: `ping` with `{}`, others through `RegisterRequestHandler` or with `-32601`.
-- A tool handler exception is a tool execution error (`isError: true`), not a JSON-RPC error.
-- `ping`, like every other request, needs a session on `/mcp` (except under `2026-07-28`) and passes through the `AuthenticationHandler`.
-- `GET /mcp` streams start with a priming event, carry event IDs, and resume with `Last-Event-ID`; `McpHttpClient` reconnects and resumes, honoring `retry`.
-- On `2026-07-28`, `x-mcp-header` annotations are validated at registration, `Mcp-Param-{Name}` headers are validated against the arguments (400 `-32020`), and `McpHttpClient` mirrors them and drops tool definitions with invalid annotations.
-- On `2026-07-28`: `MCP-Protocol-Version` must match `params._meta["io.modelcontextprotocol/protocolVersion"]` (a missing or different value gets 400 `-32020`), `Mcp-Method` and `Mcp-Name` are required and validated (base64 sentinel values are decoded), an unsupported version gets 400 `-32022` with the supported list, an unknown method gets 404 `-32601`, and `server/discover` is always available.
+- Lifecycle: `initialize` must come first (other requests get `-32600`, except `ping`), must carry `protocolVersion`, `capabilities`, and `clientInfo` (`-32602`), and is accepted once per session. A version the server does not know is answered with `MaximumHandshakeProtocolVersion`. Every Voltaic client initializes on connect (`AutoInitialize`).
+- JSON-RPC: `id` must be a string or number (`null` is `-32600`), `jsonrpc` must be `"2.0"`, and MCP `params` must be an object. Batches are accepted only on `2025-03-26` sessions (an empty batch is `-32600`, and `initialize` may not be batched); every client accepts batches from the server.
+- Concurrency and cancellation: requests on one connection run concurrently, so `ping` is answered while a tool runs. `notifications/cancelled` cancels the handler's token and suppresses its response; clients send it when a call times out or is cancelled. On `2026-07-28` HTTP, closing the response stream cancels the request (detected with keep-alives, `ResponseKeepAliveMs`), and `McpHttpClient` re-issues a request whose stream broke.
+- Notifications: `list_changed` goes only to initialized sessions; `resources/updated` only to sessions subscribed to that URI; `notifications/message` only at or above the session's `logging/setLevel` level (or the `2026-07-28` `_meta` log level); progress only for a request in flight that carries the token, with increasing values, on the request's own response stream. Notifications and results are downgraded to what the negotiated revision defines (for example audio content becomes text for `2024-11-05`).
+- Features: tool names are validated (1-128 characters of letters, digits, `_`, `-`, `.`); input and output schemas are objects; a tool with an `outputSchema` must return `structuredContent`; resource-not-found is `-32002` on handshake-era revisions and `-32602` on `2026-07-28`; resource templates follow RFC 6570; completions return at most 100 values with the full `total`; cursors are opaque and stable across changes.
+- HTTP: invalid `Origin` gets 403; sessions come only from a successful `initialize`; a missing session gets 400 and an unknown or terminated one 404; `DELETE` ends a session and only its owner may send it; `McpHttpClient` starts a new session after a 404 and sends `DELETE` when it disconnects. A 401 always carries `WWW-Authenticate` (with `resource_metadata` when `ProtectedResourceMetadata` is set), and missing scopes get 403 `insufficient_scope`.
+- `2026-07-28`: `_meta` must carry the protocol version and `clientCapabilities` (`-32602`); results carry `resultType` and `serverInfo` in `_meta`; `ping`, `logging/setLevel`, and `resources/subscribe` are not served; input requests need the matching client capability (`-32021`); `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, and `Mcp-Param-{Name}` headers are validated (400 `-32020`); an unsupported version gets 400 `-32022` with the supported list, and `McpHttpClient` retries with one of them.
+
+## Upgrading to v2.1.5
+
+v2.1.5 enforces MCP requirements that earlier versions did not. Code that follows the specification needs no changes; these are the cases that do:
+
+| Change | Who is affected | What to do |
+|---|---|---|
+| stdio, TCP, and WebSocket servers answer requests before `initialize` with `-32600` (except `ping`), and a second `initialize` too | Clients that skipped `initialize`, or Voltaic stream clients whose code sends `initialize` after connecting | Voltaic clients now initialize on connect: remove your own `initialize` call, or set `AutoInitialize = false` and call `InitializeAsync` |
+| `initialize` without `protocolVersion`, `capabilities`, or `clientInfo` gets `-32602` | Hand-written clients that omitted them | Send all three; the servers' `ProtocolVersion` property (the old fallback) is obsolete |
+| `McpTcpClient` sends newline-delimited JSON | Clients of Voltaic TCP servers before 2.1.5 | Upgrade the server, or set `NewlineDelimited = false` |
+| Resource not found is `-32002` on handshake-era sessions | Code that checked for `-32602` | Check for `-32002` (still `-32602` on `2026-07-28`) |
+| `RegisterTool` throws `ArgumentException` for names outside `[A-Za-z0-9_.-]{1,128}` and for schemas that are not objects | Tools named with spaces, slashes, or other characters | Rename the tool; use an object schema (a schema without `type` gets `type: "object"`) |
+| A tool with an `outputSchema` that returns no `structuredContent` gets `-32603` | Tools that return only text despite declaring an output schema | Return `McpToolCallResult.FromStructured(...)`, or drop the output schema |
+| Batches are answered only on `2025-03-26` sessions | Clients that batched on other versions | Send requests one at a time |
+| `NotifyProgress*` sends only for a request in flight that carries the token, and progress must increase; log notifications honor `logging/setLevel`; `resources/updated` goes only to subscribers; `list_changed` only to initialized sessions | Servers that broadcast progress, or relied on every client receiving every notification | Report progress from the tool with `McpToolCallContext.ReportProgressAsync`; clients subscribe to the resources they want |
+| `NotifyCancelledAsync` and `NotifyCancelled` are obsolete and do nothing | Servers that called them (compiler warning CS0618) | Remove the calls; a server may cancel only requests it sent |
+| Results are downgraded for older sessions (for example no `structuredContent` or audio content for `2024-11-05`) | Tests that compared full results on old versions | Expect the fields the negotiated revision defines |
+| On `2026-07-28`: `_meta` without `clientCapabilities` or the protocol version gets 400 `-32602`; `ping`, `logging/setLevel`, and `resources/subscribe` get 404 `-32601`; a `RegisterMethod` handler that returns something other than an object gets `-32603` | Stateless clients that omitted `_meta` fields or used removed methods | Send the required `_meta` (`McpHttpClient` does); return objects from handlers |
+| `DELETE /mcp` from a principal other than the session's owner gets 404; `/mcp?session=...` is no longer accepted | Clients that shared sessions across credentials or passed the session in the query | Send `MCP-Session-Id` with the credentials that created the session |
+| `McpHttpClient.Disconnect` sends `DELETE` for the session | Code that reused a session ID after disconnecting | Connect again for a new session |
+| Pagination cursors are opaque base64 values | Code that built cursors itself | Pass back the `nextCursor` you received |
+| `McpResourceLinkContent.Name` is a non-nullable string | Code that assigned null | Assign a name (null becomes empty) |
+| On `2026-07-28`, a tool that requests input the client did not declare a capability for gets `-32021` | `CallToolStatelessAsync` callers that answer input requests without declaring the capability | Add the capability, for example `client.ClientCapabilities["elicitation"] = new { };` |
 
 ## Upgrading to v2.1.4
 

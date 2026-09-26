@@ -4,6 +4,8 @@ namespace Voltaic.Mcp
     using System.Collections.Generic;
     using System.Text.Json;
     using System.Threading;
+    using System.Threading.Tasks;
+    using Voltaic.Core;
 
     /// <summary>
     /// Ambient context for the <c>tools/call</c> request currently being handled on this asynchronous flow. It carries
@@ -44,6 +46,7 @@ namespace Voltaic.Mcp
     {
         private static readonly AsyncLocal<McpToolCallContext?> _Current = new AsyncLocal<McpToolCallContext?>();
         private static readonly IReadOnlyDictionary<string, JsonElement> _EmptyResponses = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        private readonly McpRequestScope? _Scope;
 
         /// <summary>
         /// Gets the context of the tool call being handled on this asynchronous flow, or null outside a tool handler.
@@ -94,12 +97,106 @@ namespace Voltaic.Mcp
         /// <param name="canRequestInput">True when the request uses the stateless revision, where the tool may return <see cref="McpInputRequiredResult"/>. Default is false.</param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="toolName"/> is null or empty.</exception>
         public McpToolCallContext(string toolName, IReadOnlyDictionary<string, JsonElement>? inputResponses, string? requestState, bool canRequestInput = false)
+            : this(toolName, inputResponses, requestState, canRequestInput, null)
+        {
+        }
+
+        internal McpToolCallContext(string toolName, IReadOnlyDictionary<string, JsonElement>? inputResponses, string? requestState, bool canRequestInput, McpRequestScope? scope)
         {
             if (String.IsNullOrEmpty(toolName)) throw new ArgumentNullException(nameof(toolName));
             ToolName = toolName;
             InputResponses = inputResponses ?? _EmptyResponses;
             RequestState = requestState;
             CanRequestInput = canRequestInput;
+            _Scope = scope;
+        }
+
+        /// <summary>
+        /// Gets the progress token the client sent with this call (<c>params._meta.progressToken</c>), or null when it
+        /// asked for no progress notifications. <see cref="ReportProgressAsync"/> does nothing without one.
+        /// </summary>
+        public JsonElement? ProgressToken => _Scope?.Request?.ProgressToken;
+
+        /// <summary>
+        /// Sends a <c>notifications/progress</c> for this call to the client that made it, on the connection or
+        /// response stream of the call (on HTTP the response becomes an SSE stream). Does nothing when the client sent
+        /// no progress token or the transport cannot deliver notifications for the call. Progress must increase with
+        /// every notification.
+        /// </summary>
+        /// <param name="progress">The progress so far. Must be greater than the previous value.</param>
+        /// <param name="total">The total, when known, or null.</param>
+        /// <param name="message">A human-readable progress message, or null. Clients on 2024-11-05 do not receive it.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that completes when the notification was written.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="progress"/> does not increase.</exception>
+        public Task ReportProgressAsync(double progress, double? total = null, string? message = null, CancellationToken token = default)
+        {
+            McpInFlightRequest? request = _Scope?.Request;
+            if (request == null || !request.ProgressToken.HasValue || _Scope?.Notify == null) return Task.CompletedTask;
+            if (!request.TryRecordProgress(progress))
+            {
+                throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
+            }
+
+            JsonRpcRequest notification = new JsonRpcRequest
+            {
+                Method = "notifications/progress",
+                Params = new McpProgressNotification
+                {
+                    ProgressToken = request.ProgressToken.Value,
+                    Progress = progress,
+                    Total = total,
+                    Message = message
+                }
+            };
+
+            return _Scope.Notify(notification, token);
+        }
+
+        /// <summary>
+        /// Sends a <c>notifications/message</c> log entry related to this call. On handshake-era sessions it is sent
+        /// when <paramref name="level"/> meets the level the client set with <c>logging/setLevel</c> (everything when it
+        /// set none). On <c>2026-07-28</c> requests it is sent only when the request carried
+        /// <c>io.modelcontextprotocol/logLevel</c> and the level meets it, as that revision requires. Does nothing when
+        /// the transport cannot deliver notifications for the call.
+        /// </summary>
+        /// <param name="level">One of debug, info, notice, warning, error, critical, alert, emergency.</param>
+        /// <param name="data">The JSON-serializable log data.</param>
+        /// <param name="logger">An optional logger name.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that completes when the notification was written or skipped.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="level"/> is not an MCP log level.</exception>
+        public Task LogAsync(string level, object? data, string? logger = null, CancellationToken token = default)
+        {
+            if (!McpLogLevels.IsValid(level)) throw new ArgumentException($"'{level}' is not an MCP log level.", nameof(level));
+            if (_Scope?.Notify == null) return Task.CompletedTask;
+
+            string? minimum = _Scope.StatelessVersion != null ? _Scope.RequestLogLevel : _Scope.Session.LogLevel;
+            if (_Scope.StatelessVersion != null && minimum == null) return Task.CompletedTask;
+            if (!McpLogLevels.Passes(level, minimum)) return Task.CompletedTask;
+
+            JsonRpcRequest notification = new JsonRpcRequest
+            {
+                Method = "notifications/message",
+                Params = new McpLogMessageNotification { Level = level, Logger = logger, Data = data }
+            };
+
+            return _Scope.Notify(notification, token);
+        }
+
+        /// <summary>
+        /// Returns true when the client declared <paramref name="capability"/> (for example <c>elicitation</c>,
+        /// <c>sampling</c>, or <c>roots</c>): in <c>initialize</c> for handshake-era sessions, or in the request's
+        /// <c>_meta</c> for <c>2026-07-28</c> requests. Tools must not rely on capabilities the client did not declare.
+        /// </summary>
+        /// <param name="capability">The capability name. Must not be null or empty.</param>
+        /// <returns>True when declared.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="capability"/> is null or empty.</exception>
+        public bool ClientSupports(string capability)
+        {
+            if (String.IsNullOrEmpty(capability)) throw new ArgumentNullException(nameof(capability));
+            JsonElement? declared = _Scope?.ClientCapabilities;
+            return declared.HasValue && declared.Value.ValueKind == JsonValueKind.Object && declared.Value.TryGetProperty(capability, out JsonElement _);
         }
 
         /// <summary>

@@ -124,14 +124,14 @@ namespace Test.Shared
                         RpcResult sessionless = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, null, ct).ConfigureAwait(false);
                         string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
                         RpcResult withSession = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 2, sessionId, ct).ConfigureAwait(false);
-                        RpcResult stateless = await McpHttpTestRequests.SendStatelessAsync(fixture, "ping", 3, null, null, null, ct).ConfigureAwait(false);
+                        RpcResult stateless = await McpHttpTestRequests.SendStatelessAsync(fixture, "tools/list", 3, null, null, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.BadRequest, sessionless.StatusCode, $"Body: {sessionless.Body}");
                         TestAssert.Equal(-32600, sessionless.Error.Get("code").Int(), "The error is SessionRequired.");
                         TestAssert.True(sessionless.SessionId == null, "No session header is returned.");
                         TestAssert.Equal(HttpStatusCode.OK, withSession.StatusCode, "A ping on a session is answered.");
                         TestAssert.True(withSession.Result.IsObject && withSession.Result.Length == 0, "ping returns {}.");
-                        TestAssert.Equal(HttpStatusCode.OK, stateless.StatusCode, "The stateless revision has no sessions.");
+                        TestAssert.Equal(HttpStatusCode.OK, stateless.StatusCode, "The stateless revision has no sessions (tools/list without a session is served).");
                         TestAssert.Equal(1, fixture.Server.GetActiveSessions().Count, "Only initialize created a session.");
                     }),
 

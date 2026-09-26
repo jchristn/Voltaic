@@ -124,13 +124,22 @@ namespace Test.Shared
 
                     RpcResult call = await fixture.PostMcpAsync("tools/call", new { name = "sum", arguments = new { a = 2, b = 3 } }, "call", init.SessionId, ct).ConfigureAwait(false);
                     JsonProbe callResult = JsonProbe.Parse(call.Body).Get("result");
-                    TestAssert.Equal(5, callResult.Get("structuredContent").Get("total").Int(), "tools/call should return the structured total.");
+                    if (String.CompareOrdinal(version, McpProtocol.ProtocolVersion20250618) >= 0)
+                    {
+                        TestAssert.Equal(5, callResult.Get("structuredContent").Get("total").Int(), "tools/call should return the structured total.");
+                    }
+                    else
+                    {
+                        // structuredContent exists from 2025-06-18; older clients get the same data as text content.
+                        TestAssert.False(callResult.Has("structuredContent"), $"{version} does not define structuredContent.");
+                        TestAssert.True(callResult.Get("content")[0].Get("text").String()!.Contains("5"), "The result is in the text content.");
+                    }
                 }),
 
                 Case(suiteId, "UnsupportedVersionNegotiates", $"initialize with an unknown version negotiates a supported version (the server's cap) under {version}", async ct =>
                 {
                     await using HttpMcpTestServerFixture fixture = await StartAsync(ct).ConfigureAwait(false);
-                    RpcResult response = await fixture.PostMcpAsync("initialize", new { protocolVersion = "1900-01-01" }, "init", null, ct).ConfigureAwait(false);
+                    RpcResult response = await fixture.PostMcpAsync("initialize", new { protocolVersion = "1900-01-01", capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, "init", null, ct).ConfigureAwait(false);
                     JsonProbe root = JsonProbe.Parse(response.Body);
                     TestAssert.False(root.Has("error"), "An unknown version is negotiated, not rejected.");
                     TestAssert.Equal(fixture.Server.MaximumHandshakeProtocolVersion, root.Get("result").Get("protocolVersion").String(), "The server answers with its newest handshake version.");
@@ -197,7 +206,7 @@ namespace Test.Shared
 
         private static async Task<RpcResult> InitializeAsync(HttpMcpTestServerFixture fixture, string version, CancellationToken token)
         {
-            return await fixture.PostMcpAsync("initialize", new { protocolVersion = version, clientInfo = new { name = "matrix", version = "1.0.0" } }, "init", null, token).ConfigureAwait(false);
+            return await fixture.PostMcpAsync("initialize", new { protocolVersion = version, clientInfo = new { name = "matrix", version = "1.0.0" }, capabilities = new { } }, "init", null, token).ConfigureAwait(false);
         }
 
         private static string BatchBody()
@@ -211,7 +220,7 @@ namespace Test.Shared
             {
                 { "io.modelcontextprotocol/protocolVersion", version },
                 { "io.modelcontextprotocol/clientInfo", new { name = "matrix", version = "1.0.0" } },
-                { "io.modelcontextprotocol/clientCapabilities", new { } }
+                { "io.modelcontextprotocol/clientCapabilities", new { elicitation = new { } } }
             };
         }
 

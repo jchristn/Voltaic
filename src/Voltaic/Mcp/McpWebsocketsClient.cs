@@ -2,6 +2,7 @@ namespace Voltaic.Mcp
 {
     using System;
     using System.Collections.Concurrent;
+    using System.Linq;
     using System.Collections.Generic;
     using System.Net.WebSockets;
     using System.Text;
@@ -81,6 +82,10 @@ namespace Voltaic.Mcp
         private DateTime _ConnectedUtc;
         private readonly Dictionary<string, string> _RequestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private readonly object _RequestHeadersLock = new object();
+        private string _ProtocolVersion = McpProtocol.LatestProtocolVersion;
+        private string _ClientName = "Voltaic.Mcp.WebsocketsClient";
+        private string _ClientVersion = "1.0.0";
+        private JsonElement? _InitializeResult;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
         private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
 
@@ -150,6 +155,21 @@ namespace Voltaic.Mcp
                 _ConnectedUtc = DateTime.UtcNow;
                 LogMessage($"Connected to {url}");
                 RaiseConnected();
+
+                if (AutoInitialize)
+                {
+                    try
+                    {
+                        await InitializeAsync(token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogMessage($"MCP initialize failed: {ex.Message}");
+                        Disconnect();
+                        return false;
+                    }
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -214,7 +234,16 @@ namespace Voltaic.Mcp
                 {
                     cts.CancelAfter(timeoutMs);
                     cts.Token.Register(() => tcs.TrySetCanceled());
-                    JsonRpcResponse response = await tcs.Task.ConfigureAwait(false);
+                    JsonRpcResponse response;
+                    try
+                    {
+                        response = await tcs.Task.ConfigureAwait(false);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        SendCancellation(method, id, token.IsCancellationRequested);
+                        throw;
+                    }
 
                     if (response.Error != null)
                     {
@@ -263,6 +292,79 @@ namespace Voltaic.Mcp
 
             await SendRequestAsync(notification, token).ConfigureAwait(false);
             RaiseRequestSent(new RequestSentEventArgs(notification));
+        }
+
+        /// <summary>
+        /// Gets or sets the MCP protocol version requested in <c>initialize</c>; after the handshake it holds the version
+        /// the server negotiated. Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace
+        /// restores the default.
+        /// </summary>
+        public string ProtocolVersion
+        {
+            get => _ProtocolVersion;
+            set => _ProtocolVersion = String.IsNullOrWhiteSpace(value) ? McpProtocol.LatestProtocolVersion : value;
+        }
+
+        /// <summary>
+        /// Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.WebsocketsClient</c>.
+        /// </summary>
+        public string ClientName
+        {
+            get => _ClientName;
+            set => _ClientName = String.IsNullOrWhiteSpace(value) ? "Voltaic.Mcp.WebsocketsClient" : value;
+        }
+
+        /// <summary>
+        /// Gets or sets the client version reported in <c>initialize</c>. Default is <c>1.0.0</c>.
+        /// </summary>
+        public string ClientVersion
+        {
+            get => _ClientVersion;
+            set => _ClientVersion = String.IsNullOrWhiteSpace(value) ? "1.0.0" : value;
+        }
+
+        /// <summary>
+        /// Gets or sets whether connecting performs the MCP <c>initialize</c> handshake automatically, as the
+        /// specification requires before any other request. Default is true. Set false to send <c>initialize</c>
+        /// yourself (for example with <see cref="InitializeAsync"/>).
+        /// </summary>
+        public bool AutoInitialize { get; set; } = true;
+
+        /// <summary>
+        /// Gets additional client capabilities to declare in <c>initialize</c>, merged with the capabilities implied by
+        /// registered request handlers (<c>roots</c>, <c>sampling</c>, <c>elicitation</c>). Never null. Not thread-safe;
+        /// change it before connecting.
+        /// </summary>
+        public Dictionary<string, object?> ClientCapabilities { get; } = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Gets the server's <c>initialize</c> result (protocol version, capabilities, server info, instructions), or
+        /// null before the handshake completed.
+        /// </summary>
+        public JsonElement? InitializeResult => _InitializeResult;
+
+        /// <summary>
+        /// Performs the MCP <c>initialize</c> handshake: sends <c>initialize</c> with <see cref="ProtocolVersion"/>,
+        /// <see cref="ClientName"/>, <see cref="ClientVersion"/>, and the client capabilities, stores the negotiated
+        /// version in <see cref="ProtocolVersion"/>, and sends <c>notifications/initialized</c>. Connecting calls this
+        /// automatically unless <see cref="AutoInitialize"/> is false.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that completes when the handshake is done.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client is not connected, or the server rejects initialize or chooses a version this client cannot use.</exception>
+        public async Task InitializeAsync(CancellationToken token = default)
+        {
+            McpInitializeOutcome outcome = await McpClientHandshake.RunAsync(
+                async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, 30000, ct).ConfigureAwait(false)),
+                ct => NotifyAsync("notifications/initialized", null, ct),
+                _ProtocolVersion,
+                _ClientName,
+                _ClientVersion,
+                McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities),
+                token).ConfigureAwait(false);
+
+            _ProtocolVersion = outcome.ProtocolVersion;
+            _InitializeResult = outcome.Result;
         }
 
         /// <summary>
@@ -436,6 +538,68 @@ namespace Voltaic.Mcp
             LogMessage($"Sent: {json}");
         }
 
+        // A JSON-RPC batch from the server: responses and notifications are processed one by one, and the requests are
+        // answered together in one array.
+        private void ProcessBatch(string batchJson)
+        {
+            List<JsonRpcRequest> requests = new List<JsonRpcRequest>();
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(batchJson))
+                {
+                    foreach (JsonElement element in document.RootElement.EnumerateArray())
+                    {
+                        string raw = element.GetRawText();
+                        JsonRpcRequest? request = ClientRequestDispatcher.ParseRequest(raw);
+                        if (request != null) requests.Add(request);
+                        else ProcessResponse(raw);
+                    }
+                }
+            }
+            catch (JsonException ex)
+            {
+                LogMessage($"Ignoring a malformed batch: {ex.Message}");
+                return;
+            }
+
+            if (requests.Count == 0) return;
+            _ = Task.Run(async () =>
+            {
+                CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
+                try
+                {
+                    JsonRpcResponse[] responses = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
+                    await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"Could not answer a batch of server requests: {ex.Message}");
+                }
+            });
+        }
+
+        // Tells the server to stop working on a request the client gave up on (timeout or cancellation), as MCP asks;
+        // initialize is never cancelled.
+        private void SendCancellation(string method, int id, bool cancelledByCaller)
+        {
+            if (method == "initialize") return;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await NotifyAsync("notifications/cancelled", new McpCancelledNotification
+                    {
+                        RequestId = id,
+                        Reason = cancelledByCaller ? "The request was cancelled by the client." : "The request timed out."
+                    }).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The connection may be closed.
+                }
+            });
+        }
+
         private async Task AnswerServerRequestAsync(JsonRpcRequest request)
         {
             CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
@@ -454,6 +618,12 @@ namespace Voltaic.Mcp
         {
             try
             {
+                if (responseString.TrimStart().StartsWith("[", StringComparison.Ordinal))
+                {
+                    ProcessBatch(responseString);
+                    return;
+                }
+
                 // A request from the server (method and id) must be answered, never mistaken for a response.
                 JsonRpcRequest? serverRequest = ClientRequestDispatcher.ParseRequest(responseString);
                 if (serverRequest != null)

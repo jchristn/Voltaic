@@ -18,9 +18,9 @@ namespace Test.Shared
                     Case(suiteId, "Initialize", "McpTcpServer supports MCP initialize over JSON-RPC TCP", async ct =>
                     {
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct, ConfigureMcpTcpServer).ConfigureAwait(false);
-                        using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
+                        using JsonRpcClient client = await fixture.ConnectClientAsync(ct, autoInitialize: false).ConfigureAwait(false);
 
-                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, token: ct).ConfigureAwait(false));
+                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, token: ct).ConfigureAwait(false));
 
                         TestAssert.Equal(McpProtocol.LatestProtocolVersion, result.Get("protocolVersion").String());
                         TestAssert.True(result.Get("capabilities").Has("tools"), "Tools capability should be present.");
@@ -31,9 +31,9 @@ namespace Test.Shared
                     Case(suiteId, "InitializeRequesting20260728NegotiatesHandshake", "McpTcpServer answers an initialize for 2026-07-28 with 2025-11-25", async ct =>
                     {
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct, ConfigureMcpTcpServer).ConfigureAwait(false);
-                        using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
+                        using JsonRpcClient client = await fixture.ConnectClientAsync(ct, autoInitialize: false).ConfigureAwait(false);
 
-                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20260728 }, token: ct).ConfigureAwait(false));
+                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20260728, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, token: ct).ConfigureAwait(false));
                         TestAssert.Equal(McpProtocol.ProtocolVersion20251125, result.Get("protocolVersion").String(), "TCP initialize must not agree to the stateless revision.");
                     }),
 
@@ -44,9 +44,9 @@ namespace Test.Shared
                             ConfigureMcpTcpServer(server);
                             server.MaximumHandshakeProtocolVersion = McpProtocol.ProtocolVersion20250618;
                         }).ConfigureAwait(false);
-                        using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
+                        using JsonRpcClient client = await fixture.ConnectClientAsync(ct, autoInitialize: false).ConfigureAwait(false);
 
-                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20251125 }, token: ct).ConfigureAwait(false));
+                        JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20251125, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, token: ct).ConfigureAwait(false));
                         TestAssert.Equal(McpProtocol.ProtocolVersion20250618, result.Get("protocolVersion").String(), "TCP initialize is capped.");
                     }),
 
@@ -134,9 +134,9 @@ namespace Test.Shared
                     Case(suiteId, "InitializeAndTools", "McpWebsocketsServer supports initialize and tools over WebSocket", async ct =>
                     {
                         await using WebSocketMcpFixture fixture = await WebSocketMcpFixture.StartAsync(ct, ConfigureMcpWebSocketServer).ConfigureAwait(false);
-                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
+                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct, autoInitialize: false).ConfigureAwait(false);
 
-                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, token: ct).ConfigureAwait(false));
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, token: ct).ConfigureAwait(false));
                         JsonProbe call = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "ws-echo", arguments = new { message = "hello" } }, token: ct).ConfigureAwait(false));
 
                         TestAssert.Equal(McpProtocol.LatestProtocolVersion, initialize.Get("protocolVersion").String());
@@ -146,9 +146,9 @@ namespace Test.Shared
                     Case(suiteId, "InitializeRequesting20260728NegotiatesHandshake", "McpWebsocketsServer answers an initialize for 2026-07-28 with 2025-11-25", async ct =>
                     {
                         await using WebSocketMcpFixture fixture = await WebSocketMcpFixture.StartAsync(ct, ConfigureMcpWebSocketServer).ConfigureAwait(false);
-                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
+                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct, autoInitialize: false).ConfigureAwait(false);
 
-                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20260728 }, token: ct).ConfigureAwait(false));
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20260728, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, token: ct).ConfigureAwait(false));
                         TestAssert.Equal(McpProtocol.ProtocolVersion20251125, initialize.Get("protocolVersion").String(), "WebSocket initialize must not agree to the stateless revision.");
                     }),
 
@@ -159,9 +159,9 @@ namespace Test.Shared
                             ConfigureMcpWebSocketServer(server);
                             server.MaximumHandshakeProtocolVersion = McpProtocol.ProtocolVersion20250618;
                         }).ConfigureAwait(false);
-                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
+                        using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct, autoInitialize: false).ConfigureAwait(false);
 
-                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20251125 }, token: ct).ConfigureAwait(false));
+                        JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.ProtocolVersion20251125, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, token: ct).ConfigureAwait(false));
                         TestAssert.Equal(McpProtocol.ProtocolVersion20250618, initialize.Get("protocolVersion").String(), "WebSocket initialize is capped.");
                     }),
 

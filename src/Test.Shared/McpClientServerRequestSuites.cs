@@ -39,7 +39,7 @@ namespace Test.Shared
                 {
                     Case(suiteId, "StdioClientAnswersServerRequests", "McpClient (stdio) answers ping with {}, a registered method with its result, and an unknown method with -32601", async ct =>
                     {
-                        using McpClient client = new McpClient();
+                        using McpClient client = new McpClient { AutoInitialize = false };
                         ConcurrentQueue<string> echoes = new ConcurrentQueue<string>();
                         client.NotificationReceived += (sender, notification) =>
                         {
@@ -88,7 +88,7 @@ namespace Test.Shared
                         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
                         try
                         {
-                            using McpTcpClient client = new McpTcpClient();
+                            using McpTcpClient client = new McpTcpClient { AutoInitialize = false, NewlineDelimited = false };
                             client.RegisterRequestHandler("sampling/createMessage", (args, token) => throw McpProtocolException.InvalidParams("bad sampling request"));
                             client.RegisterRequestHandler("boom", (args, token) => throw new InvalidOperationException("secret detail"));
                             Task<TcpClient> accepting = listener.AcceptTcpClientAsync(ct).AsTask();
@@ -139,7 +139,7 @@ namespace Test.Shared
                         listener.Start();
 
                         Task<HttpListenerContext> accepting = listener.GetContextAsync();
-                        using McpWebsocketsClient client = new McpWebsocketsClient();
+                        using McpWebsocketsClient client = new McpWebsocketsClient { AutoInitialize = false };
                         Task<bool> connecting = client.ConnectAsync($"ws://localhost:{port}/", ct);
                         HttpListenerContext context = await accepting.ConfigureAwait(false);
                         HttpListenerWebSocketContext socketContext = await context.AcceptWebSocketAsync(null).ConfigureAwait(false);

@@ -156,15 +156,27 @@ namespace Voltaic.Core
             AuthenticationResult result,
             bool enableCors,
             Dictionary<string, string>? corsHeaders,
-            CancellationToken token)
+            CancellationToken token,
+            string? resourceMetadataUrl = null)
         {
             context.Response.StatusCode = result.StatusCode;
             ApplyCorsHeaders(context, enableCors, corsHeaders);
 
+            bool hasChallenge = false;
             foreach (KeyValuePair<string, string> header in result.Headers)
             {
                 if (String.IsNullOrEmpty(header.Key) || header.Value == null) continue;
+                if (StringComparer.OrdinalIgnoreCase.Equals(header.Key, "WWW-Authenticate")) hasChallenge = true;
                 context.Response.AddHeader(header.Key, header.Value);
+            }
+
+            // A 401 must carry a WWW-Authenticate challenge (RFC 9110); MCP clients read resource_metadata from it to
+            // discover the authorization server (MCP 2025-06-18 and later).
+            if (result.StatusCode == 401 && !hasChallenge)
+            {
+                context.Response.AddHeader("WWW-Authenticate", String.IsNullOrEmpty(resourceMetadataUrl)
+                    ? "Bearer"
+                    : "Bearer resource_metadata=\"" + resourceMetadataUrl!.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"");
             }
 
             if (!String.IsNullOrEmpty(result.ErrorMessage))

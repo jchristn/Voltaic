@@ -38,7 +38,7 @@ namespace Test.Shared
             {
                 { McpProtocol.MetaProtocolVersionKey, version },
                 { McpProtocol.MetaClientInfoKey, new { name = "claude-code", version = "2.1.281" } },
-                { McpProtocol.MetaClientCapabilitiesKey, new { } }
+                { McpProtocol.MetaClientCapabilitiesKey, new { elicitation = new { } } }
             };
         }
 
@@ -173,10 +173,7 @@ namespace Test.Shared
                 { "clientInfo", new { name = "voltaic-test", version = "1.0.0" } }
             };
 
-            if (version != null)
-            {
-                parameters["protocolVersion"] = version;
-            }
+            parameters["protocolVersion"] = version ?? McpProtocol.LatestProtocolVersion;
 
             return SendAsync(fixture, "initialize", 1, parameters, null, null, authorization, token);
         }

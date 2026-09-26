@@ -77,7 +77,7 @@ namespace Test.Shared
                         string body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-                        TestAssert.True(body.Contains("Missing session ID"), "Error should explain missing session.");
+                        TestAssert.Equal(-32600, TestJson.ParseRoot(body).Get("error").Get("code").Int(), "The JSON-RPC error explains the missing session.");
                     }),
 
                     Case(suiteId, "DeleteRemovesSession", "DELETE /mcp terminates an existing session", async ct =>
@@ -290,7 +290,7 @@ namespace Test.Shared
                     Case(suiteId, "InitializeCapabilities", "initialize advertises capabilities for registered tools, resources, and prompts", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
-                        RpcResult response = await fixture.PostMcpAsync("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, 1, null, ct).ConfigureAwait(false);
+                        RpcResult response = await fixture.PostMcpAsync("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion, capabilities = new { }, clientInfo = new { name = "voltaic-test", version = "1.0.0" } }, 1, null, ct).ConfigureAwait(false);
 
                         JsonProbe capabilities = response.Result.Get("capabilities");
                         TestAssert.True(capabilities.Has("tools"), "Tools capability should be advertised.");
@@ -319,8 +319,9 @@ namespace Test.Shared
                         RpcResult second = await fixture.PostMcpAsync("tools/list", new { cursor = first.Result.Get("nextCursor").String() }, 2, first.SessionId, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(100, first.Result.Get("tools").Length);
-                        TestAssert.Equal("100", first.Result.Get("nextCursor").String());
+                        TestAssert.False(String.IsNullOrEmpty(first.Result.Get("nextCursor").String()), "A first page of a larger list has an opaque cursor.");
                         TestAssert.True(second.Result.Get("tools").Length > 0, "Second page should contain remaining tools.");
+                        TestAssert.False(second.Result.Get("tools")[0].Get("name").String() == first.Result.Get("tools")[0].Get("name").String(), "The second page continues after the first.");
                         TestAssert.False(second.Result.Has("nextCursor"), "Final page should omit nextCursor.");
                     }),
 
@@ -504,8 +505,10 @@ namespace Test.Shared
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("resources/read", new { uri = "voltaic://missing" }, 1, null, ct).ConfigureAwait(false);
+                        RpcResult stateless = await McpHttpTestRequests.SendStatelessAsync(fixture, "resources/read", 2, new Dictionary<string, object?> { { "uri", "voltaic://missing" } }, "voltaic://missing", null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
+                        TestAssert.Equal(-32002, response.Error.Get("code").Int(), "Resource not found is -32002 through 2025-11-25.");
+                        TestAssert.Equal(-32602, stateless.Error.Get("code").Int(), "2026-07-28 changed resource not found to -32602.");
                     }),
 
                     Case(suiteId, "ResourceHandlerException", "resource handler exceptions map to internal errors", async ct =>

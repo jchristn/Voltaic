@@ -143,6 +143,15 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets additional client capabilities to declare in <c>initialize</c> and in the <c>clientCapabilities</c> of
+        /// stateless requests, merged with the capabilities implied by registered request handlers (<c>roots</c>,
+        /// <c>sampling</c>, <c>elicitation</c>). For example, add <c>elicitation</c> when
+        /// <see cref="CallToolStatelessAsync"/> answers elicitation input requests through its callback. Never null.
+        /// Change it before connecting.
+        /// </summary>
+        public Dictionary<string, object?> ClientCapabilities { get; } = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
@@ -193,6 +202,8 @@ namespace Voltaic.Mcp
         private string? _SseLastEventId;
         private int? _SseRetryMs;
         private bool _HandshakeComplete;
+        private bool _Streamable;
+        private bool _SseWanted;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
         private CancellationTokenSource _ServerRequestTokenSource = new CancellationTokenSource();
         private readonly ConcurrentDictionary<string, List<McpHeaderParameter>> _ToolHeaderParameters = new ConcurrentDictionary<string, List<McpHeaderParameter>>(StringComparer.Ordinal);
@@ -292,6 +303,7 @@ namespace Voltaic.Mcp
                 _BaseUrl = baseUrl.TrimEnd('/');
                 _RpcUrl = $"{_BaseUrl}{rpcPath}";
                 _EventsUrl = $"{_BaseUrl}{eventsPath}";
+                _Streamable = false;
                 await PerformHandshakeAsync(token).ConfigureAwait(false);
 
                 _ConnectedUtc = DateTime.UtcNow;
@@ -331,6 +343,7 @@ namespace Voltaic.Mcp
                 _BaseUrl = baseUrl.TrimEnd('/');
                 _RpcUrl = $"{_BaseUrl}{mcpPath}";
                 _EventsUrl = $"{_BaseUrl}{mcpPath}";
+                _Streamable = true;
                 await PerformHandshakeAsync(token).ConfigureAwait(false);
 
                 _ConnectedUtc = DateTime.UtcNow;
@@ -365,6 +378,7 @@ namespace Voltaic.Mcp
 
                 _SseLastEventId = null;
                 _SseRetryMs = null;
+                _SseWanted = true;
                 _SseTokenSource = new CancellationTokenSource();
                 _SseTask = Task.Run(() => SseLoop(_SseTokenSource.Token));
 
@@ -386,6 +400,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public void StopSse()
         {
+            _SseWanted = false;
             CancellationTokenSource? source = _SseTokenSource;
             if (source != null && !source.IsCancellationRequested)
             {
@@ -397,7 +412,10 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Asynchronously invokes a remote method and returns the result as the specified type.
+        /// Asynchronously invokes a remote method and returns the result as the specified type. When a request that
+        /// carried a session gets HTTP 404 (the session expired or was terminated), the client starts a new session with
+        /// <c>initialize</c> and retries once, as the Streamable HTTP transport requires. A call that times out or is
+        /// cancelled sends <c>notifications/cancelled</c>.
         /// </summary>
         /// <typeparam name="T">The type to deserialize the result into.</typeparam>
         /// <param name="method">The name of the method to invoke.</param>
@@ -409,91 +427,18 @@ namespace Voltaic.Mcp
         /// <exception cref="Exception">Thrown when the remote method returns an error.</exception>
         public async Task<T> CallAsync<T>(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
         {
-            if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
-                throw new InvalidOperationException("Client not initialized. Call ConnectAsync first.");
-
-            if (timeoutMs == 0) timeoutMs = _RequestTimeoutMs;
-
-            JsonRpcRequest request = new JsonRpcRequest
+            JsonRpcResponse response = await ExchangeAsync(method, parameters, timeoutMs, token).ConfigureAwait(false);
+            if (response.Error != null)
             {
-                Method = method,
-                Params = parameters,
-                Id = Guid.NewGuid().ToString()
-            };
-
-            DateTime sentUtc = DateTime.UtcNow;
-            string requestJson = JsonSerializer.Serialize(request);
-            LogMessage($"Sending request: {requestJson}");
-            RaiseRequestSent(new RequestSentEventArgs(request));
-
-            using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
-            {
-                cts.CancelAfter(timeoutMs);
-
-                HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
-                httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
-
-                // After initialize, every request carries the negotiated version, with or without a session.
-                if (!String.IsNullOrEmpty(SessionId))
-                {
-                    httpRequest.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
-                }
-
-                if (!String.IsNullOrEmpty(SessionId) || _HandshakeComplete)
-                {
-                    httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
-                }
-
-                httpRequest.Headers.Accept.ParseAdd("application/json");
-                httpRequest.Headers.Accept.ParseAdd("text/event-stream");
-
-                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-                httpResponse.EnsureSuccessStatusCode();
-
-                // Extract session ID from response
-                if (httpResponse.Headers.TryGetValues(McpProtocol.SessionIdHeader, out System.Collections.Generic.IEnumerable<string>? sessionHeaders) ||
-                    httpResponse.Headers.TryGetValues(McpProtocol.LegacySessionIdHeader, out sessionHeaders))
-                {
-                    foreach (string sessionHeader in sessionHeaders)
-                    {
-                        SessionId = sessionHeader;
-                        break;
-                    }
-                }
-
-                string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
-                LogMessage($"Received response: {responseJson}");
-
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
-
-                if (response != null)
-                {
-                    RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
-                }
-
-                response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
-                if (response == null)
-                {
-                    throw new Exception("Invalid response from server");
-                }
-
-                if (response.Error != null)
-                {
-                    throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
-                }
-
-                if (response.Result != null)
-                {
-                    return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(response.Result))!;
-                }
-
-                if (response.Result == null)
-                {
-                    return default(T)!;
-                }
-
-                return (T)Convert.ChangeType(response.Result, typeof(T));
+                throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
             }
+
+            if (response.Result == null)
+            {
+                return default(T)!;
+            }
+
+            return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(response.Result))!;
         }
 
         /// <summary>
@@ -518,7 +463,9 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Asynchronously invokes a remote method and returns the raw JSON-RPC response.
+        /// Asynchronously invokes a remote method and returns the raw JSON-RPC response. A 404 on a session request
+        /// starts a new session and retries once; a call that times out or is cancelled sends
+        /// <c>notifications/cancelled</c>.
         /// </summary>
         /// <param name="method">The name of the method to invoke.</param>
         /// <param name="parameters">The parameters to pass to the method. Can be null.</param>
@@ -527,46 +474,97 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation. The task result contains the JSON-RPC response.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized.</exception>
         /// <exception cref="Exception">Thrown when the HTTP response body cannot be parsed as JSON-RPC.</exception>
-        public async Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
+        public Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
+        {
+            return ExchangeAsync(method, parameters, timeoutMs, token);
+        }
+
+        private async Task<JsonRpcResponse> ExchangeAsync(string method, object? parameters, int timeoutMs, CancellationToken token)
         {
             if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
                 throw new InvalidOperationException("Client not initialized. Call ConnectAsync first.");
 
             if (timeoutMs == 0) timeoutMs = _RequestTimeoutMs;
 
-            JsonRpcRequest request = new JsonRpcRequest
+            for (int attempt = 0; ; attempt++)
             {
-                Method = method,
-                Params = parameters,
-                Id = Guid.NewGuid().ToString()
-            };
-
-            DateTime sentUtc = DateTime.UtcNow;
-            string requestJson = JsonSerializer.Serialize(request);
-            LogMessage($"Sending request: {requestJson}");
-            RaiseRequestSent(new RequestSentEventArgs(request));
-
-            using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
-            {
-                cts.CancelAfter(timeoutMs);
-
-                using HttpRequestMessage httpRequest = CreatePostRequest(requestJson);
-                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-                httpResponse.EnsureSuccessStatusCode();
-                CaptureSessionId(httpResponse);
-
-                string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
-                LogMessage($"Received response: {responseJson}");
-
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
-                if (response == null)
+                JsonRpcRequest request = new JsonRpcRequest
                 {
-                    throw new Exception("Invalid response from server");
-                }
+                    Method = method,
+                    Params = parameters,
+                    Id = Guid.NewGuid().ToString()
+                };
 
-                RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
-                return response;
+                DateTime sentUtc = DateTime.UtcNow;
+                string requestJson = JsonSerializer.Serialize(request);
+                LogMessage($"Sending request: {requestJson}");
+                RaiseRequestSent(new RequestSentEventArgs(request));
+                bool hadSession = !String.IsNullOrEmpty(SessionId);
+
+                using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    cts.CancelAfter(timeoutMs);
+                    try
+                    {
+                        using HttpRequestMessage httpRequest = CreatePostRequest(requestJson);
+                        HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
+                        // 404 to a request that carried a session: the session is gone, so start a new one (MUST).
+                        if ((int)httpResponse.StatusCode == 404 && hadSession && attempt == 0 && method != "initialize" && _Streamable)
+                        {
+                            httpResponse.Dispose();
+                            LogMessage($"Session {SessionId} was not found; starting a new session and retrying {method}");
+                            SessionId = null;
+                            _HandshakeComplete = false;
+                            await PerformHandshakeAsync(token).ConfigureAwait(false);
+                            if (_SseWanted) await StartSseAsync(token).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        httpResponse.EnsureSuccessStatusCode();
+                        CaptureSessionId(httpResponse);
+
+                        string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
+                        LogMessage($"Received response: {responseJson}");
+
+                        JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
+                        if (response == null)
+                        {
+                            throw new Exception("Invalid response from server");
+                        }
+
+                        RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
+                        return response;
+                    }
+                    catch (OperationCanceledException) when (method != "initialize" && method != "notifications/cancelled")
+                    {
+                        SendCancellation(request.Id, token.IsCancellationRequested);
+                        throw;
+                    }
+                }
             }
+        }
+
+        // Tells the server to stop working on a request the client gave up on (handshake-era sessions; on 2026-07-28
+        // closing the response stream is the cancellation signal).
+        private void SendCancellation(object? requestId, bool cancelledByCaller)
+        {
+            if (_Stateless || requestId == null) return;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await NotifyAsync("notifications/cancelled", new McpCancelledNotification
+                    {
+                        RequestId = requestId,
+                        Reason = cancelledByCaller ? "The request was cancelled by the client." : "The request timed out."
+                    }).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The session may be gone.
+                }
+            });
         }
 
         /// <summary>
@@ -596,7 +594,20 @@ namespace Voltaic.Mcp
                 _Stateless = true;
                 _ProtocolVersion = String.IsNullOrWhiteSpace(protocolVersion) ? McpProtocol.NewestProtocolVersion : protocolVersion!;
 
-                McpDiscoverResult discover = await DiscoverAsync(token).ConfigureAwait(false);
+                McpDiscoverResult discover;
+                try
+                {
+                    discover = await DiscoverAsync(token).ConfigureAwait(false);
+                }
+                catch (McpProtocolException unsupported) when (unsupported.Code == -32022 && autoNegotiate)
+                {
+                    // The server lists what it supports; pick a stateless-era version both sides implement and retry.
+                    string? fallback = PickSupportedStatelessVersion(unsupported.ErrorData);
+                    if (fallback == null) throw;
+                    LogMessage($"The server does not support {_ProtocolVersion}; retrying with {fallback}");
+                    _ProtocolVersion = fallback;
+                    discover = await DiscoverAsync(token).ConfigureAwait(false);
+                }
 
                 if (autoNegotiate && discover.SupportedVersions != null && discover.SupportedVersions.Count > 0
                     && !discover.SupportedVersions.Contains(_ProtocolVersion))
@@ -686,7 +697,7 @@ namespace Voltaic.Mcp
             return response;
         }
 
-        private async Task<JsonRpcResponse> SendStatelessCoreAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token)
+        private async Task<JsonRpcResponse> SendStatelessCoreAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token, bool reissued = false)
         {
             if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
                 throw new InvalidOperationException("Client not initialized. Call ConnectStatelessAsync first.");
@@ -731,6 +742,13 @@ namespace Voltaic.Mcp
 
                 if (String.IsNullOrEmpty(responseJson))
                 {
+                    // A broken response stream loses the request; 2026-07-28 clients must re-issue it with a new ID.
+                    if (!reissued && StringComparer.OrdinalIgnoreCase.Equals(httpResponse.Content.Headers.ContentType?.MediaType, "text/event-stream"))
+                    {
+                        LogMessage($"The response stream for {method} ended without a response; re-issuing the request");
+                        return await SendStatelessCoreAsync(method, parameters, name, token, true).ConfigureAwait(false);
+                    }
+
                     throw new McpProtocolException(-32603, $"Empty stateless response (HTTP {(int)httpResponse.StatusCode}).");
                 }
 
@@ -738,6 +756,19 @@ namespace Voltaic.Mcp
                 if (response == null)
                 {
                     throw new McpProtocolException(-32603, "Invalid stateless response from server.");
+                }
+
+                // resultType values this client does not recognize make the result invalid (a missing one is "complete",
+                // for servers that predate the field).
+                string? resultType = ReadResultType(response.Result);
+                if (response.Error == null && resultType != null && resultType != McpResult.ResultTypeComplete && resultType != McpResult.ResultTypeInputRequired)
+                {
+                    LogMessage($"Rejecting a {method} result with unrecognized resultType '{resultType}'");
+                    response = new JsonRpcResponse
+                    {
+                        Id = response.Id,
+                        Error = new JsonRpcError { Code = -32603, Message = $"The server returned an unrecognized resultType '{resultType}'." }
+                    };
                 }
 
                 if (StringComparer.Ordinal.Equals(method, "tools/list") && response.Error == null)
@@ -776,7 +807,9 @@ namespace Voltaic.Mcp
         /// pattern. When the server responds with an input-required result and
         /// <paramref name="provideInputResponses"/> is supplied, the client gathers the responses and
         /// retries the original call — echoing the server's <c>requestState</c> — until a final result
-        /// arrives or <paramref name="maxInputRounds"/> is exhausted.
+        /// arrives or <paramref name="maxInputRounds"/> is exhausted. A server may request only the kinds of input the
+        /// client declares, so add the matching entries (for example <c>elicitation</c>) to
+        /// <see cref="ClientCapabilities"/> before calling; otherwise the server answers <c>-32021</c>.
         /// </summary>
         /// <param name="name">The tool name. Must not be null or empty.</param>
         /// <param name="arguments">The tool arguments, or null.</param>
@@ -889,6 +922,7 @@ namespace Voltaic.Mcp
             if (!String.IsNullOrEmpty(SessionId))
             {
                 StopSse();
+                TryDeleteSession();
                 RaiseDisconnected("Client disconnected");
                 SessionId = null;
                 LogMessage("Disconnected");
@@ -1005,6 +1039,33 @@ namespace Voltaic.Mcp
             }
         }
 
+        // Ends the Streamable HTTP session on the server (clients SHOULD send DELETE when they no longer need it).
+        // A 405 means the server does not allow clients to end sessions; either way the local session is dropped.
+        private void TryDeleteSession()
+        {
+            if (!_Streamable || _HttpClient == null || String.IsNullOrEmpty(_RpcUrl) || String.IsNullOrEmpty(SessionId)) return;
+            string sessionId = SessionId!;
+            string url = _RpcUrl!;
+            HttpClient client = _HttpClient;
+            string version = _ProtocolVersion;
+            try
+            {
+                Task.Run(async () =>
+                {
+                    using CancellationTokenSource timeout = new CancellationTokenSource(2000);
+                    using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Delete, url);
+                    request.Headers.Add(McpProtocol.SessionIdHeader, sessionId);
+                    request.Headers.Add(McpProtocol.ProtocolVersionHeader, version);
+                    using HttpResponseMessage response = await client.SendAsync(request, timeout.Token).ConfigureAwait(false);
+                    LogMessage($"Session {sessionId} ended with DELETE (HTTP {(int)response.StatusCode})");
+                }).Wait(2500);
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Could not end session {sessionId}: {ex.Message}");
+            }
+        }
+
         private async Task PerformHandshakeAsync(CancellationToken token)
         {
             _HandshakeComplete = false;
@@ -1026,9 +1087,9 @@ namespace Voltaic.Mcp
                 : new RpcParameters(JsonSerializer.Serialize(response.Result)).GetString("protocolVersion");
             if (!String.IsNullOrEmpty(negotiatedVersion))
             {
-                if (!McpProtocol.IsSupportedVersion(negotiatedVersion!))
+                if (!McpProtocol.IsHandshakeVersion(negotiatedVersion!))
                 {
-                    throw new InvalidOperationException($"The server negotiated unsupported MCP protocol version '{negotiatedVersion}'.");
+                    throw new InvalidOperationException($"The server negotiated MCP protocol version '{negotiatedVersion}', which this client cannot use for a session.");
                 }
 
                 _ProtocolVersion = negotiatedVersion!;
@@ -1041,20 +1102,28 @@ namespace Voltaic.Mcp
         // Declares the client capabilities whose requests have handlers, so servers know they may send them.
         private Dictionary<string, object?> BuildClientCapabilities()
         {
-            Dictionary<string, object?> capabilities = new Dictionary<string, object?>(StringComparer.Ordinal);
-            if (_RequestDispatcher.HasHandler("roots/list")) capabilities["roots"] = new Dictionary<string, object?>(StringComparer.Ordinal);
-            if (_RequestDispatcher.HasHandler("sampling/createMessage")) capabilities["sampling"] = new Dictionary<string, object?>(StringComparer.Ordinal);
-            if (_RequestDispatcher.HasHandler("elicitation/create")) capabilities["elicitation"] = new Dictionary<string, object?>(StringComparer.Ordinal);
-            return capabilities;
+            return McpClientHandshake.CapabilitiesFor(_RequestDispatcher, ClientCapabilities);
         }
 
         private Dictionary<string, object?> BuildStatelessParams(IReadOnlyDictionary<string, object?>? parameters)
         {
             Dictionary<string, object?> result = new Dictionary<string, object?>(StringComparer.Ordinal);
+            Dictionary<string, object?> callerMeta = new Dictionary<string, object?>(StringComparer.Ordinal);
             if (parameters != null)
             {
                 foreach (KeyValuePair<string, object?> entry in parameters)
                 {
+                    if (entry.Key == "_meta" && entry.Value != null)
+                    {
+                        JsonElement metaElement = entry.Value is JsonElement json ? json : JsonSerializer.SerializeToElement(entry.Value);
+                        if (metaElement.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (JsonProperty property in metaElement.EnumerateObject()) callerMeta[property.Name] = property.Value.Clone();
+                        }
+
+                        continue;
+                    }
+
                     result[entry.Key] = entry.Value;
                 }
             }
@@ -1071,6 +1140,11 @@ namespace Voltaic.Mcp
                 { McpProtocol.MetaClientInfoKey, clientInfo },
                 { McpProtocol.MetaClientCapabilitiesKey, BuildClientCapabilities() }
             };
+
+            foreach (KeyValuePair<string, object?> entry in callerMeta)
+            {
+                if (!meta.ContainsKey(entry.Key)) meta[entry.Key] = entry.Value;
+            }
 
             result["_meta"] = meta;
             return result;
@@ -1165,6 +1239,30 @@ namespace Voltaic.Mcp
                     : null;
                 if (String.IsNullOrEmpty(cursor)) return;
             }
+        }
+
+        private static string? PickSupportedStatelessVersion(object? errorData)
+        {
+            if (errorData == null) return null;
+            JsonElement data = errorData is JsonElement json ? json : JsonSerializer.SerializeToElement(errorData);
+            if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("supported", out JsonElement supported) || supported.ValueKind != JsonValueKind.Array) return null;
+
+            foreach (JsonElement candidate in supported.EnumerateArray())
+            {
+                string? version = candidate.ValueKind == JsonValueKind.String ? candidate.GetString() : null;
+                if (version != null && McpProtocol.IsSupportedVersion(version) && McpProtocol.GetEra(version) == McpProtocolEra.Stateless) return version;
+            }
+
+            return null;
+        }
+
+        private static string? ReadResultType(object? result)
+        {
+            if (result == null) return null;
+            JsonElement element = result is JsonElement json ? json : JsonSerializer.SerializeToElement(result);
+            return element.ValueKind == JsonValueKind.Object && element.TryGetProperty("resultType", out JsonElement value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
         }
 
         private static T? DeserializeResult<T>(object? result)

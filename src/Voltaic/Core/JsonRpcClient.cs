@@ -2,6 +2,8 @@ namespace Voltaic.Core
 {
     using System;
     using System.Collections.Concurrent;
+    using System.Linq;
+    using System.Collections.Generic;
     using System.IO;
     using System.Net.Sockets;
     using System.Text;
@@ -131,6 +133,13 @@ namespace Voltaic.Core
                 _ConnectedUtc = DateTime.UtcNow;
                 LogMessage($"Connected to {host}:{port}");
                 RaiseConnected();
+
+                if (!await OnConnectedAsync(token).ConfigureAwait(false))
+                {
+                    Disconnect();
+                    return false;
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -178,7 +187,16 @@ namespace Voltaic.Core
                 {
                     cts.CancelAfter(timeoutMs);
                     cts.Token.Register(() => tcs.TrySetCanceled());
-                    JsonRpcResponse response = await tcs.Task.ConfigureAwait(false);
+                    JsonRpcResponse response;
+                    try
+                    {
+                        response = await tcs.Task.ConfigureAwait(false);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        OnCallAbandoned(method, id, token.IsCancellationRequested);
+                        throw;
+                    }
 
                     if (response.Error != null)
                     {
@@ -328,6 +346,12 @@ namespace Voltaic.Core
 
         private async Task ReceiveLoop(CancellationToken token)
         {
+            if (NewlineFraming && _Stream != null)
+            {
+                await ReceiveLinesAsync(_Stream, token).ConfigureAwait(false);
+                return;
+            }
+
             byte[] buffer = MessageFraming.CreateBuffer();
             int bufferOffset = 0;
             int bufferCount = 0;
@@ -386,6 +410,93 @@ namespace Voltaic.Core
             }
         }
 
+        // Reads newline-delimited messages (the MCP stdio framing).
+        private async Task ReceiveLinesAsync(NetworkStream stream, CancellationToken token)
+        {
+            try
+            {
+                using (StreamReader reader = new StreamReader(stream, new UTF8Encoding(false), false, 8192, leaveOpen: true))
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        string? line = await reader.ReadLineAsync(token).ConfigureAwait(false);
+                        if (line == null)
+                        {
+                            LogMessage("Server disconnected");
+                            break;
+                        }
+
+                        if (!String.IsNullOrWhiteSpace(line)) ProcessResponse(line);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!token.IsCancellationRequested) LogMessage($"Receive error: {ex.Message}");
+            }
+            finally
+            {
+                _IsConnected = false;
+            }
+        }
+
+        // True to send and receive newline-delimited JSON instead of Content-Length framing. Set before connecting.
+        private protected bool NewlineFraming { get; set; }
+
+        // The dispatcher that answers server requests, for derived clients that declare capabilities from it.
+        private protected ClientRequestDispatcher RequestDispatcher => _RequestDispatcher;
+
+        // Called after the connection opened; return false to disconnect and fail ConnectAsync.
+        private protected virtual Task<bool> OnConnectedAsync(CancellationToken token)
+        {
+            return Task.FromResult(true);
+        }
+
+        // Called when a call gave up (timeout or cancellation) before its response arrived.
+        private protected virtual void OnCallAbandoned(string method, int id, bool cancelledByCaller)
+        {
+        }
+
+        // A JSON-RPC batch from the server: responses and notifications are processed one by one, and the requests are
+        // answered together in one array.
+        private void ProcessBatch(string batchJson)
+        {
+            List<JsonRpcRequest> requests = new List<JsonRpcRequest>();
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(batchJson))
+                {
+                    foreach (JsonElement element in document.RootElement.EnumerateArray())
+                    {
+                        string raw = element.GetRawText();
+                        JsonRpcRequest? request = ClientRequestDispatcher.ParseRequest(raw);
+                        if (request != null) requests.Add(request);
+                        else ProcessResponse(raw);
+                    }
+                }
+            }
+            catch (JsonException ex)
+            {
+                LogMessage($"Ignoring a malformed batch: {ex.Message}");
+                return;
+            }
+
+            if (requests.Count == 0) return;
+            _ = Task.Run(async () =>
+            {
+                CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
+                try
+                {
+                    JsonRpcResponse[] responses = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
+                    await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"Could not answer a batch of server requests: {ex.Message}");
+                }
+            });
+        }
+
         // Makes an MCP client answer ping itself (MCP requires every party to answer ping) and reserves the name.
         private protected void AnswerPingRequests()
         {
@@ -405,7 +516,16 @@ namespace Voltaic.Core
             await _SendLock.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                await MessageFraming.WriteMessageAsync(_Stream, json, _DefaultContentType, token).ConfigureAwait(false);
+                if (NewlineFraming)
+                {
+                    byte[] bytes = Encoding.UTF8.GetBytes(json + "\n");
+                    await _Stream.WriteAsync(bytes, 0, bytes.Length, token).ConfigureAwait(false);
+                    await _Stream.FlushAsync(token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await MessageFraming.WriteMessageAsync(_Stream, json, _DefaultContentType, token).ConfigureAwait(false);
+                }
             }
             finally
             {
@@ -434,6 +554,12 @@ namespace Voltaic.Core
             try
             {
                 LogMessage($"Received: {responseString}");
+
+                if (responseString.TrimStart().StartsWith("[", StringComparison.Ordinal))
+                {
+                    ProcessBatch(responseString);
+                    return;
+                }
 
                 // A request from the server (method and id) must be answered, never mistaken for a response.
                 JsonRpcRequest? serverRequest = ClientRequestDispatcher.ParseRequest(responseString);

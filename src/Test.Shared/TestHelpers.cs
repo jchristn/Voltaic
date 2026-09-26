@@ -293,21 +293,22 @@ namespace Test.Shared
             return fixture;
         }
 
-        public async Task<JsonRpcClient> ConnectClientAsync(CancellationToken token)
+        public async Task<JsonRpcClient> ConnectClientAsync(CancellationToken token, bool autoInitialize = true)
         {
-            JsonRpcClient client = new JsonRpcClient();
+            // An MCP server gets an MCP client, which performs the initialize handshake (unless the test sends it).
             DateTime deadline = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < deadline)
             {
+                JsonRpcClient client = Server is McpTcpServer ? new McpTcpClient { AutoInitialize = autoInitialize } : new JsonRpcClient();
                 if (await client.ConnectAsync("127.0.0.1", Port, token).ConfigureAwait(false))
                 {
                     return client;
                 }
 
+                client.Dispose();
                 await Task.Delay(50, token).ConfigureAwait(false);
             }
 
-            client.Dispose();
             throw new TimeoutException("TCP JSON-RPC client could not connect to test server.");
         }
 
@@ -384,12 +385,12 @@ namespace Test.Shared
             return fixture;
         }
 
-        public async Task<McpWebsocketsClient> ConnectClientAsync(CancellationToken token)
+        public async Task<McpWebsocketsClient> ConnectClientAsync(CancellationToken token, bool autoInitialize = true)
         {
             DateTime deadline = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < deadline)
             {
-                McpWebsocketsClient client = new McpWebsocketsClient();
+                McpWebsocketsClient client = new McpWebsocketsClient { AutoInitialize = autoInitialize };
                 if (await client.ConnectAsync(Url, token).ConfigureAwait(false))
                 {
                     return client;

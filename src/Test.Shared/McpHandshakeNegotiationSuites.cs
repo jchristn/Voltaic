@@ -1,3 +1,4 @@
+#pragma warning disable CS0618 // Exercises the obsolete MCP server ProtocolVersion property.
 namespace Test.Shared
 {
     using System;
@@ -121,11 +122,27 @@ namespace Test.Shared
                         }
                     }),
 
-                    Case(suiteId, "InitializeWithoutVersionUsesDefault", "initialize without a protocolVersion returns the default handshake version", async ct =>
+                    Case(suiteId, "InitializeWithoutVersionUsesDefault", "initialize must carry protocolVersion, capabilities, and clientInfo; missing ones get -32602 and no session", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(true, null, ct).ConfigureAwait(false);
-                        RpcResult response = await McpHttpTestRequests.InitializeAsync(fixture, null, McpHttpTestRequests.ValidToken, ct).ConfigureAwait(false);
-                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, response.Result.Get("protocolVersion").String());
+                        object[] invalid =
+                        {
+                            new { capabilities = new { }, clientInfo = new { name = "t", version = "1" } },
+                            new { protocolVersion = McpProtocol.LatestProtocolVersion, clientInfo = new { name = "t", version = "1" } },
+                            new { protocolVersion = McpProtocol.LatestProtocolVersion, capabilities = new { } },
+                            new { protocolVersion = McpProtocol.LatestProtocolVersion, capabilities = new { }, clientInfo = new { name = "t" } }
+                        };
+
+                        int id = 0;
+                        foreach (object parameters in invalid)
+                        {
+                            RpcResult response = await McpHttpTestRequests.SendAsync(fixture, "initialize", ++id, parameters, null, null, McpHttpTestRequests.ValidToken, ct).ConfigureAwait(false);
+                            TestAssert.Equal(-32602, response.Error.Get("code").Int(), $"Invalid initialize params are rejected: {response.Body}");
+                            TestAssert.True(response.SessionId == null, "A rejected initialize creates no session.");
+                        }
+
+                        RpcResult valid = await McpHttpTestRequests.InitializeAsync(fixture, null, McpHttpTestRequests.ValidToken, ct).ConfigureAwait(false);
+                        TestAssert.Equal(McpProtocol.LatestProtocolVersion, valid.Result.Get("protocolVersion").String());
                     }),
 
                     Case(suiteId, "StatelessDefaultProtocolVersionIsCapped", "A ProtocolVersion default set to 2026-07-28 is still capped during initialize", async ct =>

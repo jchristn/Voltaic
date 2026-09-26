@@ -551,11 +551,13 @@ namespace Test.Shared
                             server.RegisterTool("noop", "Does nothing", new { type = "object", properties = new { }, required = new string[] { } }, (_) => "ok");
                         }).ConfigureAwait(false);
 
-                        RpcResult response = await fixture.PostMcpAsync("tools/list", new { }, "l1", null, ct).ConfigureAwait(false);
+                        RpcResult response = await McpHttpTestRequests.SendStatelessAsync(fixture, "tools/list", "l1", null, null, null, ct).ConfigureAwait(false);
+                        RpcResult handshake = await fixture.PostMcpAsync("tools/list", new { }, "l2", null, ct).ConfigureAwait(false);
                         McpListToolsResult? result = RpcResponseHelpers.ResultAs<McpListToolsResult>(response.Body);
                         TestAssert.NotNull(result, "List result should deserialize.");
                         TestAssert.Equal(60000L, result!.TtlMs, "List result should carry ttlMs.");
                         TestAssert.Equal("public", result.CacheScope, "List result should carry cacheScope.");
+                        TestAssert.False(handshake.Result.Has("ttlMs") || handshake.Result.Has("cacheScope"), "2025-11-25 and earlier define no cache fields, so handshake results omit them.");
                     }),
                 });
         }

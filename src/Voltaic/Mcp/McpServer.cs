@@ -1,31 +1,40 @@
 namespace Voltaic.Mcp
 {
-    using Voltaic.Core;
     using System;
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
-    using System.Text.Json;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
+    using Voltaic.Core;
 
     /// <summary>
     /// MCP server using stdio transport for subprocess-based operation.
-    /// Implements Model Context Protocol stdio transport specification.
+    /// Implements Model Context Protocol stdio transport specification: newline-delimited JSON-RPC on stdin and
+    /// stdout, nothing but MCP messages on stdout (while <see cref="RunAsync"/> runs, <see cref="Console.Out"/> is
+    /// redirected to stderr so stray console output cannot corrupt the stream), requests handled concurrently so
+    /// <c>ping</c> and <c>notifications/cancelled</c> take effect while other requests run, and the handshake-era
+    /// initialization order enforced (requests other than <c>initialize</c> and <c>ping</c> before <c>initialize</c> get
+    /// <c>-32600</c>). Requests whose <c>_meta</c> names <c>2026-07-28</c> are served statelessly.
     /// </summary>
     public class McpServer : IDisposable
     {
         private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
+        private readonly McpMessageProcessor _Processor;
+        private readonly McpSessionState _Session = new McpSessionState();
+        private readonly SemaphoreSlim _WriteLock = new SemaphoreSlim(1, 1);
+        private StreamWriter? _Stdout;
         private bool _IsDisposed = false;
 
         /// <summary>
-        /// Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
-        /// request names no version. It does not cap negotiation; see
-        /// <see cref="MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
-        /// <see cref="MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
-        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
+        /// Obsolete and has no effect. <c>initialize</c> must name a protocol version (a request without one gets
+        /// <c>-32602</c>), so there is no version to fall back to; negotiation is capped by
+        /// <see cref="MaximumHandshakeProtocolVersion"/>. The value is stored and returned for compatibility. Default is
+        /// <see cref="McpProtocol.LatestProtocolVersion"/>; setting null restores the default.
         /// </summary>
+        [Obsolete("initialize must name a protocol version, so this setting has no effect. Use MaximumHandshakeProtocolVersion to cap negotiation.")]
         public string ProtocolVersion
         {
             get => _Endpoint.ProtocolVersion;
@@ -96,6 +105,32 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets optional natural-language instructions describing how to use the server, returned in the
+        /// <c>initialize</c> result and by <c>server/discover</c> (2026-07-28). Null (the default) omits them.
+        /// </summary>
+        public string? ServerInstructions
+        {
+            get => _Endpoint.ServerInstructions;
+            set => _Endpoint.ServerInstructions = value;
+        }
+
+        /// <summary>
+        /// Gets or sets how many items one page of <c>tools/list</c>, <c>resources/list</c>,
+        /// <c>resources/templates/list</c>, or <c>prompts/list</c> returns before a <c>nextCursor</c> is issued.
+        /// Default is 100. Minimum is 1.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        public int PageSize
+        {
+            get => _Endpoint.PageSize;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "PageSize must be at least 1.");
+                _Endpoint.PageSize = value;
+            }
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
@@ -112,11 +147,10 @@ namespace Voltaic.Mcp
         public McpServer(bool includeDiagnosticTools = false)
         {
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
-            _Endpoint = new McpEndpoint("Voltaic.Mcp.StdioServer")
-            {
-                SupportsListChangedNotifications = false
-            };
+            _Endpoint = new McpEndpoint("Voltaic.Mcp.StdioServer");
             _Endpoint.ErrorLog = LogToStderr;
+            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogToStderr);
+            _Session.Push = WriteLineAsync;
             RegisterProtocolMethods();
             if (includeDiagnosticTools) RegisterDiagnosticTools();
         }
@@ -445,14 +479,20 @@ namespace Voltaic.Mcp
 
         /// <summary>
         /// Runs the MCP server, reading from stdin and writing to stdout.
-        /// Blocks until stdin is closed or cancellation is requested.
+        /// Blocks until stdin is closed or cancellation is requested. In-flight requests are cancelled when it returns.
         /// </summary>
         /// <param name="token">Cancellation token to stop the server.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         public async Task RunAsync(CancellationToken token = default)
         {
-            using StreamReader stdin = new StreamReader(Console.OpenStandardInput());
-            using StreamWriter stdout = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
+            using StreamReader stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+            using StreamWriter stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
+
+            // The server must not write anything to stdout that is not an MCP message, so console output from
+            // application code goes to stderr while the server runs.
+            TextWriter originalOut = Console.Out;
+            Console.SetOut(Console.Error);
+            _Stdout = stdout;
 
             LogToStderr("MCP server started");
 
@@ -460,15 +500,20 @@ namespace Voltaic.Mcp
             {
                 while (!token.IsCancellationRequested)
                 {
-                    string? line = await stdin.ReadLineAsync().ConfigureAwait(false);
+                    string? line = await stdin.ReadLineAsync(token).ConfigureAwait(false);
                     if (line == null)
                     {
                         LogToStderr("stdin closed, shutting down");
                         break;
                     }
 
-                    await ProcessRequestAsync(stdout, line, token).ConfigureAwait(false);
+                    if (String.IsNullOrWhiteSpace(line)) continue;
+                    LogToStderr($"Received: {line}");
+                    await _Processor.ProcessAsync(line, _Session, WriteLineAsync, token).ConfigureAwait(false);
                 }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
             }
             catch (Exception ex)
             {
@@ -477,8 +522,87 @@ namespace Voltaic.Mcp
             }
             finally
             {
+                _Session.CancelAll();
+                _Stdout = null;
+                Console.SetOut(originalOut);
                 LogToStderr("MCP server stopped");
             }
+        }
+
+        /// <summary>
+        /// Notifies the client that the tool list changed. Sent only after the client completed <c>initialize</c>.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        public Task NotifyToolsChangedAsync(CancellationToken token = default)
+        {
+            return McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/tools/list_changed", token);
+        }
+
+        /// <summary>
+        /// Notifies the client that the resource list changed. Sent only after the client completed <c>initialize</c>.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        public Task NotifyResourcesChangedAsync(CancellationToken token = default)
+        {
+            return McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/resources/list_changed", token);
+        }
+
+        /// <summary>
+        /// Notifies the client that the prompt list changed. Sent only after the client completed <c>initialize</c>.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        public Task NotifyPromptsChangedAsync(CancellationToken token = default)
+        {
+            return McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/prompts/list_changed", token);
+        }
+
+        /// <summary>
+        /// Sends <c>notifications/resources/updated</c> when the client subscribed to <paramref name="uri"/> with
+        /// <c>resources/subscribe</c>; otherwise nothing is sent.
+        /// </summary>
+        /// <param name="uri">The updated resource URI. Must not be null or empty.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="uri"/> is null or empty.</exception>
+        public Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)
+        {
+            return McpServerNotifications.ResourceUpdatedAsync(new[] { _Session }, uri, token);
+        }
+
+        /// <summary>
+        /// Sends a <c>notifications/message</c> log entry when <paramref name="level"/> meets the level the client set
+        /// with <c>logging/setLevel</c> (everything when it set none). Sent only after <c>initialize</c>. To log about a
+        /// specific tool call, use <see cref="McpToolCallContext.LogAsync"/>.
+        /// </summary>
+        /// <param name="level">One of debug, info, notice, warning, error, critical, alert, emergency.</param>
+        /// <param name="data">JSON-serializable log data.</param>
+        /// <param name="logger">Optional logger name.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="level"/> is not an MCP log level.</exception>
+        public Task NotifyLogMessageAsync(string level, object? data, string? logger = null, CancellationToken token = default)
+        {
+            return McpServerNotifications.LogAsync(new[] { _Session }, level, data, logger, token);
+        }
+
+        /// <summary>
+        /// Sends <c>notifications/progress</c> for the in-flight request that carries <paramref name="progressToken"/>.
+        /// Tool handlers can use <see cref="McpToolCallContext.ReportProgressAsync"/> instead.
+        /// </summary>
+        /// <param name="progressToken">The progress token from the request's <c>_meta</c>. Must not be null.</param>
+        /// <param name="progress">The progress so far. Must increase with every notification.</param>
+        /// <param name="total">The total, when known.</param>
+        /// <param name="message">A human-readable message, or null.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>True when a request with that token is in flight and the notification was sent.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="progressToken"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="progress"/> does not increase.</exception>
+        public Task<bool> NotifyProgressAsync(object progressToken, double progress, double? total = null, string? message = null, CancellationToken token = default)
+        {
+            return McpServerNotifications.ProgressAsync(new[] { _Session }, progressToken, progress, total, message, token);
         }
 
         /// <summary>
@@ -502,8 +626,10 @@ namespace Voltaic.Mcp
 
                 if (disposing)
                 {
+                    _Session.CancelAll();
                     _Methods.Clear();
                     _Endpoint.Clear();
+                    _WriteLock.Dispose();
                 }
             }
         }
@@ -627,134 +753,24 @@ namespace Voltaic.Mcp
                 (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
         }
 
-        private async Task ProcessRequestAsync(StreamWriter stdout, string requestString, CancellationToken token = default)
+        // Writes one message line; the lock keeps concurrent responses and notifications from interleaving.
+        private async Task WriteLineAsync(string json, CancellationToken token)
         {
+            StreamWriter? stdout = _Stdout;
+            if (stdout == null) return;
+
+            await _WriteLock.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                LogToStderr($"Received: {requestString}");
-
-                JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString);
-                if (request == null)
-                {
-                    JsonRpcResponse errorResponse = new JsonRpcResponse
-                    {
-                        Error = JsonRpcError.InvalidRequest(),
-                        Id = null
-                    };
-                    await SendResponseAsync(stdout, errorResponse, token).ConfigureAwait(false);
-                    return;
-                }
-
-                // A request whose _meta names the stateless revision (2026-07-28) is served statelessly: its
-                // result carries resultType (and ttlMs/cacheScope when cacheable). An unsupported _meta version is
-                // rejected with -32022 before dispatch.
-                string? statelessVersion;
-                try
-                {
-                    statelessVersion = McpStatelessDispatcher.ResolveStatelessVersion(requestString, request.Method);
-                }
-                catch (McpProtocolException versionError)
-                {
-                    if (request.Id != null)
-                    {
-                        await SendResponseAsync(stdout, McpStatelessDispatcher.ErrorResponse(request.Id, versionError), token).ConfigureAwait(false);
-                    }
-
-                    return;
-                }
-
-                // If no ID, it's a notification - process but don't respond
-                if (request.Id == null)
-                {
-                    LogToStderr($"Processing notification: {request.Method}");
-                    // Process notification silently
-                    if (_Methods.ContainsKey(request.Method))
-                    {
-                        try
-                        {
-                            RpcParameters? paramsElement = request.Params == null ? null : RpcParameters.FromObject(request.Params);
-                            await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
-                        }
-                        catch (Exception ex)
-                        {
-                            LogToStderr($"Error processing notification: {ex.Message}");
-                        }
-                    }
-                    return;
-                }
-
-                JsonRpcResponse response;
-
-                if (_Methods.ContainsKey(request.Method))
-                {
-                    try
-                    {
-                        RpcParameters? paramsElement = request.Params == null ? null : RpcParameters.FromObject(request.Params);
-
-                        object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
-                        response = new JsonRpcResponse
-                        {
-                            Result = result,
-                            Id = request.Id
-                        };
-                    }
-                    catch (Exception ex)
-                    {
-                        JsonRpcError error = ex is McpProtocolException protocolException
-                            ? protocolException.ToJsonRpcError()
-                            : new JsonRpcError
-                            {
-                                Code = -32603,
-                                Message = "Internal error",
-                                Data = ex.Message
-                            };
-
-                        response = new JsonRpcResponse
-                        {
-                            Error = error,
-                            Id = request.Id
-                        };
-                    }
-                }
-                else
-                {
-                    response = new JsonRpcResponse
-                    {
-                        Error = JsonRpcError.MethodNotFound(),
-                        Id = request.Id
-                    };
-                }
-
-                await SendResponseAsync(stdout, response, token, statelessVersion).ConfigureAwait(false);
-            }
-            catch (JsonException)
-            {
-                JsonRpcResponse parseError = new JsonRpcResponse
-                {
-                    Error = JsonRpcError.ParseError(),
-                    Id = null
-                };
-                await SendResponseAsync(stdout, parseError, token).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                LogToStderr($"Error processing request: {ex.Message}");
-            }
-        }
-
-        private async Task SendResponseAsync(StreamWriter stdout, JsonRpcResponse response, CancellationToken token = default, string? statelessVersion = null)
-        {
-            try
-            {
-                string json = McpStatelessDispatcher.SerializeResponse(response, statelessVersion);
                 await stdout.WriteLineAsync(json).ConfigureAwait(false);
                 await stdout.FlushAsync().ConfigureAwait(false);
-                LogToStderr($"Sent: {json}");
             }
-            catch (Exception ex)
+            finally
             {
-                LogToStderr($"Error sending response: {ex.Message}");
+                _WriteLock.Release();
             }
+
+            LogToStderr($"Sent: {json}");
         }
 
         private void LogToStderr(string message)

@@ -51,6 +51,24 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how long a stateless (<c>2026-07-28</c>) request may run before its response turns into an SSE
+        /// stream that carries a keep-alive comment every interval. A keep-alive that cannot be written means the client
+        /// closed the stream, which that revision defines as cancellation, so the handler's token is cancelled. Default
+        /// is 2000. Minimum is 0 (no keep-alives, so a disconnect is noticed only when the response is written); maximum
+        /// is 600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
+        public int ResponseKeepAliveMs
+        {
+            get => _ResponseKeepAliveMs;
+            set
+            {
+                if (value < 0 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "Response keep-alive interval must be between 0 and 600000 ms.");
+                _ResponseKeepAliveMs = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets how many recent events of each <c>GET</c> SSE stream on the MCP endpoint are kept for replay.
         /// Every event on that stream carries an ID of the form <c>{streamId}-{sequence}</c>, and each stream starts
         /// with a priming event (an ID and an empty <c>data</c> field) as MCP 2025-11-25 recommends. A client that
@@ -159,7 +177,7 @@ namespace Voltaic.Mcp
         /// (<c>/.well-known/oauth-protected-resource</c>) or to that path followed by the MCP endpoint path (for
         /// example <c>/.well-known/oauth-protected-resource/mcp</c>) returns the document as JSON, without calling
         /// <see cref="AuthenticationHandler"/>; the loopback and origin checks still apply. Point clients at it
-        /// from a 401 with <see cref="AuthenticationResult.BearerChallenge"/>. Default is null, which serves
+        /// from a 401 with <see cref="AuthenticationResult.BearerChallenge(string?, string?, string?, string?)"/>. Default is null, which serves
         /// nothing at those paths (HTTP 404).
         /// </summary>
         /// <exception cref="ArgumentException">Thrown when the value has an empty <see cref="McpProtectedResourceMetadata.Resource"/> or no <see cref="McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
@@ -204,12 +222,12 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
-        /// request names no version. It does not cap negotiation; see
-        /// <see cref="MaximumHandshakeProtocolVersion"/> for that. A supported value newer than
-        /// <see cref="MaximumHandshakeProtocolVersion"/> is lowered to it during the handshake.
-        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null restores the default.
+        /// Obsolete and has no effect. <c>initialize</c> must name a protocol version (a request without one gets
+        /// <c>-32602</c>), so there is no version to fall back to; negotiation is capped by
+        /// <see cref="MaximumHandshakeProtocolVersion"/>. The value is stored and returned for compatibility. Default is
+        /// <see cref="McpProtocol.LatestProtocolVersion"/>; setting null restores the default.
         /// </summary>
+        [Obsolete("initialize must name a protocol version, so this setting has no effect. Use MaximumHandshakeProtocolVersion to cap negotiation.")]
         public string ProtocolVersion
         {
             get => _Endpoint.ProtocolVersion;
@@ -280,13 +298,29 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets optional natural-language instructions returned by <c>server/discover</c>
-        /// (2026-07-28+). Null by default.
+        /// Gets or sets optional natural-language instructions describing how to use the server, returned in the
+        /// <c>initialize</c> result and by <c>server/discover</c> (2026-07-28). Null (the default) omits them.
         /// </summary>
         public string? ServerInstructions
         {
             get => _Endpoint.ServerInstructions;
             set => _Endpoint.ServerInstructions = value;
+        }
+
+        /// <summary>
+        /// Gets or sets how many items one page of <c>tools/list</c>, <c>resources/list</c>,
+        /// <c>resources/templates/list</c>, or <c>prompts/list</c> returns before a <c>nextCursor</c> is issued.
+        /// Default is 100. Minimum is 1.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        public int PageSize
+        {
+            get => _Endpoint.PageSize;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "PageSize must be at least 1.");
+                _Endpoint.PageSize = value;
+            }
         }
 
         /// <summary>
@@ -302,22 +336,32 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Gets or sets the cache lifetime in milliseconds applied to <c>tools/list</c>,
         /// <c>resources/list</c>, <c>resources/templates/list</c>, and <c>prompts/list</c> results
-        /// (2026-07-28+). Null (the default) omits caching guidance.
+        /// (2026-07-28+). Null (the default) sends 0 (do not cache). Minimum is 0.
         /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set to a negative value.</exception>
         public long? ListCacheTtlMs
         {
             get => _Endpoint.ListCacheTtlMs;
-            set => _Endpoint.ListCacheTtlMs = value;
+            set
+            {
+                if (value.HasValue && value.Value < 0) throw new ArgumentOutOfRangeException(nameof(value), "ttlMs must be zero or greater.");
+                _Endpoint.ListCacheTtlMs = value;
+            }
         }
 
         /// <summary>
         /// Gets or sets the cache scope (for example <c>public</c> or <c>private</c>) applied to
         /// list results (2026-07-28+). Null (the default) omits caching guidance.
         /// </summary>
+        /// <exception cref="ArgumentException">Thrown when set to anything other than null, "public", or "private".</exception>
         public string? ListCacheScope
         {
             get => _Endpoint.ListCacheScope;
-            set => _Endpoint.ListCacheScope = value;
+            set
+            {
+                if (value != null && value != "public" && value != "private") throw new ArgumentException("cacheScope must be \"public\" or \"private\".", nameof(value));
+                _Endpoint.ListCacheScope = value;
+            }
         }
 
         /// <summary>
@@ -383,6 +427,8 @@ namespace Voltaic.Mcp
         private readonly ConcurrentDictionary<string, string> _SessionVersions = new ConcurrentDictionary<string, string>();
         private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
+        private readonly McpMessageProcessor _Processor;
+        private int _ResponseKeepAliveMs = 2000;
         private Task? _CleanupTask;
         private int _SessionTimeoutSeconds = 300; // 5 minutes
         private int _MaxQueueSize = 100;
@@ -440,6 +486,17 @@ namespace Voltaic.Mcp
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
             _Endpoint = new McpEndpoint("Voltaic.Mcp.HttpServer");
             _Endpoint.ErrorLog = LogMessage;
+            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage)
+            {
+                RequestReceived = (request, session) =>
+                {
+                    if (session.Owner is ClientConnection client) RaiseRequestReceived(new ServerPendingRequest(request.Id, client, request));
+                },
+                ResponseProduced = (request, response, session) =>
+                {
+                    if (session.Owner is ClientConnection client) RaiseResponseSent(client, request == null ? null : new ServerPendingRequest(request.Id, client, request), response);
+                }
+            };
 
             RegisterProtocolMethods();
             if (includeDiagnosticTools) RegisterDiagnosticTools();
@@ -899,91 +956,89 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Notifies active HTTP sessions that the tool list changed.
+        /// Notifies sessions that completed <c>initialize</c> that the tool list changed. Delivered on their GET stream.
         /// </summary>
         public void NotifyToolsChanged()
         {
-            BroadcastNotification("notifications/tools/list_changed");
+            McpServerNotifications.ListChangedAsync(Sessions(), "notifications/tools/list_changed", CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Notifies active HTTP sessions that the resource list changed.
+        /// Notifies sessions that completed <c>initialize</c> that the resource list changed.
         /// </summary>
         public void NotifyResourcesChanged()
         {
-            BroadcastNotification("notifications/resources/list_changed");
+            McpServerNotifications.ListChangedAsync(Sessions(), "notifications/resources/list_changed", CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Notifies active HTTP sessions that a resource was updated.
+        /// Sends <c>notifications/resources/updated</c> to the sessions subscribed to <paramref name="uri"/> with
+        /// <c>resources/subscribe</c>.
         /// </summary>
-        /// <param name="uri">Updated resource URI.</param>
+        /// <param name="uri">Updated resource URI. Must not be null or empty.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="uri"/> is null or empty.</exception>
         public void NotifyResourceUpdated(string uri)
         {
-            if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
-            BroadcastNotification("notifications/resources/updated", new { uri });
+            McpServerNotifications.ResourceUpdatedAsync(Sessions(), uri, CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Notifies active HTTP sessions that the prompt list changed.
+        /// Notifies sessions that completed <c>initialize</c> that the prompt list changed.
         /// </summary>
         public void NotifyPromptsChanged()
         {
-            BroadcastNotification("notifications/prompts/list_changed");
+            McpServerNotifications.ListChangedAsync(Sessions(), "notifications/prompts/list_changed", CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Queues a progress notification for an active HTTP session.
+        /// Sends <c>notifications/progress</c> for the in-flight request of a session that carries
+        /// <paramref name="progressToken"/>, on that request's response stream (the response becomes an SSE stream).
+        /// Tool handlers can use <see cref="McpToolCallContext.ReportProgressAsync"/> instead.
         /// </summary>
         /// <param name="sessionId">Target session ID.</param>
-        /// <param name="progressToken">Progress token from request metadata.</param>
-        /// <param name="progress">Current progress value.</param>
+        /// <param name="progressToken">Progress token from the request's <c>_meta</c>. Must not be null.</param>
+        /// <param name="progress">Current progress value. Must increase with every notification.</param>
         /// <param name="total">Optional total progress value.</param>
         /// <param name="message">Optional human-readable progress text.</param>
-        /// <returns>True if the session was found and the notification was queued.</returns>
+        /// <returns>True when the session has an active request with that token and the notification was sent.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="progress"/> does not increase.</exception>
         public bool NotifyProgress(string sessionId, object progressToken, double progress, double? total = null, string? message = null)
         {
-            return SendNotificationToSession(sessionId, "notifications/progress", new McpProgressNotification
-            {
-                ProgressToken = progressToken,
-                Progress = progress,
-                Total = total,
-                Message = message
-            });
+            if (!_Sessions.TryGetValue(sessionId, out ClientConnection? connection)) return false;
+            return McpServerNotifications.ProgressAsync(new[] { StateOf(connection) }, progressToken, progress, total, message, CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Queues a cancellation notification for an active HTTP session.
+        /// Obsolete and does nothing. <c>notifications/cancelled</c> may only reference a request the sender issued, and
+        /// an MCP server issues no requests to clients, so the server has nothing it may cancel.
         /// </summary>
-        /// <param name="sessionId">Target session ID.</param>
-        /// <param name="requestId">Cancelled request ID.</param>
-        /// <param name="reason">Optional cancellation reason.</param>
-        /// <returns>True if the session was found and the notification was queued.</returns>
+        /// <param name="sessionId">Ignored.</param>
+        /// <param name="requestId">Ignored.</param>
+        /// <param name="reason">Ignored.</param>
+        /// <returns>Always false.</returns>
+        [Obsolete("A server may only cancel requests it sent, and MCP servers send none. This method does nothing.")]
         public bool NotifyCancelled(string sessionId, object requestId, string? reason = null)
         {
-            return SendNotificationToSession(sessionId, "notifications/cancelled", new McpCancelledNotification
-            {
-                RequestId = requestId,
-                Reason = reason
-            });
+            return false;
         }
 
         /// <summary>
-        /// Queues a structured MCP log message for an active HTTP session.
+        /// Queues a <c>notifications/message</c> log entry for a session when <paramref name="level"/> meets the level
+        /// the session set with <c>logging/setLevel</c> (everything when none was set). To log about a specific tool
+        /// call, use <see cref="McpToolCallContext.LogAsync"/>.
         /// </summary>
         /// <param name="sessionId">Target session ID.</param>
-        /// <param name="level">Syslog-style level.</param>
+        /// <param name="level">One of debug, info, notice, warning, error, critical, alert, emergency.</param>
         /// <param name="data">JSON-serializable log data.</param>
         /// <param name="logger">Optional logger name.</param>
-        /// <returns>True if the session was found and the notification was queued.</returns>
+        /// <returns>True if the session was found.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="level"/> is not an MCP log level.</exception>
         public bool NotifyLogMessage(string sessionId, string level, object? data, string? logger = null)
         {
-            return SendNotificationToSession(sessionId, "notifications/message", new McpLogMessageNotification
-            {
-                Level = level,
-                Logger = logger,
-                Data = data
-            });
+            if (!McpLogLevels.IsValid(level)) throw new ArgumentException($"'{level}' is not an MCP log level.", nameof(level));
+            if (!_Sessions.TryGetValue(sessionId, out ClientConnection? connection)) return false;
+            McpServerNotifications.LogAsync(new[] { StateOf(connection) }, level, data, logger, CancellationToken.None).GetAwaiter().GetResult();
+            return true;
         }
 
         /// <summary>
@@ -1032,6 +1087,7 @@ namespace Voltaic.Mcp
             if (_Sessions.TryRemove(sessionId, out ClientConnection? connection))
             {
                 _SessionVersions.TryRemove(sessionId, out string? _);
+                (connection.ProtocolState as McpSessionState)?.CancelAll();
                 _SseStreams.TryRemove(sessionId, out SseSessionStreams? _);
                 RaiseClientDisconnected(connection);
                 connection.Dispose();
@@ -1325,7 +1381,7 @@ namespace Voltaic.Mcp
                     AuthenticationResult authResult = await _AuthenticationHandler(context.Request).ConfigureAwait(false);
                     if (!authResult.IsAuthenticated)
                     {
-                        await HttpAccessGuard.WriteAuthenticationFailureAsync(context, authResult, _EnableCors, _CorsHeaders, token).ConfigureAwait(false);
+                        await HttpAccessGuard.WriteAuthenticationFailureAsync(context, authResult, _EnableCors, _CorsHeaders, token, ResourceMetadataUrl(context)).ConfigureAwait(false);
                         LogMessage($"Authentication failed for {path}: {authResult.ErrorMessage ?? "no details"}");
                         return;
                     }
@@ -1338,15 +1394,15 @@ namespace Voltaic.Mcp
                 // flows into every method/tool handler dispatched below and is cleared when the request ends.
                 using (RpcCallContext.Push(callContext))
                 {
-                    if (!String.IsNullOrEmpty(_McpPath) && path.StartsWith(_McpPath))
+                    if (!String.IsNullOrEmpty(_McpPath) && IsEndpointPath(path, _McpPath))
                     {
                         await HandleMcpRequestAsync(context, requestBody, token).ConfigureAwait(false);
                     }
-                    else if (path.StartsWith(_RpcPath))
+                    else if (IsEndpointPath(path, _RpcPath))
                     {
                         await HandleRpcRequestAsync(context, requestBody, token).ConfigureAwait(false);
                     }
-                    else if (path.StartsWith(_EventsPath))
+                    else if (IsEndpointPath(path, _EventsPath))
                     {
                         await HandleSseRequestAsync(context, token).ConfigureAwait(false);
                     }
@@ -1370,6 +1426,13 @@ namespace Voltaic.Mcp
                     // Ignore errors while sending error response
                 }
             }
+        }
+
+        // An endpoint matches its exact path, with or without a trailing slash (not every path that starts with it).
+        private static bool IsEndpointPath(string path, string endpoint)
+        {
+            string trimmed = endpoint.TrimEnd('/');
+            return StringComparer.Ordinal.Equals(path, trimmed) || StringComparer.Ordinal.Equals(path, trimmed + "/");
         }
 
         /// <summary>
@@ -1420,11 +1483,193 @@ namespace Voltaic.Mcp
         /// Creates a connection that is not registered as a session. It becomes a session only if
         /// <see cref="RegisterSession"/> is called after the request succeeds.
         /// </summary>
-        private ClientConnection CreateProvisionalConnection()
+        private ClientConnection CreateProvisionalConnection(bool requireInitialize = true)
         {
             ClientConnection connection = new ClientConnection(Guid.NewGuid().ToString());
             connection.MaxQueueSize = _MaxQueueSize;
+            McpSessionState state = new McpSessionState(requireInitialize) { Owner = connection };
+            state.Push = (json, token) =>
+            {
+                JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(json);
+                if (notification != null) connection.Enqueue(notification);
+                return Task.CompletedTask;
+            };
+            connection.ProtocolState = state;
             return connection;
+        }
+
+        private static McpSessionState StateOf(ClientConnection connection)
+        {
+            return connection.ProtocolState as McpSessionState ?? new McpSessionState(false) { Owner = connection };
+        }
+
+        private IEnumerable<McpSessionState> Sessions()
+        {
+            return _Sessions.Values.Select(connection => connection.ProtocolState).OfType<McpSessionState>().ToList();
+        }
+
+        // Dispatches one JSON-RPC message (not a batch) through the shared MCP processor and writes the response:
+        // JSON, or an SSE stream when the handler sends related notifications or a keep-alive is needed.
+        private async Task DispatchSingleAsync(
+            HttpListenerContext context,
+            string requestBody,
+            ClientConnection connection,
+            bool hasSession,
+            bool mayIssueSession,
+            string? statelessVersion,
+            CancellationToken token)
+        {
+            JsonElement root;
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(requestBody))
+                {
+                    root = document.RootElement.Clone();
+                }
+            }
+            catch (JsonException)
+            {
+                if (mayIssueSession) connection.Dispose();
+                await WriteJsonRpcErrorAsync(context, 400, null, new McpProtocolException(-32700, "Parse error"), token).ConfigureAwait(false);
+                return;
+            }
+
+            McpEnvelope envelope = McpEnvelope.Parse(root);
+            if (envelope.Kind == McpEnvelopeKind.Response)
+            {
+                AcceptClientResponse(context, connection, mayIssueSession, hasSession);
+                return;
+            }
+
+            McpSessionState state = StateOf(connection);
+            bool sessionHeader = hasSession;
+            McpHttpResponseWriter writer = new McpHttpResponseWriter(context, response =>
+            {
+                HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
+                if (sessionHeader) SetSessionIdHeaders(response, connection.SessionId);
+            });
+
+            using CancellationTokenSource requestTokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+            using CancellationTokenSource keepAliveStop = new CancellationTokenSource();
+            Task keepAlive = statelessVersion != null && envelope.Kind == McpEnvelopeKind.Request && _ResponseKeepAliveMs > 0
+                ? RunKeepAliveAsync(writer, requestTokenSource, keepAliveStop.Token)
+                : Task.CompletedTask;
+
+            McpHandledResponse? handled;
+            try
+            {
+                handled = await _Processor.HandleAsync(
+                    envelope,
+                    state,
+                    statelessVersion,
+                    true,
+                    (notification, ct) => writer.NotifyAsync(McpMessageProcessor.SerializeNotification(notification, state), ct),
+                    requestTokenSource.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                keepAliveStop.Cancel();
+                await keepAlive.ConfigureAwait(false);
+            }
+
+            if (mayIssueSession)
+            {
+                if (envelope.Method == "initialize" && handled != null && handled.Response.Error == null)
+                {
+                    RegisterSession(connection);
+                    sessionHeader = true;
+                }
+                else
+                {
+                    connection.Dispose();
+                }
+            }
+
+            if (sessionHeader && state.NegotiatedVersion != null) _SessionVersions[connection.SessionId] = state.NegotiatedVersion;
+
+            if (handled == null)
+            {
+                if (envelope.Kind == McpEnvelopeKind.Request)
+                {
+                    // The client cancelled the request: no response is sent, and the stream simply ends.
+                    await writer.EndWithoutResponseAsync(token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await writer.CompleteAsync(null, 202, token).ConfigureAwait(false);
+                    LogMessage($"MCP notification accepted: {envelope.Method}");
+                }
+
+                return;
+            }
+
+            if (handled.InsufficientScope != null && !writer.IsStreaming)
+            {
+                await WriteInsufficientScopeAsync(context, envelope.ResponseId, handled.InsufficientScope, handled.Response.Error?.Message, sessionHeader ? connection.SessionId : null, token).ConfigureAwait(false);
+                return;
+            }
+
+            string responseJson = _Processor.SerializeResponse(handled.Response, handled.StatelessVersion, envelope.Method, state);
+            await writer.CompleteAsync(responseJson, StatusFor(handled.Response.Error, handled.StatelessVersion != null), token).ConfigureAwait(false);
+            LogMessage($"MCP response{(sessionHeader ? " to session " + connection.SessionId : "")}: {responseJson}");
+        }
+
+        // Keeps a stateless response alive while the handler runs. A keep-alive that cannot be written means the client
+        // closed the stream, which 2026-07-28 defines as cancellation of the request.
+        private async Task RunKeepAliveAsync(McpHttpResponseWriter writer, CancellationTokenSource request, CancellationToken stop)
+        {
+            try
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    await Task.Delay(_ResponseKeepAliveMs, stop).ConfigureAwait(false);
+                    if (!await writer.KeepAliveAsync(stop).ConfigureAwait(false))
+                    {
+                        LogMessage("The client closed the response stream; cancelling the request.");
+                        request.Cancel();
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        // HTTP status for a JSON-RPC response. Stateless-era requests: an unknown method is 404, and a header mismatch,
+        // missing client capability, or unsupported version is 400. Everything else travels with 200.
+        private static int StatusFor(JsonRpcError? error, bool stateless)
+        {
+            if (error == null || !stateless) return 200;
+            if (error.Code == -32601) return 404;
+            if (error.Code == -32020 || error.Code == -32021 || error.Code == -32022) return 400;
+            return 200;
+        }
+
+        // 403 with an RFC 6750 insufficient_scope challenge, for a handler that threw McpInsufficientScopeException.
+        private async Task WriteInsufficientScopeAsync(HttpListenerContext context, object? id, string scope, string? message, string? sessionId, CancellationToken token)
+        {
+            HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
+            if (sessionId != null) SetSessionIdHeaders(context.Response, sessionId);
+            string challenge = "Bearer error=\"insufficient_scope\", scope=\"" + scope.Replace("\"", "") + "\"";
+            string? metadataUrl = ResourceMetadataUrl(context);
+            if (metadataUrl != null) challenge += ", resource_metadata=\"" + metadataUrl + "\"";
+            context.Response.AddHeader("WWW-Authenticate", challenge);
+
+            JsonRpcResponse response = new JsonRpcResponse { Id = id, Error = new JsonRpcError { Code = McpInsufficientScopeException.ErrorCode, Message = message ?? "Insufficient scope" } };
+            byte[] body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+            context.Response.StatusCode = 403;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = body.Length;
+            await context.Response.OutputStream.WriteAsync(body, 0, body.Length, token).ConfigureAwait(false);
+            context.Response.Close();
+        }
+
+        // The absolute URL of the protected resource metadata, when it is configured.
+        private string? ResourceMetadataUrl(HttpListenerContext context)
+        {
+            if (_ProtectedResourceMetadata == null || context.Request.Url == null) return null;
+            return context.Request.Url.GetLeftPart(UriPartial.Authority) + McpProtocol.ProtectedResourceMetadataPath;
         }
 
         // A request served without a session earns one only when it is a successful initialize.
@@ -1565,94 +1810,23 @@ namespace Voltaic.Mcp
                     : $"MCP request from session {sessionId}: {requestBody}");
 
                 // JSON-RPC batching is version-gated: permitted through 2025-03-26 and removed from
-                // 2025-06-18 onward. The policy is keyed on the session's negotiated version (or the
-                // MCP-Protocol-Version header before a session is established).
+                // 2025-06-18 onward. The policy is keyed on the session's negotiated version.
                 if (isBatch)
                 {
                     string batchVersion = ResolveHandshakeVersion(sessionId, context);
                     McpProtocolVersionInfo? batchInfo = McpProtocol.GetVersionInfo(batchVersion);
                     if (batchInfo == null || !batchInfo.SupportsBatching)
                     {
-                        if (isProvisional) connection.Dispose();
                         await WriteJsonRpcErrorAsync(context, 400, null,
                             new McpProtocolException(-32600, $"JSON-RPC batching is not supported in protocol version '{batchVersion}'."), token).ConfigureAwait(false);
                         return;
                     }
 
-                    List<JsonRpcResponse> batchResponses = await ProcessBatchAsync(connection, requestBody, token).ConfigureAwait(false);
-
-                    // A batch always carries a session here: only a single initialize may arrive without one.
-
-                    HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
-
-                    if (hasSession) SetSessionIdHeaders(context.Response, sessionId);
-
-                    // A batch of only notifications and responses has nothing to answer: 202 with no body.
-                    if (batchResponses.Count == 0)
-                    {
-                        context.Response.StatusCode = 202;
-                        context.Response.Close();
-                        return;
-                    }
-
-                    context.Response.ContentType = "application/json";
-                    byte[] batchBuffer = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(batchResponses));
-                    context.Response.ContentLength64 = batchBuffer.Length;
-                    await context.Response.OutputStream.WriteAsync(batchBuffer, 0, batchBuffer.Length, token).ConfigureAwait(false);
-                    context.Response.Close();
+                    await DispatchBatchAsync(context, requestBody, connection, token).ConfigureAwait(false);
                     return;
                 }
 
-                // A JSON-RPC response or error sent by the client is accepted with 202 and no body, as the
-                // Streamable HTTP specification requires. Voltaic never sends requests to clients, so there is
-                // nothing to correlate it with; it is logged and dropped.
-                if (IsJsonRpcResponseMessage(requestBody))
-                {
-                    AcceptClientResponse(context, connection, isProvisional, hasSession);
-                    return;
-                }
-
-                // Process JSON-RPC request
-                JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
-
-                if (isProvisional)
-                {
-                    if (ShouldIssueSession(incomingRequest, response))
-                    {
-                        RegisterSession(connection);
-                        hasSession = true;
-                    }
-                    else
-                    {
-                        connection.Dispose();
-                    }
-                }
-
-                if (hasSession) RecordNegotiatedVersion(sessionId, incomingRequest, response);
-
-                // Send response
-                HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
-
-                if (hasSession) SetSessionIdHeaders(context.Response, sessionId);
-
-                if (incomingRequest != null && incomingRequest.Id == null)
-                {
-                    context.Response.StatusCode = 202;
-                    context.Response.Close();
-                    LogMessage($"MCP notification accepted for session {sessionId}: {incomingRequest.Method}");
-                    return;
-                }
-
-                context.Response.ContentType = "application/json";
-
-                string responseJson = JsonSerializer.Serialize(response);
-                byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
-
-                context.Response.ContentLength64 = buffer.Length;
-                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-                context.Response.Close();
-
-                LogMessage($"MCP response to session {sessionId}: {responseJson}");
+                await DispatchSingleAsync(context, requestBody, connection, hasSession, isProvisional, null, token).ConfigureAwait(false);
             }
             else if (method == "GET")
             {
@@ -1668,23 +1842,18 @@ namespace Voltaic.Mcp
                     return;
                 }
 
-                // SSE stream for server-to-client notifications
-                string? sessionId = GetStreamSessionId(context);
+                // SSE stream for server-to-client notifications. The session ID travels in the MCP-Session-Id header,
+                // as the specification requires (never the query string, which ends up in URLs and logs).
+                string? sessionId = GetSessionId(context);
                 if (String.IsNullOrEmpty(sessionId))
                 {
-                    context.Response.StatusCode = 400;
-                    byte[] errorBytes = Encoding.UTF8.GetBytes("Missing session ID. Send a POST to initialize first.");
-                    await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
-                    context.Response.Close();
+                    await WriteJsonRpcErrorAsync(context, 400, null, McpProtocolException.SessionRequired(), token).ConfigureAwait(false);
                     return;
                 }
 
                 if (!TryGetActiveSession(sessionId, out ClientConnection? connection) || connection == null)
                 {
-                    context.Response.StatusCode = 404;
-                    byte[] errorBytes = Encoding.UTF8.GetBytes("Invalid or terminated session ID.");
-                    await context.Response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length, token).ConfigureAwait(false);
-                    context.Response.Close();
+                    await WriteJsonRpcErrorAsync(context, 404, null, McpProtocolException.SessionNotFound(), token).ConfigureAwait(false);
                     return;
                 }
 
@@ -1794,15 +1963,14 @@ namespace Voltaic.Mcp
                 string? sessionId = GetSessionId(context);
                 if (String.IsNullOrEmpty(sessionId))
                 {
-                    context.Response.StatusCode = 400;
-                    context.Response.Close();
+                    await WriteJsonRpcErrorAsync(context, 400, null, McpProtocolException.SessionRequired(), token).ConfigureAwait(false);
                     return;
                 }
 
-                if (_TerminatedSessions.ContainsKey(sessionId) || !_Sessions.ContainsKey(sessionId))
+                // Only the principal that created the session may end it.
+                if (!TryGetActiveSession(sessionId, out ClientConnection? _))
                 {
-                    context.Response.StatusCode = 404;
-                    context.Response.Close();
+                    await WriteJsonRpcErrorAsync(context, 404, null, McpProtocolException.SessionNotFound(), token).ConfigureAwait(false);
                     return;
                 }
 
@@ -1899,13 +2067,23 @@ namespace Voltaic.Mcp
                 return;
             }
 
-            // The header MUST match the protocol version in the request body's _meta, so a request that omits it
-            // cannot be validated. Notifications are exempt: this revision defines no header rules for them.
+            // params._meta must carry protocolVersion and clientCapabilities; a request missing either is malformed
+            // (-32602 with 400). Notifications are exempt: this revision defines no rules for their _meta.
             if (incomingRequest != null && incomingRequest.Id != null && String.IsNullOrWhiteSpace(metaProtocolVersion))
             {
                 await WriteJsonRpcErrorAsync(context, 400, incomingRequest.Id,
-                    McpProtocolException.HeaderMismatch($"Header mismatch: the request body has no params._meta[\"{McpProtocol.MetaProtocolVersionKey}\"] value to match the {McpProtocol.ProtocolVersionHeader} header."), token).ConfigureAwait(false);
+                    McpProtocolException.InvalidParams($"params._meta[\"{McpProtocol.MetaProtocolVersionKey}\"] is required."), token).ConfigureAwait(false);
                 return;
+            }
+
+            if (incomingRequest != null && incomingRequest.Id != null)
+            {
+                McpProtocolException? metaError = McpMessageProcessor.CheckStatelessMeta(requestBody);
+                if (metaError != null)
+                {
+                    await WriteJsonRpcErrorAsync(context, 400, incomingRequest.Id, metaError, token).ConfigureAwait(false);
+                    return;
+                }
             }
 
             string? methodHeader = context.Request.Headers[McpProtocol.MethodHeader];
@@ -1962,52 +2140,16 @@ namespace Voltaic.Mcp
 
             LogMessage($"Stateless MCP request: {requestBody}");
 
-            ClientConnection connection = new ClientConnection("stateless");
-            connection.MaxQueueSize = _MaxQueueSize;
-            McpRequestProtocol.Set(protocolVersion);
-
-            JsonRpcResponse response;
+            // Every stateless request runs on its own state: no session, nothing inferred from earlier requests.
+            ClientConnection connection = CreateProvisionalConnection(requireInitialize: false);
             try
             {
-                response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
+                await DispatchSingleAsync(context, requestBody, connection, false, false, protocolVersion, token).ConfigureAwait(false);
             }
             finally
             {
                 connection.Dispose();
             }
-
-            HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
-
-            if (incomingRequest != null && incomingRequest.Id == null)
-            {
-                context.Response.StatusCode = 202;
-                context.Response.Close();
-                LogMessage($"Stateless MCP notification accepted: {bodyMethod}");
-                return;
-            }
-
-            int statusCode = response.Error != null && response.Error.Code == -32601 ? 404 : 200;
-            context.Response.StatusCode = statusCode;
-            context.Response.ContentType = "application/json";
-
-            // Stateless-era revisions require resultType on every result, and ttlMs/cacheScope on cacheable
-            // results. Fill in whatever the result lacks, serialize, then revert so a result instance a
-            // handler reuses across requests never carries these fields into a handshake-era response.
-            McpStatelessResultStamp? stamp = McpStatelessResultStamper.ApplyForVersion(response, protocolVersion);
-            string responseJson;
-            try
-            {
-                responseJson = JsonSerializer.Serialize(response);
-            }
-            finally
-            {
-                stamp?.Revert();
-            }
-
-            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
-            context.Response.ContentLength64 = buffer.Length;
-            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-            context.Response.Close();
         }
 
         // Checks the Mcp-Param-{Name} headers of a tools/call against the arguments (2026-07-28). A value in the body
@@ -2233,40 +2375,65 @@ namespace Voltaic.Mcp
             return McpProtocol.HeaderlessProtocolVersion;
         }
 
-        private async Task<List<JsonRpcResponse>> ProcessBatchAsync(ClientConnection connection, string body, CancellationToken token)
+        // Processes a JSON-RPC batch (2025-03-26 sessions only) through the shared processor.
+        private async Task DispatchBatchAsync(HttpListenerContext context, string body, ClientConnection connection, CancellationToken token)
         {
-            List<string> elements = new List<string>();
-            List<bool> expectsResponse = new List<bool>();
+            List<JsonElement> elements;
             try
             {
                 using (JsonDocument document = JsonDocument.Parse(body))
                 {
-                    foreach (JsonElement element in document.RootElement.EnumerateArray())
-                    {
-                        // JSON-RPC responses sent by the client in a batch are accepted and dropped.
-                        if (IsJsonRpcResponseElement(element)) continue;
-
-                        elements.Add(element.GetRawText());
-                        expectsResponse.Add(element.ValueKind != JsonValueKind.Object || element.TryGetProperty("id", out JsonElement _));
-                    }
+                    elements = document.RootElement.EnumerateArray().Select(element => element.Clone()).ToList();
                 }
             }
             catch (JsonException)
             {
-                return new List<JsonRpcResponse> { new JsonRpcResponse { Error = JsonRpcError.ParseError(), Id = null } };
+                await WriteJsonRpcErrorAsync(context, 400, null, new McpProtocolException(-32700, "Parse error"), token).ConfigureAwait(false);
+                return;
             }
 
-            List<JsonRpcResponse> responses = new List<JsonRpcResponse>();
-            for (int index = 0; index < elements.Count; index++)
+            if (elements.Count == 0)
             {
-                JsonRpcResponse batchResponse = await ProcessRpcRequestAsync(connection, elements[index], token).ConfigureAwait(false);
-                if (expectsResponse[index])
-                {
-                    responses.Add(batchResponse);
-                }
+                await WriteJsonRpcErrorAsync(context, 400, null, new McpProtocolException(-32600, "Invalid Request: an empty JSON-RPC batch is not allowed."), token).ConfigureAwait(false);
+                return;
             }
 
-            return responses;
+            McpSessionState state = StateOf(connection);
+            List<Task<string?>> pending = new List<Task<string?>>();
+            foreach (JsonElement element in elements)
+            {
+                McpEnvelope envelope = McpEnvelope.Parse(element);
+                if (envelope.Method == "initialize")
+                {
+                    pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse
+                    {
+                        Id = envelope.ResponseId,
+                        Error = new JsonRpcError { Code = -32600, Message = "Invalid Request: initialize must not be part of a JSON-RPC batch." }
+                    })));
+                    continue;
+                }
+
+                pending.Add(_Processor.HandleAndSerializeAsync(envelope, state, null, true, null, token));
+            }
+
+            List<string> responses = (await Task.WhenAll(pending).ConfigureAwait(false)).Where(json => json != null).Select(json => json!).ToList();
+
+            HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
+            SetSessionIdHeaders(context.Response, connection.SessionId);
+
+            // A batch of only notifications and responses has nothing to answer: 202 with no body.
+            if (responses.Count == 0)
+            {
+                context.Response.StatusCode = 202;
+                context.Response.Close();
+                return;
+            }
+
+            byte[] buffer = Encoding.UTF8.GetBytes("[" + String.Join(",", responses) + "]");
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+            context.Response.Close();
         }
 
         private void HandleCorsPreflightRequest(HttpListenerContext context)
@@ -2440,7 +2607,7 @@ namespace Voltaic.Mcp
             }
             else
             {
-                connection = CreateProvisionalConnection();
+                connection = CreateProvisionalConnection(requireInitialize: false);
                 isProvisional = true;
             }
 
@@ -2451,44 +2618,9 @@ namespace Voltaic.Mcp
                 ? $"RPC request without a session: {requestBody}"
                 : $"RPC request from session {sessionId}: {requestBody}");
 
-            if (IsJsonRpcResponseMessage(requestBody))
-            {
-                AcceptClientResponse(context, connection, isProvisional, hasSession);
-                return;
-            }
-
-            // Process JSON-RPC request
-            JsonRpcResponse response = await ProcessRpcRequestAsync(connection, requestBody, token).ConfigureAwait(false);
-
-            if (isProvisional)
-            {
-                if (ShouldIssueSession(incomingRequest, response))
-                {
-                    RegisterSession(connection);
-                    hasSession = true;
-                }
-                else
-                {
-                    connection.Dispose();
-                }
-            }
-
-            if (hasSession) RecordNegotiatedVersion(sessionId, incomingRequest, response);
-
-            // Send response
-            HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
-
-            if (hasSession) SetSessionIdHeaders(context.Response, sessionId);
-            context.Response.ContentType = "application/json";
-
-            string responseJson = JsonSerializer.Serialize(response);
-            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
-
-            context.Response.ContentLength64 = buffer.Length;
-            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-            context.Response.Close();
-
-            LogMessage($"RPC response to session {sessionId}: {responseJson}");
+            // Voltaic's /rpc endpoint is plain request/response: a sessionless call runs on a fresh state without the
+            // initialization requirement, and only a successful initialize creates a session.
+            await DispatchSingleAsync(context, requestBody, connection, hasSession, isProvisional, null, token).ConfigureAwait(false);
         }
 
         private async Task HandleSseRequestAsync(HttpListenerContext context, CancellationToken token)
@@ -2594,84 +2726,6 @@ namespace Voltaic.Mcp
         {
             await response.OutputStream.WriteAsync(_SseKeepAliveComment, 0, _SseKeepAliveComment.Length, token).ConfigureAwait(false);
             await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
-        }
-
-        private async Task<JsonRpcResponse> ProcessRpcRequestAsync(ClientConnection connection, string requestString, CancellationToken token = default)
-        {
-            ServerPendingRequest? pendingRequest = null;
-
-            try
-            {
-                JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString);
-                if (request == null)
-                {
-                    JsonRpcResponse invalidResponse = new JsonRpcResponse
-                    {
-                        Error = JsonRpcError.InvalidRequest(),
-                        Id = null
-                    };
-                    RaiseResponseSent(connection, null, invalidResponse);
-                    return invalidResponse;
-                }
-
-                pendingRequest = new ServerPendingRequest(request.Id, connection, request);
-                RaiseRequestReceived(pendingRequest);
-
-                JsonRpcResponse response;
-
-                if (_Methods.ContainsKey(request.Method))
-                {
-                    try
-                    {
-                        RpcParameters? paramsElement = request.Params == null ? null : RpcParameters.FromObject(request.Params);
-
-                        object result = await _Methods[request.Method](paramsElement, token).ConfigureAwait(false);
-                        response = new JsonRpcResponse
-                        {
-                            Result = result,
-                            Id = request.Id
-                        };
-                    }
-                    catch (Exception ex)
-                    {
-                        JsonRpcError error = ex is McpProtocolException protocolException
-                            ? protocolException.ToJsonRpcError()
-                            : new JsonRpcError
-                            {
-                                Code = -32603,
-                                Message = "Internal error",
-                                Data = ex.Message
-                            };
-
-                        response = new JsonRpcResponse
-                        {
-                            Error = error,
-                            Id = request.Id
-                        };
-                    }
-                }
-                else
-                {
-                    response = new JsonRpcResponse
-                    {
-                        Error = JsonRpcError.MethodNotFound(),
-                        Id = request.Id
-                    };
-                }
-
-                RaiseResponseSent(connection, pendingRequest, response);
-                return response;
-            }
-            catch (JsonException)
-            {
-                JsonRpcResponse parseErrorResponse = new JsonRpcResponse
-                {
-                    Error = JsonRpcError.ParseError(),
-                    Id = null
-                };
-                RaiseResponseSent(connection, null, parseErrorResponse);
-                return parseErrorResponse;
-            }
         }
 
         private async Task CleanupSessionsLoop(CancellationToken token)

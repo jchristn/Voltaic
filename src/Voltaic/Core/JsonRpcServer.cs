@@ -371,12 +371,25 @@ namespace Voltaic.Core
             {
                 _Clients.TryAdd(clientId, client);
                 LogMessage($"Client connected: {clientId} from {tcpClient.Client.RemoteEndPoint}");
+                OnClientConnected(client);
                 RaiseClientConnected(client);
 
                 byte[] buffer = MessageFraming.CreateBuffer();
                 NetworkStream stream = tcpClient.GetStream();
                 int bufferOffset = 0;
-                int bufferCount = 0;
+                int bufferCount = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+                if (bufferCount == 0) return;
+
+                // Newline-delimited JSON (the stdio framing, which MCP asks custom stream transports to reuse) starts
+                // with '{' or '['; anything else must be Content-Length framing.
+                int first = 0;
+                while (first < bufferCount && (buffer[first] == (byte)' ' || buffer[first] == (byte)'\t' || buffer[first] == (byte)'\r' || buffer[first] == (byte)'\n')) first++;
+                if (AcceptNewlineFraming && first < bufferCount && (buffer[first] == (byte)'{' || buffer[first] == (byte)'['))
+                {
+                    client.NewlineFraming = true;
+                    await ReadNewlineMessagesAsync(client, stream, buffer, bufferCount, token).ConfigureAwait(false);
+                    return;
+                }
 
                 while (!token.IsCancellationRequested && tcpClient.Connected)
                 {
@@ -402,7 +415,7 @@ namespace Voltaic.Core
                     }
 
                     // Process the complete message
-                    await ProcessRequestAsync(client, message, token).ConfigureAwait(false);
+                    await ProcessMessageAsync(client, message, token).ConfigureAwait(false);
 
                     // Update buffer state for any remaining data
                     bufferOffset = newOffset;
@@ -423,10 +436,132 @@ namespace Voltaic.Core
             finally
             {
                 _Clients.TryRemove(clientId, out _);
+                OnClientDisconnected(client);
                 RaiseClientDisconnected(client);
                 client.Dispose();
                 LogMessage($"Client disconnected: {clientId}");
             }
+        }
+
+        // Reads newline-delimited messages. A line that is not JSON closes the connection, so a
+        // browser's cross-protocol HTTP request (whose first line is "POST / HTTP/1.1") never reaches a handler.
+        private async Task ReadNewlineMessagesAsync(ClientConnection client, NetworkStream stream, byte[] initial, int initialCount, CancellationToken token)
+        {
+            List<byte> pending = new List<byte>(initialCount);
+            for (int i = 0; i < initialCount; i++) pending.Add(initial[i]);
+            byte[] chunk = new byte[8192];
+
+            while (!token.IsCancellationRequested)
+            {
+                int newline;
+                while ((newline = pending.IndexOf((byte)'\n')) >= 0)
+                {
+                    string line = Encoding.UTF8.GetString(pending.GetRange(0, newline).ToArray()).TrimEnd('\r');
+                    pending.RemoveRange(0, newline + 1);
+                    if (String.IsNullOrWhiteSpace(line)) continue;
+
+                    string trimmed = line.TrimStart();
+                    if (!trimmed.StartsWith("{", StringComparison.Ordinal) && !trimmed.StartsWith("[", StringComparison.Ordinal) && !IsJsonValue(trimmed))
+                    {
+                        LogMessage($"Closing {client.SessionId}: a line is not a JSON message.");
+                        return;
+                    }
+
+                    await ProcessMessageAsync(client, line, token).ConfigureAwait(false);
+                }
+
+                if (pending.Count > MaxNewlineMessageBytes)
+                {
+                    LogMessage($"Closing {client.SessionId}: a message exceeds {MaxNewlineMessageBytes} bytes.");
+                    return;
+                }
+
+                int read = await stream.ReadAsync(chunk, 0, chunk.Length, token).ConfigureAwait(false);
+                if (read == 0) return;
+                for (int i = 0; i < read; i++) pending.Add(chunk[i]);
+            }
+        }
+
+        // True when the line is some other JSON value (a string or number), which gets an Invalid Request reply.
+        private static bool IsJsonValue(string line)
+        {
+            try
+            {
+                using (JsonDocument.Parse(line))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        // The registered method handlers, for derived servers that dispatch messages themselves.
+        private protected IDictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> Methods => _Methods;
+
+        // The connected clients.
+        private protected IEnumerable<ClientConnection> ConnectedClients => _Clients.Values;
+
+        // Derived servers may accept newline-delimited JSON in addition to Content-Length framing.
+        private protected virtual bool AcceptNewlineFraming => false;
+
+        // Largest newline-delimited message accepted.
+        private protected virtual int MaxNewlineMessageBytes => 16 * 1024 * 1024;
+
+        // Called for every complete message. The default handles one JSON-RPC request at a time.
+        private protected virtual Task ProcessMessageAsync(ClientConnection client, string message, CancellationToken token)
+        {
+            return ProcessRequestAsync(client, message, token);
+        }
+
+        // Called when a client connects, before any message is read.
+        private protected virtual void OnClientConnected(ClientConnection client)
+        {
+        }
+
+        // Called when a client disconnects.
+        private protected virtual void OnClientDisconnected(ClientConnection client)
+        {
+        }
+
+        // Writes one message in the connection's framing; writes to a connection never interleave.
+        private protected async Task WriteToClientAsync(ClientConnection client, string json, CancellationToken token)
+        {
+            if (client.Stream == null) return;
+
+            await client.WriteLock.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (client.NewlineFraming)
+                {
+                    byte[] bytes = Encoding.UTF8.GetBytes(json + "\n");
+                    await client.Stream.WriteAsync(bytes, 0, bytes.Length, token).ConfigureAwait(false);
+                    await client.Stream.FlushAsync(token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await MessageFraming.WriteMessageAsync(client.Stream, json, _DefaultContentType, token).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                client.WriteLock.Release();
+            }
+        }
+
+        // Raises RequestReceived for a request a derived server dispatched itself.
+        private protected void RaiseRequestReceivedFor(ClientConnection client, JsonRpcRequest request)
+        {
+            RaiseRequestReceived(new ServerPendingRequest(request.Id, client, request));
+        }
+
+        // Raises ResponseSent for a response a derived server produced itself.
+        private protected void RaiseResponseSentFor(ClientConnection client, JsonRpcRequest? request, JsonRpcResponse response)
+        {
+            if (request == null) return;
+            RaiseResponseSent(new ServerPendingRequest(request.Id, client, request), response);
         }
 
         private async Task ProcessRequestAsync(ClientConnection client, string requestString, CancellationToken token = default)
@@ -451,24 +586,6 @@ namespace Voltaic.Core
 
                 pendingRequest = new ServerPendingRequest(request.Id, client, request);
                 RaiseRequestReceived(pendingRequest);
-
-                // Derived servers can inspect the raw request before dispatch (for example to select a protocol
-                // era) and reject it with a protocol error.
-                object? requestContext;
-                try
-                {
-                    requestContext = PrepareRequest(requestString, request);
-                }
-                catch (Exception prepareError) when (prepareError is IJsonRpcErrorProvider)
-                {
-                    if (request.Id != null)
-                    {
-                        JsonRpcResponse rejection = new JsonRpcResponse { Id = request.Id, Error = ((IJsonRpcErrorProvider)prepareError).ToJsonRpcError() };
-                        await SendResponseAsync(client, pendingRequest, rejection, token).ConfigureAwait(false);
-                    }
-
-                    return;
-                }
 
                 JsonRpcResponse response;
 
@@ -515,7 +632,7 @@ namespace Voltaic.Core
                 // Only send response if request has an id (not a notification)
                 if (request.Id != null)
                 {
-                    await SendResponseAsync(client, pendingRequest, response, token, requestContext).ConfigureAwait(false);
+                    await SendResponseAsync(client, pendingRequest, response, token).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -530,27 +647,12 @@ namespace Voltaic.Core
             }
         }
 
-        // Called for every well-formed request before dispatch. The returned value is passed to SerializeResponse for that request's response. Throw an exception that implements IJsonRpcErrorProvider to reject the request with that error.
-        private protected virtual object? PrepareRequest(string requestJson, JsonRpcRequest request)
-        {
-            return null;
-        }
-
-        // Serializes a response. requestContext is the value PrepareRequest returned for the request, or null.
-        private protected virtual string SerializeResponse(JsonRpcResponse response, object? requestContext)
-        {
-            return JsonSerializer.Serialize(response);
-        }
-
-        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default, object? requestContext = null)
+        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default)
         {
             try
             {
-                string json = SerializeResponse(response, requestContext);
-                if (client.Stream != null)
-                {
-                    await MessageFraming.WriteMessageAsync(client.Stream, json, _DefaultContentType, token).ConfigureAwait(false);
-                }
+                string json = JsonSerializer.Serialize(response);
+                await WriteToClientAsync(client, json, token).ConfigureAwait(false);
                 LogMessage($"Sent to {client.SessionId}: {json}");
 
                 if (pendingRequest != null)
@@ -568,10 +670,7 @@ namespace Voltaic.Core
         {
             try
             {
-                if (client.Stream != null)
-                {
-                    await MessageFraming.WriteMessageAsync(client.Stream, message, _DefaultContentType, token).ConfigureAwait(false);
-                }
+                await WriteToClientAsync(client, message, token).ConfigureAwait(false);
             }
             catch
             {

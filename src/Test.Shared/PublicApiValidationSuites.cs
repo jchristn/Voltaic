@@ -1,3 +1,4 @@
+#pragma warning disable CS0618 // Exercises the obsolete MCP server ProtocolVersion property.
 namespace Test.Shared
 {
     using System.Net;

@@ -134,11 +134,29 @@ namespace Voltaic.Mcp
         public string Uri { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets an optional display name.
+        /// Gets or sets the resource name. Required by the schema (a resource link is a Resource); never null. Default is
+        /// an empty string, which is serialized as is.
         /// </summary>
         [JsonPropertyName("name")]
+        public string Name
+        {
+            get => _Name;
+            set => _Name = value ?? string.Empty;
+        }
+
+        /// <summary>
+        /// Gets or sets an optional human-readable title. Null omits it.
+        /// </summary>
+        [JsonPropertyName("title")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Name { get; set; }
+        public string? Title { get; set; }
+
+        /// <summary>
+        /// Gets or sets an optional description. Null omits it.
+        /// </summary>
+        [JsonPropertyName("description")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Description { get; set; }
 
         /// <summary>
         /// Gets or sets the MIME type.
@@ -146,5 +164,35 @@ namespace Voltaic.Mcp
         [JsonPropertyName("mimeType")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? MimeType { get; set; }
+
+        /// <summary>
+        /// Gets or sets the resource size in bytes, when known. Null omits it.
+        /// </summary>
+        [JsonPropertyName("size")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public long? Size { get; set; }
+
+        /// <summary>
+        /// Gets or sets annotations (audience, priority, lastModified). Null omits them.
+        /// </summary>
+        [JsonPropertyName("annotations")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public McpAnnotations? Annotations { get; set; }
+
+        /// <summary>
+        /// Gets or sets icons (MCP 2025-11-25 and later). Null omits them.
+        /// </summary>
+        [JsonPropertyName("icons")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<McpIcon>? Icons { get; set; }
+
+        /// <summary>
+        /// Gets or sets protocol-level metadata. Null omits it.
+        /// </summary>
+        [JsonPropertyName("_meta")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public Dictionary<string, object?>? Meta { get; set; }
+
+        private string _Name = string.Empty;
     }
 }

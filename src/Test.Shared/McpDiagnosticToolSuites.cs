@@ -119,15 +119,16 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.Unauthorized, toolPing.StatusCode, "tools/call for a tool named ping must be authenticated.");
                     }),
 
-                    Case(suiteId, "StatelessPingCarriesResultType", "Protocol ping under 2026-07-28 returns an empty result with resultType complete", async ct =>
+                    Case(suiteId, "StatelessPingCarriesResultType", "ping does not exist in 2026-07-28: a stateless ping gets 404 -32601, while a handshake-era ping returns {}", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, RegisterAppTool).ConfigureAwait(false);
 
-                        RpcResult ping = await McpHttpTestRequests.SendStatelessAsync(fixture, "ping", 1, null, null, null, ct).ConfigureAwait(false);
+                        RpcResult stateless = await McpHttpTestRequests.SendStatelessAsync(fixture, "ping", 1, null, null, null, ct).ConfigureAwait(false);
+                        RpcResult handshake = await fixture.PostMcpAsync("ping", null, 2, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.OK, ping.StatusCode, $"Stateless ping should succeed. Body: {ping.Body}");
-                        TestAssert.Equal("complete", ping.Result.Get("resultType").String(), "Stateless ping carries resultType complete.");
-                        TestAssert.Equal(1, ping.Result.Length, "Stateless ping carries no fields other than resultType.");
+                        TestAssert.Equal(HttpStatusCode.NotFound, stateless.StatusCode, $"Body: {stateless.Body}");
+                        TestAssert.Equal(-32601, stateless.Error.Get("code").Int(), "The 2026-07-28 revision removed ping.");
+                        TestAssert.True(handshake.Result.IsObject && handshake.Result.Length == 0, "A handshake-era ping returns {}.");
                     }),
 
                     Case(suiteId, "HttpClientAcceptsLegacyPong", "McpHttpClient connects to and pings a server that answers ping with \"pong\" as Voltaic 1.x did", async ct =>

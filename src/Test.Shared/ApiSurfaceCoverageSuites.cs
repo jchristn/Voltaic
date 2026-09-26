@@ -162,6 +162,7 @@ namespace Test.Shared
                             "Voltaic.Mcp.McpTextResourceContents",
                             "Voltaic.Mcp.McpToolCallContext",
                             "Voltaic.Mcp.McpToolException",
+                            "Voltaic.Mcp.McpInsufficientScopeException",
                             "Voltaic.Mcp.McpToolCallResult",
                             "Voltaic.Mcp.McpProtocolEra",
                             "Voltaic.Mcp.McpProtocolVersionInfo",

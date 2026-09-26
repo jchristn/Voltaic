@@ -56,6 +56,7 @@ namespace Test.Shared
                     {
                         await using HttpMcpTestServerFixture fixture = await StartConfirmServerAsync(ct).ConfigureAwait(false);
                         using McpHttpClient client = new McpHttpClient();
+                        client.ClientCapabilities["elicitation"] = new { };
                         await client.ConnectStatelessAsync(fixture.BaseUrl, "/mcp", token: ct).ConfigureAwait(false);
 
                         bool callbackInvoked = false;

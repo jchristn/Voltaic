@@ -266,7 +266,7 @@ namespace Test.Shared
             {
                 { "io.modelcontextprotocol/protocolVersion", version },
                 { "io.modelcontextprotocol/clientInfo", new { name = "test-client", version = "1.0.0" } },
-                { "io.modelcontextprotocol/clientCapabilities", new { } }
+                { "io.modelcontextprotocol/clientCapabilities", new { elicitation = new { } } }
             };
         }
 

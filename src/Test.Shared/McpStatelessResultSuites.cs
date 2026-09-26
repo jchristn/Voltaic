@@ -114,9 +114,6 @@ namespace Test.Shared
                                 { "ref", new { type = "ref/prompt", name = "greeting" } },
                                 { "argument", new { name = "topic", value = "Vo" } }
                             }),
-                            new StatelessCall("logging/setLevel", null, new Dictionary<string, object?> { { "level", "debug" } }),
-                            new StatelessCall("resources/subscribe", null, new Dictionary<string, object?> { { "uri", "voltaic://static" } }),
-                            new StatelessCall("resources/unsubscribe", null, new Dictionary<string, object?> { { "uri", "voltaic://static" } })
                         };
 
                         int id = 0;
@@ -126,6 +123,15 @@ namespace Test.Shared
                             TestAssert.Equal(HttpStatusCode.OK, response.StatusCode, $"{call.Method} should return 200. Body: {response.Body}");
                             TestAssert.False(response.Root.Has("error"), $"{call.Method} should not fail. Body: {response.Body}");
                             TestAssert.Equal("complete", response.Result.Get("resultType").String(), $"{call.Method} should carry resultType complete.");
+                            TestAssert.Equal("Voltaic.Test", response.Result.Get("_meta").Get("io.modelcontextprotocol/serverInfo").Get("name").String(), $"{call.Method} identifies the server in _meta.");
+                        }
+
+                        // Methods 2026-07-28 removed are not served under it.
+                        foreach (string removed in new[] { "ping", "logging/setLevel", "resources/subscribe", "resources/unsubscribe" })
+                        {
+                            RpcResult response = await McpHttpTestRequests.SendStatelessAsync(fixture, removed, ++id, new Dictionary<string, object?> { { "uri", "voltaic://static" }, { "level", "debug" } }, null, null, ct).ConfigureAwait(false);
+                            TestAssert.Equal(HttpStatusCode.NotFound, response.StatusCode, $"{removed} is not part of 2026-07-28. Body: {response.Body}");
+                            TestAssert.Equal(-32601, response.Error.Get("code").Int(), $"{removed} is method not found.");
                         }
                     }),
 
@@ -206,18 +212,24 @@ namespace Test.Shared
                             server.RegisterMethod("custom/typed", _ => new McpEmptyResult()), ct).ConfigureAwait(false);
 
                         RpcResult response = await McpHttpTestRequests.SendStatelessAsync(fixture, "custom/typed", 1, null, null, null, ct).ConfigureAwait(false);
-                        TestAssert.True(response.Result.IsObject && response.Result.Length == 1, $"An empty McpResult has exactly one member. Body: {response.Body}");
-                        TestAssert.Equal("complete", response.Result.Get("resultType").String(), "That member is resultType complete.");
+                        TestAssert.True(response.Result.IsObject && response.Result.Length == 2, $"An empty McpResult has resultType and _meta. Body: {response.Body}");
+                        TestAssert.Equal("complete", response.Result.Get("resultType").String(), "resultType is complete.");
+                        TestAssert.True(response.Result.Get("_meta").Has("io.modelcontextprotocol/serverInfo"), "_meta identifies the server.");
                     }),
 
-                    Case(suiteId, "CustomPlainObjectReturnedUnmodified", "A custom method returning a plain object is returned unmodified (documented limitation)", async ct =>
+                    Case(suiteId, "CustomPlainObjectReturnedUnmodified", "A custom method's plain object result gets resultType under 2026-07-28, and a non-object result becomes -32603 (results must be objects)", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, server =>
-                            server.RegisterMethod("custom/plain", _ => new { value = 7 }), ct).ConfigureAwait(false);
+                        {
+                            server.RegisterMethod("custom/plain", _ => new { value = 7 });
+                            server.RegisterMethod("custom/text", _ => "just text");
+                        }, ct).ConfigureAwait(false);
 
                         RpcResult response = await McpHttpTestRequests.SendStatelessAsync(fixture, "custom/plain", 1, null, null, null, ct).ConfigureAwait(false);
+                        RpcResult text = await McpHttpTestRequests.SendStatelessAsync(fixture, "custom/text", 2, null, null, null, ct).ConfigureAwait(false);
                         TestAssert.Equal(7, response.Result.Get("value").Int(), "The plain payload is intact.");
-                        TestAssert.False(response.Result.Has("resultType"), "Voltaic does not rewrite arbitrary handler objects.");
+                        TestAssert.Equal("complete", response.Result.Get("resultType").String(), "Every 2026-07-28 result carries resultType.");
+                        TestAssert.Equal(-32603, text.Error.Get("code").Int(), "A non-object result cannot carry resultType.");
                     }),
 
                     Case(suiteId, "ErrorsAreNotStamped", "Stateless error responses carry no result and no resultType", async ct =>

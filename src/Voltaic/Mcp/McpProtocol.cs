@@ -127,6 +127,12 @@ namespace Voltaic.Mcp
         public const string MetaServerInfoKey = "io.modelcontextprotocol/serverInfo";
 
         /// <summary>
+        /// The <c>_meta</c> key carrying the minimum log level for one request (2026-07-28+). Without it, a server sends
+        /// no <c>notifications/message</c> for that request.
+        /// </summary>
+        public const string MetaLogLevelKey = "io.modelcontextprotocol/logLevel";
+
+        /// <summary>
         /// The <c>_meta</c> key associating a message with a task (2025-11-25 in-core tasks).
         /// </summary>
         public const string MetaRelatedTaskKey = "io.modelcontextprotocol/related-task";
