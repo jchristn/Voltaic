@@ -26,6 +26,11 @@ namespace Voltaic.Mcp
         // IDs of requests that finished recently: a cancellation for one of them arrived too late and is ignored, so
         // it can never cancel a later request that reuses the ID (allowed once the response was sent).
         private readonly ConcurrentDictionary<string, DateTime> _Completed = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        // Requests read from the connection but not yet started (they start on the thread pool), by ID, with whether a
+        // cancellation already arrived for them. Reserved in message order, so a cancellation that follows its request
+        // always finds it, even when the ID was used before.
+        private readonly Dictionary<string, bool> _Reserved = new Dictionary<string, bool>(StringComparer.Ordinal);
+        private readonly object _RequestLock = new object();
         // Pings this server sent to the client, by request ID JSON, completed by the client's response.
         private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _PendingPings = new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.Ordinal);
         private McpPinger? _Pinger;
@@ -156,15 +161,38 @@ namespace Voltaic.Mcp
         internal McpInFlightRequest? TryBeginRequest(string idKey, string method, JsonElement? progressToken, CancellationToken parent)
         {
             McpInFlightRequest request = new McpInFlightRequest(idKey, method, progressToken, parent);
-            if (_InFlight.TryAdd(idKey, request))
+            lock (_RequestLock)
             {
-                _Completed.TryRemove(idKey, out DateTime _);
-                if (method != "initialize" && _EarlyCancels.TryRemove(idKey, out DateTime _)) request.Cancel();
-                return request;
+                if (_InFlight.TryAdd(idKey, request))
+                {
+                    _Completed.TryRemove(idKey, out DateTime _);
+                    bool cancelledWhileReserved = _Reserved.TryGetValue(idKey, out bool reservedCancel) && reservedCancel;
+                    _Reserved.Remove(idKey);
+                    bool cancelledEarly = _EarlyCancels.TryRemove(idKey, out DateTime _);
+                    if (method != "initialize" && (cancelledWhileReserved || cancelledEarly)) request.Cancel();
+                    return request;
+                }
             }
 
             request.Dispose();
             return null;
+        }
+
+        /// <summary>
+        /// Reserves a request ID when the request is read, before it starts on the thread pool, so a cancellation that
+        /// arrives in between applies to it. A reused ID (allowed once its earlier request was answered, and on
+        /// 2026-07-28) is no longer treated as finished.
+        /// </summary>
+        internal void ReserveRequest(string idKey)
+        {
+            lock (_RequestLock)
+            {
+                if (_InFlight.ContainsKey(idKey)) return;
+                _Completed.TryRemove(idKey, out DateTime _);
+
+                // A cancellation that arrived before the request (kept as an early cancel) still applies to it.
+                _Reserved[idKey] = _EarlyCancels.TryRemove(idKey, out DateTime _);
+            }
         }
 
         internal void EndRequest(McpInFlightRequest request)
@@ -181,19 +209,34 @@ namespace Voltaic.Mcp
         /// </summary>
         internal bool Cancel(string idKey)
         {
-            if (_InFlight.TryGetValue(idKey, out McpInFlightRequest? request) && request.Method != "initialize")
+            lock (_RequestLock)
             {
-                request.Cancel();
-                return true;
-            }
+                if (_InFlight.TryGetValue(idKey, out McpInFlightRequest? request))
+                {
+                    if (request.Method == "initialize") return false;
+                    request.Cancel();
+                    return true;
+                }
 
-            if (request == null && !_Completed.ContainsKey(idKey)) RememberEarlyCancel(idKey);
-            return false;
+                if (_Reserved.ContainsKey(idKey))
+                {
+                    _Reserved[idKey] = true;
+                    return true;
+                }
+
+                if (!_Completed.ContainsKey(idKey)) RememberEarlyCancel(idKey);
+                return false;
+            }
         }
 
         // Records that a request with this ID was answered (or rejected); unless the ID is in flight again.
         internal void RecordFinished(string idKey)
         {
+            lock (_RequestLock)
+            {
+                _Reserved.Remove(idKey);
+            }
+
             if (_InFlight.ContainsKey(idKey)) return;
 
             // A cancellation that arrived for this ID before it was rejected is spent; it must not cancel a later

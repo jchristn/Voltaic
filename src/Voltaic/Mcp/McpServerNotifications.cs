@@ -84,6 +84,9 @@ namespace Voltaic.Mcp
                 throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
             }
 
+            // Coalesced by the rate limit: accepted, but not sent.
+            if (!request.ShouldSendProgress(progress, total)) return true;
+
             JsonRpcRequest notification = new JsonRpcRequest
             {
                 Method = "notifications/progress",

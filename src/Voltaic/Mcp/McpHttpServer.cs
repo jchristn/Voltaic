@@ -51,13 +51,14 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets how long a stateless (<c>2026-07-28</c>) request may run before its response turns into an SSE
-        /// stream that carries a keep-alive comment every interval, so a client that closed the stream (which that revision
-        /// defines as cancellation) is noticed while the handler runs. Default is 0: no keep-alives, so the response keeps
-        /// its exact HTTP status (for example 400 for <c>-32021</c>) and a closed stream is noticed, and the request
-        /// cancelled, at the next write (a progress or log notification, or the response). A value above 0 notices it
-        /// sooner, but once the first keep-alive is sent the status is 200 and a later error arrives as the final SSE
-        /// event. Minimum is 0; maximum is 600000.
+        /// Gets or sets how long a stateless (<c>2026-07-28</c>) request may run silently before its response turns into
+        /// an SSE stream that carries a keep-alive comment every interval, so a client that closed the stream (which that
+        /// revision defines as cancellation) is noticed, and the request cancelled, while the handler runs:
+        /// <see cref="HttpListener"/> detects a closed connection only by writing to it. A response that completes within
+        /// the interval keeps its exact HTTP status (for example 400 for <c>-32021</c>); once the first keep-alive is sent
+        /// the status is 200 and a later error arrives as the final SSE event. Default is 15000. 0 disables keep-alives,
+        /// so a closed stream is noticed only at the next write (a progress or log notification, or the response).
+        /// Minimum is 0; maximum is 600000.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
         public int ResponseKeepAliveMs
@@ -71,12 +72,14 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets how many recent events of each <c>GET</c> SSE stream on the MCP endpoint are kept for replay.
-        /// Every event on that stream carries an ID of the form <c>{streamId}-{sequence}</c>, and each stream starts
-        /// with a priming event (an ID and an empty <c>data</c> field) as MCP 2025-11-25 recommends. A client that
-        /// reconnects with <c>Last-Event-ID</c> receives the retained events after that ID, on the same stream; IDs from
-        /// another session or an unknown stream start a new stream. The last 8 streams of each session are kept.
-        /// Default is 100. Minimum is 0 (IDs are still sent, but nothing is replayed); maximum is 10000.
+        /// Gets or sets how many recent events of each resumable SSE stream on the MCP endpoint are kept for replay:
+        /// <c>GET</c> streams and the SSE response streams of POST requests on a session. Every event on such a stream
+        /// carries an ID of the form <c>{streamId}-{sequence}</c>; on sessions that negotiated 2025-11-25 or later each
+        /// stream starts with a priming event (an ID and an empty <c>data</c> field), as that revision recommends. A client
+        /// that reconnects with <c>GET</c> and <c>Last-Event-ID</c> receives the retained events after that ID, on the
+        /// same stream; IDs from another session or an unknown stream start a new stream. Each session keeps its most
+        /// recent <see cref="MaxResumableStreamsPerSession"/> streams. Default is 100. Minimum is 0 (IDs are still sent,
+        /// but nothing is replayed); maximum is 10000.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 10000.</exception>
         public int SseReplayBufferSize
@@ -90,8 +93,10 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets the reconnection delay in milliseconds sent in the <c>retry</c> field when a <c>GET</c> SSE stream
-        /// opens on the MCP endpoint. Clients wait this long before reconnecting after the stream closes.
+        /// Gets or sets the reconnection delay in milliseconds sent in the <c>retry</c> field of the priming event that
+        /// starts each resumable SSE stream on sessions that negotiated 2025-11-25 or later (earlier revisions define no
+        /// priming event, so their streams carry no <c>retry</c>). Clients wait this long before reconnecting after the
+        /// stream closes.
         /// Default is 1000. Minimum is 0; maximum is 600000.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
@@ -185,7 +190,7 @@ namespace Voltaic.Mcp
         /// pass null as the URL to <see cref="AuthenticationResult.BearerChallenge(string?, string?, string?, string?)"/>.
         /// Default is null, which serves nothing at those paths (HTTP 404).
         /// </summary>
-        /// <exception cref="ArgumentException">Thrown when the value has an empty <see cref="McpProtectedResourceMetadata.Resource"/> or no <see cref="McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
+        /// <exception cref="ArgumentException">Thrown when the value's <see cref="McpProtectedResourceMetadata.Resource"/> is empty or not an absolute https (or http) URL without a fragment, or it has no <see cref="McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
         public McpProtectedResourceMetadata? ProtectedResourceMetadata
         {
             get => _ProtectedResourceMetadata;
@@ -195,6 +200,12 @@ namespace Voltaic.Mcp
                 {
                     if (String.IsNullOrWhiteSpace(value.Resource))
                         throw new ArgumentException("Protected resource metadata requires a resource identifier.", nameof(value));
+                    // RFC 9728: the resource identifier is an https URL (http is accepted for local development) with no
+                    // fragment; the metadata URL, and every challenge's resource_metadata, is derived from it.
+                    if (!Uri.TryCreate(value.Resource, UriKind.Absolute, out Uri? resourceUri)
+                        || (resourceUri.Scheme != Uri.UriSchemeHttps && resourceUri.Scheme != Uri.UriSchemeHttp)
+                        || !String.IsNullOrEmpty(resourceUri.Fragment))
+                        throw new ArgumentException($"The resource identifier '{value.Resource}' must be an absolute https (or http) URL without a fragment.", nameof(value));
                     if (value.AuthorizationServers.Count == 0 || value.AuthorizationServers.Any(String.IsNullOrWhiteSpace))
                         throw new ArgumentException("Protected resource metadata requires at least one authorization server, and entries must not be empty.", nameof(value));
                 }
@@ -290,6 +301,22 @@ namespace Voltaic.Mcp
         {
             get => _Endpoint.ServerName;
             set => _Endpoint.ServerName = value ?? "Voltaic.Mcp.HttpServer";
+        }
+
+        /// <summary>
+        /// Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
+        /// (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
+        /// the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
+        public int ProgressIntervalMs
+        {
+            get => _Endpoint.ProgressIntervalMs;
+            set
+            {
+                if (value < 0 || value > 60000) throw new ArgumentOutOfRangeException(nameof(value), "ProgressIntervalMs must be between 0 and 60000.");
+                _Endpoint.ProgressIntervalMs = value;
+            }
         }
 
         /// <summary>
@@ -463,7 +490,7 @@ namespace Voltaic.Mcp
         private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
         private readonly McpMessageProcessor _Processor;
-        private int _ResponseKeepAliveMs = 0;
+        private int _ResponseKeepAliveMs = 15000;
         private volatile bool _EnableLegacyEndpoints = true;
         private Task? _CleanupTask;
         private int _SessionTimeoutSeconds = 300; // 5 minutes
@@ -924,11 +951,14 @@ namespace Voltaic.Mcp
             try
             {
                 _Listener = new HttpListener();
+                // The root prefix covers every path; each endpoint path is added once (an endpoint at / needs none).
                 _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}/");
-                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_RpcPath}/");
-                _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_EventsPath}/");
-                if (!String.IsNullOrEmpty(_McpPath))
-                    _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{_McpPath}/");
+                HashSet<string> endpointPaths = new HashSet<string>(StringComparer.Ordinal);
+                foreach (string endpoint in new[] { _RpcPath, _EventsPath, _McpPath })
+                {
+                    string trimmed = (endpoint ?? String.Empty).TrimEnd('/');
+                    if (trimmed.Length > 0 && endpointPaths.Add(trimmed)) _Listener.Prefixes.Add($"http://{_Hostname}:{_Port}{trimmed}/");
+                }
                 _Listener.Start();
                 _TokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
 
@@ -1404,8 +1434,8 @@ namespace Voltaic.Mcp
                     return;
                 }
 
-                // Health check endpoint is always unauthenticated
-                if (path == "/")
+                // Health check endpoint is always unauthenticated, unless an endpoint is mounted at the root.
+                if (path == "/" && !ServesEndpointAtRoot())
                 {
                     await HandleHealthCheckAsync(context, token).ConfigureAwait(false);
                     return;
@@ -1484,6 +1514,7 @@ namespace Voltaic.Mcp
         private static bool IsEndpointPath(string path, string endpoint)
         {
             string trimmed = endpoint.TrimEnd('/');
+            if (trimmed.Length == 0) return path == "/" || path.Length == 0;
             return StringComparer.Ordinal.Equals(path, trimmed) || StringComparer.Ordinal.Equals(path, trimmed + "/");
         }
 
@@ -1590,7 +1621,10 @@ namespace Voltaic.Mcp
             if (IsRejectedNotification(envelope))
             {
                 if (mayIssueSession) connection.Dispose();
-                await WriteJsonRpcErrorAsync(context, 400, null, new McpProtocolException(envelope.Error!.Code, envelope.Error.Message ?? "Invalid notification."), token).ConfigureAwait(false);
+                McpProtocolException rejection = envelope.Error != null
+                    ? new McpProtocolException(envelope.Error.Code, envelope.Error.Message ?? "Invalid notification.")
+                    : new McpProtocolException(-32600, $"Invalid Request: '{envelope.Method}' is a request and must include a string or integer id.");
+                await WriteJsonRpcErrorAsync(context, 400, null, rejection, token).ConfigureAwait(false);
                 return;
             }
 
@@ -2612,11 +2646,18 @@ namespace Voltaic.Mcp
                     continue;
                 }
 
-                if (IsRejectedNotification(envelope)) rejectedNotification = true;
+                if (IsRejectedNotification(envelope))
+                {
+                    // Nothing to answer: the batch fails with an HTTP error unless it also carries requests.
+                    rejectedNotification = true;
+                    continue;
+                }
 
                 // A request that names the stateless revision follows its rules, which allow no batches.
                 if (envelope.Kind != McpEnvelopeKind.Invalid && envelope.Method != null && McpMessageProcessor.NamesStatelessVersion(envelope))
                 {
+                    // A notification naming the stateless revision cannot be accepted in a batch either.
+                    if (envelope.Kind == McpEnvelopeKind.Notification) rejectedNotification = true;
                     if (envelope.Kind == McpEnvelopeKind.Request)
                     {
                         if (envelope.IdKey != null) state.RecordFinished(envelope.IdKey);
@@ -2663,9 +2704,25 @@ namespace Voltaic.Mcp
         }
 
         // A notification the server cannot accept (a malformed message that has a method but no id).
+        // True for an invalid message that is not a request: a notification or a response the server cannot accept
+        // (for example with a wrong jsonrpc member or non-object params). It has no ID to answer, so the transport
+        // must reject it with an HTTP error status. A message with an id and a method is a request, answered with a
+        // JSON-RPC error instead.
+        private bool ServesEndpointAtRoot()
+        {
+            return new[] { _McpPath, _RpcPath, _EventsPath }.Any(endpoint => !String.IsNullOrEmpty(endpoint) && endpoint.TrimEnd('/').Length == 0);
+        }
+
         private static bool IsRejectedNotification(McpEnvelope envelope)
         {
-            return envelope.Kind == McpEnvelopeKind.Invalid && envelope.Method != null && envelope.Id == null && envelope.Error != null;
+            // A request method without an id is a request missing its ID: it has nothing to answer and must not run.
+            if (McpMessageProcessor.IsRequestWithoutId(envelope)) return true;
+            if (envelope.Kind != McpEnvelopeKind.Invalid) return false;
+            JsonElement message = envelope.Message;
+            if (message.ValueKind != JsonValueKind.Object) return false;
+            bool hasId = message.TryGetProperty("id", out JsonElement _);
+            bool hasMethod = message.TryGetProperty("method", out JsonElement _);
+            return !hasId || !hasMethod;
         }
 
         private async Task<string?> HandleBatchElementAsync(McpEnvelope envelope, McpSessionState state, Action<string> onInsufficientScope, CancellationToken token)

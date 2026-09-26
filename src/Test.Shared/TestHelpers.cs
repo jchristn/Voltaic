@@ -214,11 +214,9 @@ namespace Test.Shared
             {
                 try
                 {
+                    // Any answer means the listener is up (an endpoint mounted at / answers the probe itself).
                     using HttpResponseMessage response = await Client.GetAsync($"{BaseUrl}/", token).ConfigureAwait(false);
-                    if (response.StatusCode == HttpStatusCode.OK)
-                    {
-                        return;
-                    }
+                    return;
                 }
                 catch
                 {

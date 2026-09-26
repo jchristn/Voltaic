@@ -4197,6 +4197,12 @@
             returned with a null <see cref="P:Voltaic.Core.JsonRpcRequest.Id"/>, so <see cref="M:Voltaic.Core.ClientRequestDispatcher.DispatchAsync(Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken)"/> can answer it.
             </summary>
         </member>
+        <member name="M:Voltaic.Core.ClientRequestDispatcher.Reserve(System.Object)">
+            <summary>
+            Reserves the ID of a request read from the connection, before it is dispatched on the thread pool, so a
+            cancellation read after it always applies to it, even when the ID was used before.
+            </summary>
+        </member>
         <member name="M:Voltaic.Core.ClientRequestDispatcher.RefuseBatch">
             <summary>
             Returns the error to send for a batch from the server when the governing revision allows no batches
@@ -4971,6 +4977,41 @@
             <param name="origin">The origin to test. May be null.</param>
             <returns>True for loopback origins; otherwise false.</returns>
         </member>
+        <member name="T:Voltaic.Core.ProgressTracker">
+            <summary>
+            Tracks the progress tokens of a client's requests in flight and decides which <c>notifications/progress</c>
+            messages reach the application: only those for an active token (MCP: receivers should track active progress
+            tokens), and no more often than <see cref="P:Voltaic.Core.ProgressTracker.MinIntervalMs"/> per token, except the final one (MCP: both parties
+            should rate-limit progress). Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.ProgressTracker.Enabled">
+            <summary>
+            Gets or sets whether the filter applies (MCP clients); when false every notification is delivered.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.ProgressTracker.MinIntervalMs">
+            <summary>
+            Gets or sets the minimum interval between delivered progress notifications for one token, in milliseconds.
+            0 delivers every one. Default is 20.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.ProgressTracker.Track(System.Object)">
+            <summary>
+            Records the progress token a request's parameters carry in <c>_meta.progressToken</c>, if any.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.ProgressTracker.Untrack(System.Object)">
+            <summary>
+            Forgets the progress token of a request that finished.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.ProgressTracker.Accept(Voltaic.Core.JsonRpcRequest)">
+            <summary>
+            Returns whether a notification reaches the application. Anything other than <c>notifications/progress</c>
+            always does.
+            </summary>
+        </member>
         <member name="T:Voltaic.Core.RequestSentEventArgs">
             <summary>
             Provides data for request sent events from the client.
@@ -5639,6 +5680,34 @@
             before killing it, in milliseconds. Default is 2000. Minimum is 0; maximum is 300000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 300000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpClient.InitializeTimeoutMs">
+            <summary>
+            Gets or sets how long <c>initialize</c> may take, in milliseconds, when <see cref="M:Voltaic.Mcp.McpClient.InitializeAsync(System.Threading.CancellationToken)"/>
+            runs (explicitly or on connect). Default is 30000. Minimum is 100; maximum is 600000.
+            <see cref="M:Voltaic.Mcp.McpClient.InitializeAsync(System.Int32,System.Threading.CancellationToken)"/> sets it for one call.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.InitializeAsync(System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Performs the <c>initialize</c> handshake as <see cref="M:Voltaic.Mcp.McpClient.InitializeAsync(System.Threading.CancellationToken)"/> does, waiting at most
+            <paramref name="timeoutMs"/> milliseconds for the response.
+            </summary>
+            <param name="timeoutMs">How long <c>initialize</c> may take, in milliseconds. Minimum is 100; maximum is 600000.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that completes when the handshake is done.</returns>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when <paramref name="timeoutMs"/> is outside 100 to 600000.</exception>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected, or the server rejects initialize or chooses a version this client cannot use.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpClient.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
+            <see cref="E:Voltaic.Mcp.McpClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
+            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpClient.PingIntervalMs">
             <summary>
@@ -6407,17 +6476,19 @@
             sentinel), decoding, and header-to-body comparison. Used by both servers and clients. Thread-safe.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpHeaderParameters.Extract(System.Object)">
+        <member name="M:Voltaic.Mcp.McpHeaderParameters.Extract(System.Object,System.Boolean)">
             <summary>
             Returns the header parameters a tool input schema declares. Throws <see cref="T:System.ArgumentException"/> when any
             <c>x-mcp-header</c> annotation violates the specification's constraints, which makes the tool definition
-            invalid. A null or non-object schema declares none.
+            invalid. A null or non-object schema declares none. With <paramref name="strictIntegerBounds"/> (used for the
+            server's own tools), an annotated integer whose schema bounds exceed the JavaScript safe range is rejected too,
+            which is stricter than the specification (it constrains values, not bounds).
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHeaderParameters.TryExtract(System.Text.Json.JsonElement,System.String@)">
             <summary>
-            Returns the header parameters of a tool definition, or null (and the reason) when the definition's
-            annotations are invalid.
+            Returns the header parameters of another server's tool definition, or null (and the reason) when the
+            definition's annotations violate the specification's constraints. Only those constraints apply here.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHeaderParameters.Encode(System.String)">
@@ -6526,6 +6597,15 @@
             Gets or sets the client version reported in the <c>clientInfo</c> of the <c>initialize</c> handshake
             and in the <c>_meta</c> client info of stateless (2026-07-28) requests. Default is <c>1.0.0</c>.
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
+            <see cref="E:Voltaic.Mcp.McpHttpClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
+            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.PingIntervalMs">
             <summary>
@@ -6837,7 +6917,7 @@
             </summary>
             <param name="name">The tool name. Must not be null or empty.</param>
             <param name="arguments">The tool arguments, or null.</param>
-            <param name="provideInputResponses">Callback that returns the responses for an input-required result, or null to return the input-required result without retrying.</param>
+            <param name="provideInputResponses">Callback that returns the responses for an input-required result, or null to answer each input request with the handler registered for its method through <see cref="M:Voltaic.Mcp.McpHttpClient.RegisterRequestHandler(System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})"/>. When a request has no handler or its handler fails, the input-required result is returned without retrying.</param>
             <param name="maxInputRounds">The maximum number of input rounds to satisfy. Default is 3. Minimum meaningful value is 1.</param>
             <param name="token">Cancellation token for the operation.</param>
             <returns>The final (or last) JSON-RPC response.</returns>
@@ -6948,31 +7028,36 @@
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.ResponseKeepAliveMs">
             <summary>
-            Gets or sets how long a stateless (<c>2026-07-28</c>) request may run before its response turns into an SSE
-            stream that carries a keep-alive comment every interval, so a client that closed the stream (which that revision
-            defines as cancellation) is noticed while the handler runs. Default is 0: no keep-alives, so the response keeps
-            its exact HTTP status (for example 400 for <c>-32021</c>) and a closed stream is noticed, and the request
-            cancelled, at the next write (a progress or log notification, or the response). A value above 0 notices it
-            sooner, but once the first keep-alive is sent the status is 200 and a later error arrives as the final SSE
-            event. Minimum is 0; maximum is 600000.
+            Gets or sets how long a stateless (<c>2026-07-28</c>) request may run silently before its response turns into
+            an SSE stream that carries a keep-alive comment every interval, so a client that closed the stream (which that
+            revision defines as cancellation) is noticed, and the request cancelled, while the handler runs:
+            <see cref="T:System.Net.HttpListener"/> detects a closed connection only by writing to it. A response that completes within
+            the interval keeps its exact HTTP status (for example 400 for <c>-32021</c>); once the first keep-alive is sent
+            the status is 200 and a later error arrives as the final SSE event. Default is 15000. 0 disables keep-alives,
+            so a closed stream is noticed only at the next write (a progress or log notification, or the response).
+            Minimum is 0; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.SseReplayBufferSize">
             <summary>
-            Gets or sets how many recent events of each <c>GET</c> SSE stream on the MCP endpoint are kept for replay.
-            Every event on that stream carries an ID of the form <c>{streamId}-{sequence}</c>, and each stream starts
-            with a priming event (an ID and an empty <c>data</c> field) as MCP 2025-11-25 recommends. A client that
-            reconnects with <c>Last-Event-ID</c> receives the retained events after that ID, on the same stream; IDs from
-            another session or an unknown stream start a new stream. The last 8 streams of each session are kept.
-            Default is 100. Minimum is 0 (IDs are still sent, but nothing is replayed); maximum is 10000.
+            Gets or sets how many recent events of each resumable SSE stream on the MCP endpoint are kept for replay:
+            <c>GET</c> streams and the SSE response streams of POST requests on a session. Every event on such a stream
+            carries an ID of the form <c>{streamId}-{sequence}</c>; on sessions that negotiated 2025-11-25 or later each
+            stream starts with a priming event (an ID and an empty <c>data</c> field), as that revision recommends. A client
+            that reconnects with <c>GET</c> and <c>Last-Event-ID</c> receives the retained events after that ID, on the
+            same stream; IDs from another session or an unknown stream start a new stream. Each session keeps its most
+            recent <see cref="P:Voltaic.Mcp.McpHttpServer.MaxResumableStreamsPerSession"/> streams. Default is 100. Minimum is 0 (IDs are still sent,
+            but nothing is replayed); maximum is 10000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 10000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.SseRetryIntervalMs">
             <summary>
-            Gets or sets the reconnection delay in milliseconds sent in the <c>retry</c> field when a <c>GET</c> SSE stream
-            opens on the MCP endpoint. Clients wait this long before reconnecting after the stream closes.
+            Gets or sets the reconnection delay in milliseconds sent in the <c>retry</c> field of the priming event that
+            starts each resumable SSE stream on sessions that negotiated 2025-11-25 or later (earlier revisions define no
+            priming event, so their streams carry no <c>retry</c>). Clients wait this long before reconnecting after the
+            stream closes.
             Default is 1000. Minimum is 0; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
@@ -7041,7 +7126,7 @@
             pass null as the URL to <see cref="M:Voltaic.Core.AuthenticationResult.BearerChallenge(System.String,System.String,System.String,System.String)"/>.
             Default is null, which serves nothing at those paths (HTTP 404).
             </summary>
-            <exception cref="T:System.ArgumentException">Thrown when the value has an empty <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.Resource"/> or no <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
+            <exception cref="T:System.ArgumentException">Thrown when the value's <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.Resource"/> is empty or not an absolute https (or http) URL without a fragment, or it has no <see cref="P:Voltaic.Mcp.McpProtectedResourceMetadata.AuthorizationServers"/>.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.RestrictToLoopbackClients">
             <summary>
@@ -7096,6 +7181,14 @@
             Gets or sets the server name for MCP serverInfo.
             Default is "Voltaic.Mcp.HttpServer".
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
+            (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
+            the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.MaxResumableStreamsPerSession">
             <summary>
@@ -7833,7 +7926,7 @@
             Marks the request cancelled by the client and cancels its handler token.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpInFlightRequest.TryRecordProgress(System.Double)">
+        <member name="P:Voltaic.Mcp.McpInFlightRequest.ProgressIntervalMs">
             <summary>
             Records a progress value. Returns false when it does not increase, as progress values must.
             </summary>
@@ -9016,14 +9109,18 @@
             <summary>
             Translates an ECMA-262 regular expression (the dialect JSON Schema <c>pattern</c> uses) into a .NET pattern with
             the same meaning whichever .NET options run it: <c>$</c> matches only at the end of the input, <c>.</c> excludes
-            the four ECMA-262 line terminators, <c>\d</c> and <c>\w</c> are ASCII, and <c>\s</c> is the ECMA-262 white
-            space and line terminator set.
+            the four ECMA-262 line terminators, <c>\d</c> and <c>\w</c> are ASCII, <c>\s</c> is the ECMA-262 white space and
+            line terminator set, <c>\u{...}</c> is a code point, and Unicode property escapes accept the ECMA-262 general
+            category names. Syntax that ECMA-262 does not define but .NET would give its own meaning (<c>\A</c>, <c>\Z</c>,
+            <c>\z</c>, <c>\G</c>, <c>\a</c>, <c>\e</c>, inline options, comments, atomic and conditional groups) and script
+            properties, which .NET does not support, are rejected with <see cref="T:System.ArgumentException"/>.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpSchemaPattern.Translate(System.String)">
             <summary>
             Returns the .NET equivalent of an ECMA-262 pattern.
             </summary>
+            <exception cref="T:System.ArgumentException">Thrown when the pattern uses syntax that is not ECMA-262 or that .NET cannot express.</exception>
         </member>
         <member name="T:Voltaic.Mcp.McpSchemaReference">
             <summary>
@@ -9197,6 +9294,14 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpServer.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
+            (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
+            the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpServer.PingIntervalMs">
             <summary>
@@ -9466,8 +9571,10 @@
         </member>
         <member name="M:Voltaic.Mcp.McpServer.RunAsync(System.Threading.CancellationToken)">
             <summary>
-            Runs the MCP server, reading from stdin and writing to stdout.
-            Blocks until stdin is closed or cancellation is requested. In-flight requests are cancelled when it returns.
+            Runs the MCP server, reading from stdin and writing to stdout. Returns when stdin is closed, when
+            <paramref name="token"/> is cancelled, or when the client leaves <see cref="P:Voltaic.Mcp.McpServer.PingFailureThreshold"/>
+            consecutive pings unanswered (the connection has failed), even while a read is pending. In-flight requests are
+            cancelled when it returns.
             </summary>
             <param name="token">Cancellation token to stop the server.</param>
             <returns>A task that represents the asynchronous operation.</returns>
@@ -9613,6 +9720,13 @@
             Registers a request. Returns null when a request with the same ID is already in flight (IDs must be unique).
             </summary>
         </member>
+        <member name="M:Voltaic.Mcp.McpSessionState.ReserveRequest(System.String)">
+            <summary>
+            Reserves a request ID when the request is read, before it starts on the thread pool, so a cancellation that
+            arrives in between applies to it. A reused ID (allowed once its earlier request was answered, and on
+            2026-07-28) is no longer treated as finished.
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpSessionState.Cancel(System.String)">
             <summary>
             Cancels an in-flight request by its raw JSON ID. <c>initialize</c> cannot be cancelled. Returns true when a
@@ -9642,19 +9756,30 @@
             Returns the stateless-era protocol version a request selects, or null when it belongs to the
             handshake era (no <c>_meta</c> protocol version, a handshake-era version, or <c>initialize</c>).
             </summary>
-            <exception cref="T:Voltaic.Mcp.McpProtocolException">Thrown with <c>-32022</c> (unsupported protocol version, listing the supported versions) when <c>_meta</c> names a version this server does not implement.</exception>
+            <exception cref="T:Voltaic.Mcp.McpProtocolException">Thrown with <c>-32022</c> (unsupported protocol version, listing the supported versions) when <c>_meta</c> names a version this server does not implement, or with <c>-32602</c> when <c>_meta</c> carries the stateless client fields without a string protocol version.</exception>
         </member>
-        <member name="M:Voltaic.Mcp.McpStatelessDispatcher.SerializeResponse(Voltaic.Core.JsonRpcResponse,System.String)">
+        <member name="M:Voltaic.Mcp.McpStatelessDispatcher.SerializeResponse(Voltaic.Core.JsonRpcResponse)">
             <summary>
-            Serializes a response. For a stateless-era request the result receives <c>resultType</c> (and
-            <c>ttlMs</c>/<c>cacheScope</c> for cacheable results) unless the handler set them; the additions are
-            reverted after serialization so a result instance reused by a handler never carries them into a
-            handshake-era response.
+            Serializes a response. The stateless-era fields (<c>resultType</c>, caching hints) are added to the JSON
+            afterwards by <see cref="T:Voltaic.Mcp.McpStatelessResultStamper"/>, never to the result object itself.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpStatelessDispatcher.ErrorResponse(System.Object,Voltaic.Mcp.McpProtocolException)">
             <summary>
             Builds the error response for a request rejected before dispatch.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpStatelessResultStamper">
+            <summary>
+            Adds the fields every 2026-07-28 result carries to a serialized result: <c>resultType</c> (<c>complete</c> unless
+            the handler set one) and, on complete results of the cacheable methods, the caching hints <c>ttlMs</c> and
+            <c>cacheScope</c>. It works on the per-response JSON, so results a handler shares between requests are never
+            modified.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpStatelessResultStamper.Stamp(System.Text.Json.Nodes.JsonObject,System.String)">
+            <summary>
+            Stamps the result object of a stateless response for the method that produced it.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpTaskStatus">
@@ -9804,6 +9929,34 @@
             </summary>
             <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpTcpClient.InitializeTimeoutMs">
+            <summary>
+            Gets or sets how long <c>initialize</c> may take, in milliseconds, when <see cref="M:Voltaic.Mcp.McpTcpClient.InitializeAsync(System.Threading.CancellationToken)"/>
+            runs (explicitly or on connect). Default is 30000. Minimum is 100; maximum is 600000.
+            <see cref="M:Voltaic.Mcp.McpTcpClient.InitializeAsync(System.Int32,System.Threading.CancellationToken)"/> sets it for one call.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpClient.InitializeAsync(System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Performs the <c>initialize</c> handshake as <see cref="M:Voltaic.Mcp.McpTcpClient.InitializeAsync(System.Threading.CancellationToken)"/> does, waiting at most
+            <paramref name="timeoutMs"/> milliseconds for the response.
+            </summary>
+            <param name="timeoutMs">How long <c>initialize</c> may take, in milliseconds. Minimum is 100; maximum is 600000.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that completes when the handshake is done.</returns>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when <paramref name="timeoutMs"/> is outside 100 to 600000.</exception>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected, or the server rejects initialize or chooses a version this client cannot use.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpClient.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
+            <see cref="E:Voltaic.Core.JsonRpcClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
+            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpTcpClient.PingIntervalMs">
             <summary>
             Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
@@ -9927,6 +10080,14 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
+            (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
+            the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpTcpServer.PingIntervalMs">
             <summary>
@@ -10263,20 +10424,27 @@
              server.RegisterTool("delete_file", "Deletes a file after confirmation", schema, args =>
              {
                  McpToolCallContext? call = McpToolCallContext.Current;
-                 if (call == null || !call.CanRequestInput) return McpToolCallResult.FromText("Pass confirm=true to delete.");
-                 if (call.InputResponses.TryGetValue("confirm", out JsonElement answer)
+                 string path = args?.GetString("path") ?? "";
+                 if (call == null || !call.CanRequestInput) return McpToolCallResult.FromText("Confirmation needs MCP 2026-07-28.");
+            
+                 // requestState and inputResponses come from the client: act only on an answer to the request this call made,
+                 // and protect the state's integrity (for example with an HMAC) when more than a match check depends on it.
+                 if (call.RequestState == "delete:" + path
+                     &amp;&amp; call.InputResponses.TryGetValue("confirm", out JsonElement answer)
+                     &amp;&amp; answer.ValueKind == JsonValueKind.Object
                      &amp;&amp; answer.TryGetProperty("action", out JsonElement action) &amp;&amp; action.GetString() == "accept")
                  {
-                     return McpToolCallResult.FromText("Deleted.");
+                     File.Delete(path);
+                     return McpToolCallResult.FromText("Deleted " + path + ".");
                  }
             
                  return new McpInputRequiredResult
                  {
                      InputRequests = new Dictionary&lt;string, McpInputRequest&gt;
                      {
-                         { "confirm", new McpInputRequest { Method = "elicitation/create", Params = new { mode = "form", message = "Delete the file?", requestedSchema = new { type = "object" } } } }
+                         { "confirm", new McpInputRequest { Method = "elicitation/create", Params = new { mode = "form", message = "Delete " + path + "?", requestedSchema = new { type = "object" } } } }
                      },
-                     RequestState = "delete-1"
+                     RequestState = "delete:" + path
                  };
              });
              </code>
@@ -10347,7 +10515,8 @@
             Sends a <c>notifications/progress</c> for this call to the client that made it, on the connection or
             response stream of the call (on HTTP the response becomes an SSE stream). Does nothing when the client sent
             no progress token or the transport cannot deliver notifications for the call. Progress must increase with
-            every notification.
+            every notification. Updates are rate-limited by the server's <c>ProgressIntervalMs</c>: one that follows the
+            previous one sooner is not sent, except the final one (progress equal to the total).
             </summary>
             <param name="progress">The progress so far. Must be greater than the previous value.</param>
             <param name="total">The total, when known, or null.</param>
@@ -10794,6 +10963,34 @@
             </summary>
             <exception cref="T:System.ArgumentException">Thrown when the value is not a handshake-era protocol version.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsClient.InitializeTimeoutMs">
+            <summary>
+            Gets or sets how long <c>initialize</c> may take, in milliseconds, when <see cref="M:Voltaic.Mcp.McpWebsocketsClient.InitializeAsync(System.Threading.CancellationToken)"/>
+            runs (explicitly or on connect). Default is 30000. Minimum is 100; maximum is 600000.
+            <see cref="M:Voltaic.Mcp.McpWebsocketsClient.InitializeAsync(System.Int32,System.Threading.CancellationToken)"/> sets it for one call.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsClient.InitializeAsync(System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Performs the <c>initialize</c> handshake as <see cref="M:Voltaic.Mcp.McpWebsocketsClient.InitializeAsync(System.Threading.CancellationToken)"/> does, waiting at most
+            <paramref name="timeoutMs"/> milliseconds for the response.
+            </summary>
+            <param name="timeoutMs">How long <c>initialize</c> may take, in milliseconds. Minimum is 100; maximum is 600000.</param>
+            <param name="token">Cancellation token.</param>
+            <returns>A task that completes when the handshake is done.</returns>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when <paramref name="timeoutMs"/> is outside 100 to 600000.</exception>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected, or the server rejects initialize or chooses a version this client cannot use.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsClient.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
+            <see cref="E:Voltaic.Mcp.McpWebsocketsClient.NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
+            total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+            every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.PingIntervalMs">
             <summary>
             Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
@@ -11045,6 +11242,14 @@
             Default is 100. Minimum is 1.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.ProgressIntervalMs">
+            <summary>
+            Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
+            (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
+            the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsServer.PingIntervalMs">
             <summary>

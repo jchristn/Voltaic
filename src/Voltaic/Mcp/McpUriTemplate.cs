@@ -136,7 +136,11 @@ namespace Voltaic.Mcp
                 if (captured.Success && captured.Length > 0) variables[group.Value] = Uri.UnescapeDataString(captured.Value);
             }
 
-            for (int q = 0; q < _QueryExpressions.Count; q++)
+            // The first query expression's capture usually holds the whole query ({?a}{&b} matches "?a=1&b=2"), so every
+            // captured part is parsed against the variables of all query expressions together.
+            HashSet<string> queryNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (List<string> names in _QueryExpressions) queryNames.UnionWith(names);
+            for (int q = 0; q < _QueryGroups.Count; q++)
             {
                 Group query = match.Groups[_QueryGroups[q]];
                 if (!query.Success || query.Length == 0) continue;
@@ -147,7 +151,7 @@ namespace Voltaic.Mcp
                     int equals = pair.IndexOf('=');
                     string name = Uri.UnescapeDataString(equals < 0 ? pair : pair.Substring(0, equals));
                     string value = equals < 0 ? String.Empty : Uri.UnescapeDataString(pair.Substring(equals + 1));
-                    if (_QueryExpressions[q].Contains(name)) variables[name] = value;
+                    if (queryNames.Contains(name)) variables[name] = value;
                 }
             }
 

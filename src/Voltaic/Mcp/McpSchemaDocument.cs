@@ -204,10 +204,17 @@ namespace Voltaic.Mcp
             if (depth > 256) return;
             if (element.ValueKind != JsonValueKind.Object) return;
 
-            // draft-07: every keyword beside $ref is ignored, including $id.
+            // draft-07: every keyword beside $ref is ignored, including $id, so this object defines no resource or
+            // anchor. Its sibling subschemas (typically definitions) can still be reached by JSON pointer, so their
+            // references are indexed and checked.
             if (IsDraft07 && element.TryGetProperty("$ref", out JsonElement draft07Reference) && draft07Reference.ValueKind == JsonValueKind.String)
             {
                 _References.Add(new McpSchemaReference(draft07Reference.GetString()!, resource, false));
+                foreach (JsonElement sibling in McpSchemaKeywords.Subschemas(element, IsDraft07))
+                {
+                    Index(sibling, resource, depth + 1, false);
+                }
+
                 return;
             }
 

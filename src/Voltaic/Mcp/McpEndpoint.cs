@@ -20,7 +20,7 @@ namespace Voltaic.Mcp
         private readonly List<ResourceTemplateRegistration> _ResourceTemplates = new List<ResourceTemplateRegistration>();
         private readonly List<PromptRegistration> _Prompts = new List<PromptRegistration>();
         private readonly List<CompletionRegistration> _CompletionProviders = new List<CompletionRegistration>();
-        private static readonly Regex _ToolNamePattern = new Regex("^[A-Za-z0-9_.-]{1,128}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        private static readonly Regex _ToolNamePattern = new Regex("^[A-Za-z0-9_.-]{1,128}\\z", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         public string ProtocolVersion { get; set; } = McpProtocol.LatestProtocolVersion;
 
@@ -71,6 +71,8 @@ namespace Voltaic.Mcp
         public int PageSize { get; set; } = DefaultPageSize;
 
         public int PingIntervalMs { get; set; } = 30000;
+
+        public int ProgressIntervalMs { get; set; } = 20;
 
         public int PingTimeoutMs { get; set; } = 10000;
 
@@ -433,6 +435,10 @@ namespace Voltaic.Mcp
         private static void RequireObjectForHandshake(object outputSchema, object structuredContent, string? statelessVersion, string toolName)
         {
             if (statelessVersion != null || !McpVersionCompatibility.IsObjectOnlyBeforeStateless(outputSchema)) return;
+
+            // Revisions before 2025-06-18 receive neither the output schema nor structured content.
+            string? negotiated = McpRequestScope.Current?.ProtocolVersion;
+            if (negotiated != null && String.CompareOrdinal(negotiated, McpProtocol.ProtocolVersion20250618) < 0) return;
             JsonElement value = structuredContent is JsonElement element ? element : JsonSerializer.SerializeToElement(structuredContent);
             if (value.ValueKind != JsonValueKind.Object)
             {
@@ -473,7 +479,7 @@ namespace Voltaic.Mcp
                 List<string>? paths = RequiredCapabilityPaths(entry.Value, declared);
                 if (paths == null)
                 {
-                    throw new McpProtocolException(-32603, $"Tool '{toolName}' requested input with unsupported method '{entry.Value.Method}'; only elicitation/create, sampling/createMessage, and roots/list are allowed.");
+                    throw new McpProtocolException(-32603, $"Tool '{toolName}' requested input with unsupported method '{entry.Value.Method}' or elicitation mode; only elicitation/create (form or url mode), sampling/createMessage, and roots/list are allowed.");
                 }
 
                 foreach (string path in paths)
@@ -507,7 +513,7 @@ namespace Voltaic.Mcp
         // The client capabilities an input request needs, as dotted paths: elicitation.url for URL-mode elicitation,
         // elicitation.form for form mode when the client lists modes (an empty elicitation object means form only),
         // sampling.tools for sampling that offers tools and sampling.context for sampling that asks to include context,
-        // else the method's capability. Null for other methods.
+        // else the method's capability. Null for other methods and for an elicitation mode other than form or url.
         private static List<string>? RequiredCapabilityPaths(McpInputRequest request, JsonElement? declared)
         {
             JsonElement parameters = request.Params == null ? default : (request.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(request.Params));
@@ -519,7 +525,8 @@ namespace Voltaic.Mcp
                         ? modeElement.GetString() ?? "form"
                         : "form";
                     if (mode == "url") return new List<string> { "elicitation.url" };
-                    if (mode != "form") return new List<string> { "elicitation." + mode };
+                    // Elicitation has two modes; any other is a malformed request the server built, not a capability.
+                    if (mode != "form") return null;
                     bool listsModes = declared.HasValue && declared.Value.ValueKind == JsonValueKind.Object
                         && declared.Value.TryGetProperty("elicitation", out JsonElement elicitation)
                         && elicitation.ValueKind == JsonValueKind.Object && elicitation.EnumerateObject().Any();

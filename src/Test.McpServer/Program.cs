@@ -30,6 +30,13 @@ namespace Test.McpServer
             // The test host enables the diagnostic echo and getTime tools so the stdio suites can exercise them.
             McpServer server = new McpServer(includeDiagnosticTools: true);
 
+            // Tests shorten the ping cycle to exercise the ping-failure shutdown.
+            if (int.TryParse(Environment.GetEnvironmentVariable("VOLTAIC_PING_MS"), out int pingMs))
+            {
+                server.PingIntervalMs = pingMs;
+                server.PingTimeoutMs = Math.Max(100, pingMs);
+            }
+
             // Subscribe to logs (goes to stderr)
             server.Log += (sender, message) =>
             {

@@ -467,7 +467,7 @@ namespace Voltaic.Mcp
                 {
                     if (requiredName.ValueKind != JsonValueKind.String) continue;
                     string? name = requiredName.GetString();
-                    if (String.IsNullOrEmpty(name)) continue;
+                    if (name == null) continue;
 
                     if (!names.Contains(name))
                     {
@@ -496,7 +496,7 @@ namespace Voltaic.Mcp
                     {
                         if (dependent.ValueKind != JsonValueKind.String) continue;
                         string? dependentName = dependent.GetString();
-                        if (!String.IsNullOrEmpty(dependentName) && !names.Contains(dependentName))
+                        if (dependentName != null && !names.Contains(dependentName))
                         {
                             return $"{path} has property '{dependency.Name}', which requires property '{dependentName}'.";
                         }
@@ -527,7 +527,7 @@ namespace Voltaic.Mcp
                         {
                             if (dependent.ValueKind != JsonValueKind.String) continue;
                             string? dependentName = dependent.GetString();
-                            if (!String.IsNullOrEmpty(dependentName) && !names.Contains(dependentName))
+                            if (dependentName != null && !names.Contains(dependentName))
                             {
                                 return $"{path} has property '{dependency.Name}', which requires property '{dependentName}'.";
                             }
@@ -1152,9 +1152,20 @@ namespace Voltaic.Mcp
                 return cached;
             }
 
-            // JSON Schema patterns are ECMA-262 regular expressions. The translation gives $, ., \d, \w, and \s their
-            // ECMA-262 meaning whichever .NET options compile it. Matching is bounded by the match timeout.
-            string translated = McpSchemaPattern.Translate(pattern);
+            // JSON Schema patterns are ECMA-262 regular expressions. The translation gives $, ., \d, \w, \s, \u{...},
+            // and \p{...} their ECMA-262 meaning whichever .NET options compile it, and rejects syntax ECMA-262 does not
+            // define. Matching is bounded by the match timeout.
+            string translated;
+            try
+            {
+                translated = McpSchemaPattern.Translate(pattern);
+            }
+            catch (ArgumentException)
+            {
+                _RegexCache[pattern] = null;
+                return null;
+            }
+
             Regex? regex = null;
             try
             {
@@ -1162,8 +1173,8 @@ namespace Voltaic.Mcp
             }
             catch (ArgumentException)
             {
-                // A construct .NET's ECMAScript mode does not accept (such as \p{...} Unicode property escapes, which
-                // ECMA-262 allows with the u flag): the .NET engine runs it, linear-time where possible.
+                // A construct .NET's ECMAScript mode does not accept (such as a named group or a lookbehind): the .NET
+                // engine runs the translated pattern, linear-time where possible.
                 try
                 {
                     regex = new Regex(translated, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, _RegexTimeout);

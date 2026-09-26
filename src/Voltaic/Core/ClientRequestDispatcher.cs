@@ -26,6 +26,9 @@ namespace Voltaic.Core
         // IDs of requests answered recently: a cancellation for one of them arrived too late and is ignored, so it can
         // never cancel a later request that reuses the ID.
         private readonly ConcurrentDictionary<string, DateTime> _Finished = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        // Requests read from the connection but not yet dispatched, by ID, with whether a cancellation arrived for them.
+        private readonly Dictionary<string, bool> _Reserved = new Dictionary<string, bool>(StringComparer.Ordinal);
+        private readonly object _RequestLock = new object();
         private static readonly TimeSpan _EntryLifetime = TimeSpan.FromSeconds(30);
         private const int _MaxFinished = 4096;
 
@@ -69,6 +72,15 @@ namespace Voltaic.Core
 
             if (idKey == null) return true;
             Log?.Invoke($"The server cancelled request {idKey} (reason: {reason}).");
+            lock (_RequestLock)
+            {
+                if (_Reserved.ContainsKey(idKey) && !_Running.ContainsKey(idKey))
+                {
+                    _Reserved[idKey] = true;
+                    return true;
+                }
+            }
+
             if (_Finished.ContainsKey(idKey) && !_Running.ContainsKey(idKey))
             {
                 // Already answered: the cancellation crossed the response and is ignored.
@@ -180,6 +192,23 @@ namespace Voltaic.Core
         }
 
         /// <summary>
+        /// Reserves the ID of a request read from the connection, before it is dispatched on the thread pool, so a
+        /// cancellation read after it always applies to it, even when the ID was used before.
+        /// </summary>
+        internal void Reserve(object? id)
+        {
+            string? idKey = IdKey(id);
+            if (idKey == null) return;
+            lock (_RequestLock)
+            {
+                _Finished.TryRemove(idKey, out DateTime _);
+
+                // A cancellation that arrived before the request still applies to it.
+                _Reserved[idKey] = _EarlyCancels.TryRemove(idKey, out DateTime _);
+            }
+        }
+
+        /// <summary>
         /// Returns the error to send for a batch from the server when the governing revision allows no batches
         /// (MCP 2025-06-18 and later), or null when the batch is to be processed.
         /// </summary>
@@ -214,6 +243,11 @@ namespace Voltaic.Core
 
         private void RecordFinished(string idKey)
         {
+            lock (_RequestLock)
+            {
+                _Reserved.Remove(idKey);
+            }
+
             if (_Running.ContainsKey(idKey)) return;
             _EarlyCancels.TryRemove(idKey, out DateTime _);
             DateTime now = DateTime.UtcNow;
@@ -258,8 +292,16 @@ namespace Voltaic.Core
             using CancellationTokenSource running = CancellationTokenSource.CreateLinkedTokenSource(token);
             if (idKey != null)
             {
-                _Running[idKey] = running;
-                if (_EarlyCancels.TryRemove(idKey, out DateTime _)) running.Cancel();
+                bool cancelled;
+                lock (_RequestLock)
+                {
+                    _Running[idKey] = running;
+                    cancelled = _Reserved.TryGetValue(idKey, out bool reservedCancel) && reservedCancel;
+                    _Reserved.Remove(idKey);
+                    if (_EarlyCancels.TryRemove(idKey, out DateTime _)) cancelled = true;
+                }
+
+                if (cancelled) running.Cancel();
             }
 
             try

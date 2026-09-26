@@ -131,6 +131,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets the minimum interval, in milliseconds, between progress notifications sent for one request
+        /// (MCP: senders should rate-limit progress). An update that follows the previous one sooner is not sent, except
+        /// the final one (progress equal to the total). Default is 20. 0 sends every update. Maximum is 60000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
+        public int ProgressIntervalMs
+        {
+            get => _Endpoint.ProgressIntervalMs;
+            set
+            {
+                if (value < 0 || value > 60000) throw new ArgumentOutOfRangeException(nameof(value), "ProgressIntervalMs must be between 0 and 60000.");
+                _Endpoint.ProgressIntervalMs = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
         /// check that the connection is healthy (MCP ping utility); a ping that is not answered within
         /// <see cref="PingTimeoutMs"/> is logged. Default is 30000. 0 disables pinging. Maximum is 3600000.
@@ -531,8 +547,10 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Runs the MCP server, reading from stdin and writing to stdout.
-        /// Blocks until stdin is closed or cancellation is requested. In-flight requests are cancelled when it returns.
+        /// Runs the MCP server, reading from stdin and writing to stdout. Returns when stdin is closed, when
+        /// <paramref name="token"/> is cancelled, or when the client leaves <see cref="PingFailureThreshold"/>
+        /// consecutive pings unanswered (the connection has failed), even while a read is pending. In-flight requests are
+        /// cancelled when it returns.
         /// </summary>
         /// <param name="token">Cancellation token to stop the server.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
@@ -557,11 +575,16 @@ namespace Voltaic.Mcp
                 run.Cancel();
             };
 
+            // A read from redirected console input does not observe cancellation, so each read is raced against the run
+            // token: cancellation, or a failed ping, ends the run even while a read is pending.
+            Task stopped = Task.Delay(Timeout.Infinite, run.Token);
             try
             {
                 while (!run.Token.IsCancellationRequested)
                 {
-                    string? line = await stdin.ReadLineAsync(run.Token).ConfigureAwait(false);
+                    Task<string?> read = stdin.ReadLineAsync(run.Token).AsTask();
+                    if (await Task.WhenAny(read, stopped).ConfigureAwait(false) != read) break;
+                    string? line = await read.ConfigureAwait(false);
                     if (line == null)
                     {
                         LogToStderr("stdin closed, shutting down");

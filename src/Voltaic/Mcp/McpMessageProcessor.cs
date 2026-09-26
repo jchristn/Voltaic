@@ -79,13 +79,17 @@ namespace Voltaic.Mcp
             McpEnvelope envelope = McpEnvelope.Parse(root);
             if (envelope.Kind == McpEnvelopeKind.Request)
             {
+                // Reserve the ID in message order, before the request starts on the thread pool, so a cancellation
+                // read after it always applies to it.
+                if (envelope.IdKey != null) session.ReserveRequest(envelope.IdKey);
                 _ = Task.Run(async () =>
                 {
                     string? json = await HandleAndSerializeAsync(envelope, session, null, false, notify, token, send).ConfigureAwait(false);
                     if (json != null) await SafeSendAsync(send, json, token).ConfigureAwait(false);
 
-                    // Server notifications may follow only once the initialize response is on the wire.
-                    if (envelope.Method == "initialize") session.MarkNotificationsReady();
+                    // Server notifications may follow only once the initialize response that initialized the session is
+                    // on the wire (a refused duplicate's error response does not count).
+                    if (envelope.Method == "initialize" && json != null && IsSuccessResponse(json)) session.MarkNotificationsReady();
                 });
                 return;
             }
@@ -232,6 +236,14 @@ namespace Voltaic.Mcp
 
             if (!isRequest)
             {
+                // Requests must carry an ID: a request method sent without one is malformed and never runs (it would
+                // otherwise bypass the checks requests get, such as the stateless header and _meta rules).
+                if (IsRequestWithoutId(envelope))
+                {
+                    _Log($"Dropped '{method}' sent without an id; MCP requests must include a string or integer ID.");
+                    return null;
+                }
+
                 await HandleNotificationAsync(envelope, request, session, token).ConfigureAwait(false);
                 return null;
             }
@@ -269,6 +281,7 @@ namespace Voltaic.Mcp
             }
 
             inFlight.Notify = notify;
+            inFlight.ProgressIntervalMs = _Endpoint.ProgressIntervalMs;
             try
             {
                 if (inFlight.IsCancelled)
@@ -323,8 +336,8 @@ namespace Voltaic.Mcp
         {
             if (statelessVersion != null)
             {
-                string stamped = McpStatelessDispatcher.SerializeResponse(response, statelessVersion);
-                return FinishStatelessResponse(stamped);
+                string serialized = McpStatelessDispatcher.SerializeResponse(response);
+                return FinishStatelessResponse(serialized, method);
             }
 
             string json = JsonSerializer.Serialize(response);
@@ -349,6 +362,21 @@ namespace Voltaic.Mcp
             }
 
             return json;
+        }
+
+        private static bool IsSuccessResponse(string json)
+        {
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(json))
+                {
+                    return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("result", out JsonElement _);
+                }
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
         }
 
         private static bool IsObjectResult(object? result)
@@ -376,6 +404,12 @@ namespace Voltaic.Mcp
             JsonNode? node = JsonNode.Parse(json);
             McpVersionCompatibility.DowngradeNotification(node, version);
             return node?.ToJsonString() ?? json;
+        }
+
+        // True for a message without an id whose method is not a notification: a request missing its ID.
+        internal static bool IsRequestWithoutId(McpEnvelope envelope)
+        {
+            return envelope.Kind == McpEnvelopeKind.Notification && envelope.Method != null && !envelope.Method.StartsWith("notifications/", StringComparison.Ordinal);
         }
 
         internal static bool NamesStatelessVersion(McpEnvelope envelope)
@@ -578,7 +612,7 @@ namespace Voltaic.Mcp
 
         // Stateless-era results must be JSON objects with resultType, and SHOULD carry serverInfo in _meta. This also
         // covers results of application methods that are not McpResult subclasses.
-        private string FinishStatelessResponse(string json)
+        private string FinishStatelessResponse(string json, string? method)
         {
             JsonNode? node = JsonNode.Parse(json);
             if (node is not JsonObject envelope) return json;
@@ -596,7 +630,7 @@ namespace Voltaic.Mcp
                 return replaced.ToJsonString();
             }
 
-            if (!result.ContainsKey("resultType")) result["resultType"] = McpResult.ResultTypeComplete;
+            McpStatelessResultStamper.Stamp(result, method);
 
             if (result["_meta"] is not JsonObject meta)
             {

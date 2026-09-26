@@ -1,5 +1,63 @@
 # Changelog
 
+## v2.1.10
+Resolves every finding of a four-part review of v2.1.9 against the MCP specification.
+
+### Security-relevant
+- **A request method sent without an `id` is never run.** A message such as `{"method":"tools/call",...}` without an `id` was run as a notification. That skipped every check a request gets: the 2026-07-28 header and `_meta` rules on HTTP, `initialize`-first on stream transports, and `clientCapabilities`. A notification is now only a `notifications/*` method. Anything else without an `id` is dropped on stream transports and gets 400 on HTTP.
+
+### Lifecycle and cancellation
+- **A cancellation that follows its request always applies.** Requests start on the thread pool while cancellations are handled in order, so a cancellation that arrived right after its request could miss it (about 1 in 10 in tests). A cancellation for a legitimately reused 2026-07-28 ID was also ignored. Request IDs are now reserved in message order before the request starts, on servers and in every client.
+- The stdio server stops when the client leaves a ping unanswered, even while a read from stdin is pending. `RunAsync` no longer blocks until the client writes or closes stdin.
+- Progress is rate-limited, and clients track progress tokens:
+  - Servers send at most one progress update per `ProgressIntervalMs` (new, default 20 ms) per request, and always send the final one.
+  - Clients deliver `notifications/progress` only for the progress tokens of their requests in flight, at the same bound (`ProgressIntervalMs` on every client).
+- New `InitializeTimeoutMs` (default 30000) and `InitializeAsync(int timeoutMs, ...)` on `McpClient`, `McpTcpClient`, and `McpWebsocketsClient`.
+- Notifications wait for a successful `initialize` response. A refused duplicate `initialize` no longer releases them.
+
+### 2026-07-28
+- Caching hints are added to the serialized response, by method: every complete result of `server/discover`, `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, and `resources/read` carries `ttlMs` and `cacheScope`. That includes results from `RegisterMethod`, and result objects shared between concurrent requests. The old approach stamped the shared result object and then reverted it, which raced: about 1 in 5 concurrent responses lost the hints.
+- An elicitation mode other than `form` or `url` is `-32603`, not `-32021` with a made-up capability.
+- On stdio, TCP, and WebSocket, a request whose `_meta` has the stateless client fields but no string protocol version gets `-32602`. It was served as handshake-era.
+- `McpHttpClient.CallToolStatelessAsync` without a callback answers input requests with the handlers registered through `RegisterRequestHandler`, whose capabilities the client declares.
+- `McpHttpClient` applies only the specification's `x-mcp-header` rules to other servers' tools. A parameter typed by its `enum` or `const` values is accepted everywhere, and an integer with wide schema bounds is accepted from other servers.
+- `ResponseKeepAliveMs` defaults to 15000. A stateless handler that runs silently for longer gets keep-alives, so a client that disconnects cancels it, as the revision requires.
+
+### HTTP
+- A notification or response the server cannot accept (for example with the wrong `jsonrpc` member) gets 400, including in a batch that holds nothing else. It used to get 200 with a `-32600` body.
+- An MCP endpoint can be mounted at `/`. The health check yields to it, and the listener prefix is valid.
+- `ProtectedResourceMetadata.Resource` must be an absolute http(s) URL without a fragment. Anything else would have produced a metadata URL that is never served.
+- `McpHttpClient` resumes an interrupted POST response stream on a server without sessions.
+- The `SseReplayBufferSize` and `SseRetryIntervalMs` documentation describes POST streams, priming by revision, and `MaxResumableStreamsPerSession`.
+
+### Schemas and features
+- `pattern` translation:
+  - A class next to a negated shorthand keeps its meaning. `[\S^]` no longer matches a space.
+  - `\u{...}` works, and the ECMA-262 general category names (`\p{Letter}`, `\p{gc=Lu}`) work.
+  - A hyphen next to a class shorthand is literal (`[\w-.]`).
+  - Syntax ECMA-262 does not define that .NET would read its own way (`\A`, `\Z`, `\z`, `\G`, `\a`, `\e`, inline options, comments, atomic and conditional groups) is rejected at registration. So are script properties.
+- `required`, `dependentRequired`, and draft-07 `dependencies` enforce the empty property name `""`.
+- draft-07:
+  - References in the sibling containers of a `$ref` are checked at registration.
+  - The siblings' own keywords are not checked (draft-07 ignores them).
+  - `"items": []` is allowed.
+  - Each dialect checks only its own definitions keyword.
+- A tool name ending in a newline is rejected.
+- Output of a tool with a typeless object-only output schema must be an object only on 2025-06-18 and 2025-11-25, the revisions that receive the schema.
+- Resource templates extract `{&var}` variables that follow a `{?var}` expression.
+
+### Documentation
+- COMPATIBILITY.md:
+  - The Streamable HTTP row is not applicable to 2026-07-28.
+  - The authorization row notes that token validation is the application's.
+  - The progress and cancellation rows describe the new behavior.
+  - The relaxations list the `id: null` error responses and the new strictness.
+  - The keep-alive trade-off is described as such.
+- README: a 2026-07-28 result never carries `resultType: "task"` (tasks are not implemented). The `McpToolCallContext` example checks `requestState`. Authentication failures never reach a handler.
+
+### Tests
+- New suites `Mcp.SchemaClosure` (6), `McpStreams.Closure` (10), and `McpHttp.Closure` (4). Each behavior case fails against v2.1.9.
+
 ## v2.1.9
 Resolves every finding of a four-part review of v2.1.8 against the MCP specification, and corrects COMPATIBILITY.md where it overstated or misstated v2.1.8.
 

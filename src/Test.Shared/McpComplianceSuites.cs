@@ -278,7 +278,7 @@ namespace Test.Shared
                 "MCP Streamable HTTP compliance",
                 new List<TestCaseDescriptor>
                 {
-                    Case(suiteId, "LateCapabilityErrorKeepsStatus400", "By default a stateless response is not streamed, so a -32021 raised after a slow tool still gets HTTP 400", async ct =>
+                    Case(suiteId, "LateCapabilityErrorKeepsStatus400", "A stateless response that completes within the default keep-alive interval is not streamed, so a -32021 raised after a slow tool still gets HTTP 400", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, s => s.RegisterTool("slowask", "Slow URL elicitation", new { type = "object" }, async (RpcParameters? args, CancellationToken token) =>
                         {
@@ -289,7 +289,7 @@ namespace Test.Shared
                             };
                         })).ConfigureAwait(false);
                         RpcResult result = await McpHttpTestRequests.SendStatelessAsync(fixture, "tools/call", 1, new Dictionary<string, object?> { { "name", "slowask" }, { "arguments", new { } } }, "slowask", null, ct).ConfigureAwait(false);
-                        TestAssert.Equal(0, fixture.Server.ResponseKeepAliveMs, "Keep-alives are off by default.");
+                        TestAssert.Equal(15000, fixture.Server.ResponseKeepAliveMs, "Keep-alives start after 15 seconds by default.");
                         TestAssert.Equal(HttpStatusCode.BadRequest, result.StatusCode, $"The late -32021 keeps status 400: {result.Body}");
                         TestAssert.Equal(-32021, result.Error.Get("code").Int(), "The error is -32021.");
                     }),

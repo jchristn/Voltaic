@@ -22,9 +22,11 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Returns the header parameters a tool input schema declares. Throws <see cref="ArgumentException"/> when any
         /// <c>x-mcp-header</c> annotation violates the specification's constraints, which makes the tool definition
-        /// invalid. A null or non-object schema declares none.
+        /// invalid. A null or non-object schema declares none. With <paramref name="strictIntegerBounds"/> (used for the
+        /// server's own tools), an annotated integer whose schema bounds exceed the JavaScript safe range is rejected too,
+        /// which is stricter than the specification (it constrains values, not bounds).
         /// </summary>
-        internal static List<McpHeaderParameter> Extract(object? inputSchema)
+        internal static List<McpHeaderParameter> Extract(object? inputSchema, bool strictIntegerBounds = true)
         {
             List<McpHeaderParameter> parameters = new List<McpHeaderParameter>();
             if (inputSchema == null) return parameters;
@@ -32,7 +34,7 @@ namespace Voltaic.Mcp
             JsonElement root = inputSchema is JsonElement element ? element : JsonSerializer.SerializeToElement(inputSchema);
             if (root.ValueKind != JsonValueKind.Object) return parameters;
 
-            Walk(root, new List<string>(), true, parameters);
+            Walk(root, new List<string>(), true, parameters, strictIntegerBounds);
 
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (McpHeaderParameter parameter in parameters)
@@ -47,15 +49,15 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Returns the header parameters of a tool definition, or null (and the reason) when the definition's
-        /// annotations are invalid.
+        /// Returns the header parameters of another server's tool definition, or null (and the reason) when the
+        /// definition's annotations violate the specification's constraints. Only those constraints apply here.
         /// </summary>
         internal static List<McpHeaderParameter>? TryExtract(JsonElement inputSchema, out string? error)
         {
             try
             {
                 error = null;
-                return Extract(inputSchema);
+                return Extract(inputSchema, false);
             }
             catch (ArgumentException ex)
             {
@@ -239,11 +241,11 @@ namespace Voltaic.Mcp
             }
         }
 
-        private static void Walk(JsonElement schema, List<string> path, bool reachable, List<McpHeaderParameter> parameters)
+        private static void Walk(JsonElement schema, List<string> path, bool reachable, List<McpHeaderParameter> parameters, bool strictIntegerBounds)
         {
             if (schema.ValueKind == JsonValueKind.Array)
             {
-                foreach (JsonElement item in schema.EnumerateArray()) Walk(item, path, false, parameters);
+                foreach (JsonElement item in schema.EnumerateArray()) Walk(item, path, false, parameters, strictIntegerBounds);
                 return;
             }
 
@@ -274,7 +276,7 @@ namespace Voltaic.Mcp
                     throw new ArgumentException($"x-mcp-header at {where} must annotate a property of type string, integer, or boolean.");
                 }
 
-                if (type == "integer" && !IntegerBoundsAreSafe(schema))
+                if (strictIntegerBounds && type == "integer" && !IntegerBoundsAreSafe(schema))
                 {
                     throw new ArgumentException($"x-mcp-header at {where} annotates an integer whose bounds exceed the JavaScript safe integer range.");
                 }
@@ -289,7 +291,7 @@ namespace Voltaic.Mcp
                     foreach (JsonProperty child in property.Value.EnumerateObject())
                     {
                         path.Add(child.Name);
-                        Walk(child.Value, path, reachable, parameters);
+                        Walk(child.Value, path, reachable, parameters, strictIntegerBounds);
                         path.RemoveAt(path.Count - 1);
                     }
                 }
@@ -302,16 +304,17 @@ namespace Voltaic.Mcp
                 {
                     // items, oneOf/anyOf/allOf/not, if/then/else, $defs, patternProperties, and every other keyword
                     // leave the statically reachable chain.
-                    Walk(property.Value, path, false, parameters);
+                    Walk(property.Value, path, false, parameters, strictIntegerBounds);
                 }
             }
         }
 
         // The property's type: a single "string", "integer", or "boolean", or one of those together with "null" (a
-        // nullable parameter, whose header is omitted when the value is null). Anything else returns null.
+        // nullable parameter, whose header is omitted when the value is null). Without "type", a property whose enum or
+        // const values are all of one primitive type has that type. Anything else returns null.
         private static string? DeclaredPrimitiveType(JsonElement schema)
         {
-            if (!schema.TryGetProperty("type", out JsonElement typeElement)) return null;
+            if (!schema.TryGetProperty("type", out JsonElement typeElement)) return TypeOfValues(schema);
             if (typeElement.ValueKind == JsonValueKind.String) return typeElement.GetString();
             if (typeElement.ValueKind != JsonValueKind.Array) return null;
             if (!typeElement.EnumerateArray().All(item => item.ValueKind == JsonValueKind.String)) return null;
@@ -321,6 +324,15 @@ namespace Voltaic.Mcp
                 .Where(item => item != "null")
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
+            return types.Count == 1 ? types[0] : null;
+        }
+
+        private static string? TypeOfValues(JsonElement schema)
+        {
+            List<JsonElement> values = new List<JsonElement>();
+            if (schema.TryGetProperty("const", out JsonElement constant)) values.Add(constant);
+            if (schema.TryGetProperty("enum", out JsonElement enumeration) && enumeration.ValueKind == JsonValueKind.Array) values.AddRange(enumeration.EnumerateArray());
+            List<string?> types = values.Where(value => value.ValueKind != JsonValueKind.Null).Select(ActualType).Distinct(StringComparer.Ordinal).ToList();
             return types.Count == 1 ? types[0] : null;
         }
 

@@ -20,20 +20,27 @@ namespace Voltaic.Mcp
     /// server.RegisterTool("delete_file", "Deletes a file after confirmation", schema, args =>
     /// {
     ///     McpToolCallContext? call = McpToolCallContext.Current;
-    ///     if (call == null || !call.CanRequestInput) return McpToolCallResult.FromText("Pass confirm=true to delete.");
-    ///     if (call.InputResponses.TryGetValue("confirm", out JsonElement answer)
+    ///     string path = args?.GetString("path") ?? "";
+    ///     if (call == null || !call.CanRequestInput) return McpToolCallResult.FromText("Confirmation needs MCP 2026-07-28.");
+    ///
+    ///     // requestState and inputResponses come from the client: act only on an answer to the request this call made,
+    ///     // and protect the state's integrity (for example with an HMAC) when more than a match check depends on it.
+    ///     if (call.RequestState == "delete:" + path
+    ///         &amp;&amp; call.InputResponses.TryGetValue("confirm", out JsonElement answer)
+    ///         &amp;&amp; answer.ValueKind == JsonValueKind.Object
     ///         &amp;&amp; answer.TryGetProperty("action", out JsonElement action) &amp;&amp; action.GetString() == "accept")
     ///     {
-    ///         return McpToolCallResult.FromText("Deleted.");
+    ///         File.Delete(path);
+    ///         return McpToolCallResult.FromText("Deleted " + path + ".");
     ///     }
     ///
     ///     return new McpInputRequiredResult
     ///     {
     ///         InputRequests = new Dictionary&lt;string, McpInputRequest&gt;
     ///         {
-    ///             { "confirm", new McpInputRequest { Method = "elicitation/create", Params = new { mode = "form", message = "Delete the file?", requestedSchema = new { type = "object" } } } }
+    ///             { "confirm", new McpInputRequest { Method = "elicitation/create", Params = new { mode = "form", message = "Delete " + path + "?", requestedSchema = new { type = "object" } } } }
     ///         },
-    ///         RequestState = "delete-1"
+    ///         RequestState = "delete:" + path
     ///     };
     /// });
     /// </code>
@@ -121,7 +128,8 @@ namespace Voltaic.Mcp
         /// Sends a <c>notifications/progress</c> for this call to the client that made it, on the connection or
         /// response stream of the call (on HTTP the response becomes an SSE stream). Does nothing when the client sent
         /// no progress token or the transport cannot deliver notifications for the call. Progress must increase with
-        /// every notification.
+        /// every notification. Updates are rate-limited by the server's <c>ProgressIntervalMs</c>: one that follows the
+        /// previous one sooner is not sent, except the final one (progress equal to the total).
         /// </summary>
         /// <param name="progress">The progress so far. Must be greater than the previous value.</param>
         /// <param name="total">The total, when known, or null.</param>
@@ -140,6 +148,8 @@ namespace Voltaic.Mcp
             {
                 throw new ArgumentOutOfRangeException(nameof(progress), "Progress must increase with each notification.");
             }
+
+            if (!request.ShouldSendProgress(progress, total)) return Task.CompletedTask;
 
             JsonRpcRequest notification = new JsonRpcRequest
             {

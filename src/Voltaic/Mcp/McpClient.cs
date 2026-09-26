@@ -77,7 +77,9 @@ namespace Voltaic.Mcp
         private string _ClientVersion = "1.0.0";
         private JsonElement? _InitializeResult;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private readonly ProgressTracker _ProgressTracker = new ProgressTracker { Enabled = true };
         private int _ShutdownGracePeriodMs = 5000;
+        private int _InitializeTimeoutMs = 30000;
         private int _PingIntervalMs = 30000;
         private int _PingTimeoutMs = 10000;
         private int _PingFailureThreshold = 1;
@@ -217,6 +219,7 @@ namespace Voltaic.Mcp
             TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>();
             ClientPendingRequest pendingRequest = new ClientPendingRequest(id, request, tcs);
             _PendingRequests[id] = pendingRequest;
+            _ProgressTracker.Track(parameters);
 
             try
             {
@@ -259,6 +262,7 @@ namespace Voltaic.Mcp
             finally
             {
                 _PendingRequests.TryRemove(id, out ClientPendingRequest? _);
+                _ProgressTracker.Untrack(parameters);
             }
         }
 
@@ -339,6 +343,50 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how long <c>initialize</c> may take, in milliseconds, when <see cref="InitializeAsync(CancellationToken)"/>
+        /// runs (explicitly or on connect). Default is 30000. Minimum is 100; maximum is 600000.
+        /// <see cref="InitializeAsync(int, CancellationToken)"/> sets it for one call.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        public int InitializeTimeoutMs
+        {
+            get => _InitializeTimeoutMs;
+            set
+            {
+                if (value < 100 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "InitializeTimeoutMs must be between 100 and 600000.");
+                _InitializeTimeoutMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Performs the <c>initialize</c> handshake as <see cref="InitializeAsync(CancellationToken)"/> does, waiting at most
+        /// <paramref name="timeoutMs"/> milliseconds for the response.
+        /// </summary>
+        /// <param name="timeoutMs">How long <c>initialize</c> may take, in milliseconds. Minimum is 100; maximum is 600000.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that completes when the handshake is done.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="timeoutMs"/> is outside 100 to 600000.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the client is not connected, or the server rejects initialize or chooses a version this client cannot use.</exception>
+        public Task InitializeAsync(int timeoutMs, CancellationToken token = default)
+        {
+            if (timeoutMs < 100 || timeoutMs > 600000) throw new ArgumentOutOfRangeException(nameof(timeoutMs), "The initialize timeout must be between 100 and 600000 ms.");
+            return InitializeCoreAsync(timeoutMs, token);
+        }
+
+        /// <summary>
+        /// Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
+        /// <see cref="NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
+        /// total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+        /// every update. Maximum is 60000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
+        public int ProgressIntervalMs
+        {
+            get => _ProgressTracker.MinIntervalMs;
+            set => _ProgressTracker.MinIntervalMs = value;
+        }
+
+        /// <summary>
         /// Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
         /// the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="PingTimeoutMs"/>
         /// is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
@@ -407,7 +455,7 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Gets or sets whether connecting performs the MCP <c>initialize</c> handshake automatically, as the
         /// specification requires before any other request. Default is true. Set false to send <c>initialize</c>
-        /// yourself (for example with <see cref="InitializeAsync"/>).
+        /// yourself (for example with <see cref="InitializeAsync(System.Threading.CancellationToken)"/>).
         /// </summary>
         public bool AutoInitialize { get; set; } = true;
 
@@ -433,10 +481,15 @@ namespace Voltaic.Mcp
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that completes when the handshake is done.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the client is not connected, or the server rejects initialize or chooses a version this client cannot use.</exception>
-        public async Task InitializeAsync(CancellationToken token = default)
+        public Task InitializeAsync(CancellationToken token = default)
+        {
+            return InitializeCoreAsync(_InitializeTimeoutMs, token);
+        }
+
+        private async Task InitializeCoreAsync(int timeoutMs, CancellationToken token)
         {
             McpInitializeOutcome outcome = await McpClientHandshake.RunAsync(
-                async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, 30000, ct).ConfigureAwait(false)),
+                async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
                 ct => NotifyAsync("notifications/initialized", null, ct),
                 _ProtocolVersion,
                 _ClientName,
@@ -758,6 +811,7 @@ namespace Voltaic.Mcp
                 JsonRpcRequest? serverRequest = ClientRequestDispatcher.ParseRequest(responseString);
                 if (serverRequest != null)
                 {
+                    _RequestDispatcher.Reserve(serverRequest.Id);
                     _ = Task.Run(() => AnswerServerRequestAsync(serverRequest));
                     return;
                 }
@@ -784,6 +838,13 @@ namespace Voltaic.Mcp
                     {
                         // A cancellation of a request the server sent stops its handler; the notification is still raised.
                         _RequestDispatcher.TryHandleCancellation(notification);
+
+                        // Progress reaches the application only for a request in flight, at a bounded rate.
+                        if (!_ProgressTracker.Accept(notification))
+                        {
+                            LogMessage("Dropped a progress notification for an unknown progress token, or above the progress rate limit");
+                            return;
+                        }
 
                         // Invoke each handler individually to ensure exception isolation
                         if (NotificationReceived != null)

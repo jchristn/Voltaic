@@ -1,88 +1,43 @@
 namespace Voltaic.Mcp
 {
-    using Voltaic.Core;
+    using System;
+    using System.Collections.Generic;
+    using System.Text.Json.Nodes;
 
+    /// <summary>
+    /// Adds the fields every 2026-07-28 result carries to a serialized result: <c>resultType</c> (<c>complete</c> unless
+    /// the handler set one) and, on complete results of the cacheable methods, the caching hints <c>ttlMs</c> and
+    /// <c>cacheScope</c>. It works on the per-response JSON, so results a handler shares between requests are never
+    /// modified.
+    /// </summary>
     internal static class McpStatelessResultStamper
     {
         internal const long DefaultStatelessCacheTtlMs = 0;
 
         internal const string DefaultStatelessCacheScope = "private";
 
-        internal static McpStatelessResultStamp? ApplyForVersion(JsonRpcResponse response, string? negotiatedVersion)
+        private static readonly HashSet<string> _CacheableMethods = new HashSet<string>(StringComparer.Ordinal)
         {
-            if (response == null || response.Error != null)
+            "server/discover", "tools/list", "prompts/list", "resources/list", "resources/templates/list", "resources/read"
+        };
+
+        /// <summary>
+        /// Stamps the result object of a stateless response for the method that produced it.
+        /// </summary>
+        internal static void Stamp(JsonObject result, string? method)
+        {
+            if (!result.ContainsKey("resultType")) result["resultType"] = McpResult.ResultTypeComplete;
+
+            // Cacheable complete results must carry caching hints (2026-07-28 caching utility); interim results
+            // (input_required) carry none.
+            bool complete = result["resultType"] is JsonValue type && type.TryGetValue(out string? typeName) && typeName == McpResult.ResultTypeComplete;
+            if (!complete || method == null || !_CacheableMethods.Contains(method)) return;
+
+            if (result["ttlMs"] is not JsonValue ttl || !ttl.TryGetValue(out long ttlValue) || ttlValue < 0) result["ttlMs"] = DefaultStatelessCacheTtlMs;
+            if (result["cacheScope"] is not JsonValue scope || !scope.TryGetValue(out string? scopeValue) || (scopeValue != "public" && scopeValue != "private"))
             {
-                return null;
+                result["cacheScope"] = DefaultStatelessCacheScope;
             }
-
-            McpProtocolVersionInfo? info = McpProtocol.GetVersionInfo(negotiatedVersion);
-            if (info == null || info.Era != McpProtocolEra.Stateless)
-            {
-                return null;
-            }
-
-            if (!(response.Result is McpResult result))
-            {
-                return null;
-            }
-
-            McpStatelessResultStamp stamp = new McpStatelessResultStamp(result);
-
-            // Every stateless-era result carries resultType. A handler-supplied value such as
-            // input_required or task is never overwritten.
-            if (result.ResultType == null)
-            {
-                result.ResultType = McpResult.ResultTypeComplete;
-                stamp.SetResultType = true;
-            }
-
-            // Cacheable results (the list results, resources/read, and server/discover) must carry ttlMs
-            // and cacheScope under the stateless era. When the server configured no caching guidance, the
-            // conservative default is "do not cache, per caller": ttlMs 0 and cacheScope private.
-            if (result is McpPaginatedResult paginated)
-            {
-                if (paginated.TtlMs == null)
-                {
-                    paginated.TtlMs = DefaultStatelessCacheTtlMs;
-                    stamp.SetTtlMs = true;
-                }
-
-                if (paginated.CacheScope == null)
-                {
-                    paginated.CacheScope = DefaultStatelessCacheScope;
-                    stamp.SetCacheScope = true;
-                }
-            }
-            else if (result is McpReadResourceResult read)
-            {
-                if (read.TtlMs == null)
-                {
-                    read.TtlMs = DefaultStatelessCacheTtlMs;
-                    stamp.SetTtlMs = true;
-                }
-
-                if (read.CacheScope == null)
-                {
-                    read.CacheScope = DefaultStatelessCacheScope;
-                    stamp.SetCacheScope = true;
-                }
-            }
-            else if (result is McpDiscoverResult discover)
-            {
-                if (discover.TtlMs == null)
-                {
-                    discover.TtlMs = DefaultStatelessCacheTtlMs;
-                    stamp.SetTtlMs = true;
-                }
-
-                if (discover.CacheScope == null)
-                {
-                    discover.CacheScope = DefaultStatelessCacheScope;
-                    stamp.SetCacheScope = true;
-                }
-            }
-
-            return stamp.Any ? stamp : null;
         }
     }
 }

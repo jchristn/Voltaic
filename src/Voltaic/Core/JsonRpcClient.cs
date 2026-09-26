@@ -95,6 +95,7 @@ namespace Voltaic.Core
         private string? _Endpoint;
         private DateTime _ConnectedUtc;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher();
+        private readonly ProgressTracker _ProgressTracker = new ProgressTracker();
         private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
 
         /// <summary>
@@ -178,6 +179,7 @@ namespace Voltaic.Core
             TaskCompletionSource<JsonRpcResponse> tcs = new TaskCompletionSource<JsonRpcResponse>();
             ClientPendingRequest pendingRequest = new ClientPendingRequest(id, request, tcs);
             _PendingRequests[id] = pendingRequest;
+            _ProgressTracker.Track(parameters);
 
             try
             {
@@ -220,6 +222,7 @@ namespace Voltaic.Core
             finally
             {
                 _PendingRequests.TryRemove(id, out _);
+                _ProgressTracker.Untrack(parameters);
             }
         }
 
@@ -458,6 +461,9 @@ namespace Voltaic.Core
         // The dispatcher that answers server requests, for derived clients that declare capabilities from it.
         private protected ClientRequestDispatcher RequestDispatcher => _RequestDispatcher;
 
+        // The progress filter MCP clients enable (see AnswerPingRequests).
+        private protected ProgressTracker ProgressTracker => _ProgressTracker;
+
         // Called after the connection opened; return false to disconnect and fail ConnectAsync.
         // Called after the connection closes; derived clients stop connection-scoped work.
         private protected virtual void OnDisconnected()
@@ -539,6 +545,7 @@ namespace Voltaic.Core
         private protected void AnswerPingRequests()
         {
             _RequestDispatcher.AnswersPing = true;
+            _ProgressTracker.Enabled = true;
         }
 
         private async Task SendRequestAsync(JsonRpcRequest request, CancellationToken token = default)
@@ -604,6 +611,7 @@ namespace Voltaic.Core
                 JsonRpcRequest? serverRequest = ClientRequestDispatcher.ParseRequest(responseString);
                 if (serverRequest != null)
                 {
+                    _RequestDispatcher.Reserve(serverRequest.Id);
                     _ = Task.Run(() => AnswerServerRequestAsync(serverRequest));
                     return;
                 }
@@ -633,6 +641,13 @@ namespace Voltaic.Core
                     {
                         // A cancellation of a request the server sent stops its handler; the notification is still raised.
                         _RequestDispatcher.TryHandleCancellation(notification);
+
+                        // Progress reaches the application only for a request in flight, at a bounded rate.
+                        if (!_ProgressTracker.Accept(notification))
+                        {
+                            LogMessage("Dropped a progress notification for an unknown progress token, or above the progress rate limit");
+                            return;
+                        }
 
                         // Invoke each handler individually to ensure exception isolation
                         if (NotificationReceived != null)

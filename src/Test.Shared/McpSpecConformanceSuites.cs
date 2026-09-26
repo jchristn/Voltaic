@@ -413,13 +413,13 @@ namespace Test.Shared
                         client.NotificationReceived += (_, n) => { lock (notifications) notifications.Add(n.Method); };
 
                         bool connected = await client.ConnectStreamableAsync(server.BaseUrl, token: ct).ConfigureAwait(false);
-                        JsonRpcResponse list = await client.CallAsync("tools/list", token: ct).ConfigureAwait(false);
+                        JsonRpcResponse list = await client.CallAsync("tools/list", new { _meta = new { progressToken = 1 } }, token: ct).ConfigureAwait(false);
                         System.Text.Json.JsonElement result = System.Text.Json.JsonSerializer.SerializeToElement(list.Result);
 
                         TestAssert.True(connected, "The handshake completes over an SSE response.");
                         TestAssert.Equal("sse-session", client.SessionId, "The session header is captured.");
                         TestAssert.Equal("streamed", result.GetProperty("tools")[0].GetProperty("name").GetString(), "The matching response is used, not the unrelated one.");
-                        lock (notifications) TestAssert.True(notifications.Count >= 2 && notifications.TrueForAll(m => m == "notifications/progress"), "Notifications on the stream are raised.");
+                        lock (notifications) TestAssert.True(notifications.Count == 1 && notifications[0] == "notifications/progress", $"Progress on the stream is raised for the request that carried the token only ({notifications.Count}).");
                     }),
 
                     Case(suiteId, "UnknownVersionNegotiatesOnWebSocket", "initialize with an unknown version negotiates the cap on the WebSocket transport too", async ct =>

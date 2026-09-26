@@ -13,6 +13,8 @@ namespace Voltaic.Mcp
         private int _Cancelled;
         private int _Completed;
         private double? _LastProgress;
+        private long _LastProgressSent;
+        private bool _ProgressSent;
         private readonly object _ProgressLock = new object();
 
         internal McpInFlightRequest(string idKey, string method, JsonElement? progressToken, CancellationToken parent)
@@ -79,6 +81,29 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Records a progress value. Returns false when it does not increase, as progress values must.
         /// </summary>
+        // The minimum interval between progress notifications sent for this request (0 sends every one).
+        internal int ProgressIntervalMs { get; set; }
+
+        // Rate-limits progress (MCP: senders should rate-limit progress): the first update and the final one (progress
+        // equal to the total) are always sent; updates within ProgressIntervalMs of the last one sent are coalesced.
+        internal bool ShouldSendProgress(double progress, double? total)
+        {
+            lock (_ProgressLock)
+            {
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool final = total.HasValue && progress >= total.Value;
+                if (_ProgressSent && !final && ProgressIntervalMs > 0
+                    && (now - _LastProgressSent) * 1000 / System.Diagnostics.Stopwatch.Frequency < ProgressIntervalMs)
+                {
+                    return false;
+                }
+
+                _ProgressSent = true;
+                _LastProgressSent = now;
+                return true;
+            }
+        }
+
         internal bool TryRecordProgress(double progress)
         {
             lock (_ProgressLock)

@@ -108,6 +108,24 @@ namespace Voltaic.Mcp
             if (schema.ValueKind == JsonValueKind.True || schema.ValueKind == JsonValueKind.False) return null;
             if (schema.ValueKind != JsonValueKind.Object) return $"{location} must be a schema (an object or a boolean).";
 
+            if (draft07 && schema.TryGetProperty("$ref", out JsonElement reference))
+            {
+                // draft-07 ignores every keyword beside $ref, so only the reference is checked, plus the subschemas in
+                // its sibling containers, which a JSON pointer can still reach.
+                if (reference.ValueKind != JsonValueKind.String) return $"{location}/$ref must be a string.";
+                foreach (JsonProperty member in schema.EnumerateObject())
+                {
+                    if (!_SchemaMaps.Contains(member.Name) || member.Value.ValueKind != JsonValueKind.Object) continue;
+                    foreach (JsonProperty entry in member.Value.EnumerateObject())
+                    {
+                        string? problem = FindMalformed(entry.Value, $"{location}/{member.Name}/{entry.Name}", draft07, isValidPattern, depth + 1);
+                        if (problem != null) return problem;
+                    }
+                }
+
+                return null;
+            }
+
             foreach (JsonProperty member in schema.EnumerateObject())
             {
                 if (!Applies(member.Name, draft07)) continue;
@@ -121,6 +139,9 @@ namespace Voltaic.Mcp
 
         private static string? CheckKeyword(string keyword, JsonElement value, string at, bool draft07, Func<string, bool> isValidPattern, int depth)
         {
+            // Each dialect has one definitions container; the other dialect's name is an unknown keyword there.
+            if ((keyword == "definitions" && !draft07) || (keyword == "$defs" && draft07)) return null;
+
             if (keyword == "type")
             {
                 if (value.ValueKind == JsonValueKind.String) return _TypeNames.Contains(value.GetString()!) ? null : $"{at}: '{value.GetString()}' is not a JSON Schema type.";
@@ -221,7 +242,8 @@ namespace Voltaic.Mcp
             if (_SchemaArrays.Contains(keyword) || keyword == "prefixItems" || (keyword == "items" && value.ValueKind == JsonValueKind.Array))
             {
                 if (keyword == "items" && !draft07) return $"{at}: the array form of 'items' is not valid in JSON Schema 2020-12; use 'prefixItems' (or declare draft-07).";
-                if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() == 0) return $"{at} must be a non-empty array of schemas.";
+                if (value.ValueKind != JsonValueKind.Array) return $"{at} must be an array of schemas.";
+                if (value.GetArrayLength() == 0 && keyword != "items") return $"{at} must be a non-empty array of schemas.";
                 int index = 0;
                 foreach (JsonElement item in value.EnumerateArray())
                 {

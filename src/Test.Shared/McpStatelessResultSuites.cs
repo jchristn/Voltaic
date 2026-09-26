@@ -254,18 +254,18 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, server =>
                         {
                             server.RegisterTool("shared-tool", "Returns a shared instance", new { type = "object" }, _ => shared);
-                            server.RegisterMethod("custom/list", _ => sharedList);
+                            server.RegisterMethod("resources/templates/list", _ => sharedList);
                         }, ct).ConfigureAwait(false);
 
                         RpcResult stateless = await McpHttpTestRequests.SendStatelessAsync(
                             fixture, "tools/call", 1, new Dictionary<string, object?> { { "name", "shared-tool" }, { "arguments", new { } } }, "shared-tool", null, ct).ConfigureAwait(false);
                         TestAssert.Equal("complete", stateless.Result.Get("resultType").String(), "The stateless response is stamped.");
-                        TestAssert.Null(shared.ResultType, "The shared instance is restored after serialization.");
+                        TestAssert.Null(shared.ResultType, "The shared instance is never modified.");
 
-                        RpcResult statelessList = await McpHttpTestRequests.SendStatelessAsync(fixture, "custom/list", 2, null, null, null, ct).ConfigureAwait(false);
+                        RpcResult statelessList = await McpHttpTestRequests.SendStatelessAsync(fixture, "resources/templates/list", 2, null, null, null, ct).ConfigureAwait(false);
                         TestAssert.Equal(0L, statelessList.Result.Get("ttlMs").Long(), "The stateless list response carries ttlMs.");
-                        TestAssert.Null(sharedList.TtlMs, "The shared list instance's ttlMs is restored.");
-                        TestAssert.Null(sharedList.CacheScope, "The shared list instance's cacheScope is restored.");
+                        TestAssert.Null(sharedList.TtlMs, "The shared list instance's ttlMs is never set.");
+                        TestAssert.Null(sharedList.CacheScope, "The shared list instance's cacheScope is never set.");
 
                         RpcResult initialize = await McpHttpTestRequests.InitializeAsync(fixture, McpProtocol.ProtocolVersion20251125, null, ct).ConfigureAwait(false);
                         RpcResult handshake = await McpHttpTestRequests.SendAsync(

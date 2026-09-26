@@ -83,6 +83,19 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets the minimum interval, in milliseconds, between progress notifications for one request that reach
+        /// <see cref="NotificationReceived"/>; faster updates are dropped, except the final one (progress equal to the
+        /// total). Progress for a token that no request in flight carries is always dropped. Default is 20. 0 delivers
+        /// every update. Maximum is 60000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
+        public int ProgressIntervalMs
+        {
+            get => _ProgressTracker.MinIntervalMs;
+            set => _ProgressTracker.MinIntervalMs = value;
+        }
+
+        /// <summary>
         /// Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
         /// the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="PingTimeoutMs"/>
         /// is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
@@ -259,6 +272,7 @@ namespace Voltaic.Mcp
         private McpPinger? _Pinger;
         private bool _SseWanted;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private readonly ProgressTracker _ProgressTracker = new ProgressTracker { Enabled = true };
         private CancellationTokenSource _ServerRequestTokenSource = new CancellationTokenSource();
         private readonly ConcurrentDictionary<string, List<McpHeaderParameter>> _ToolHeaderParameters = new ConcurrentDictionary<string, List<McpHeaderParameter>>(StringComparer.Ordinal);
 
@@ -550,6 +564,19 @@ namespace Voltaic.Mcp
 
         private async Task<JsonRpcResponse> ExchangeAsync(string method, object? parameters, int timeoutMs, CancellationToken token)
         {
+            _ProgressTracker.Track(parameters);
+            try
+            {
+                return await ExchangeCoreAsync(method, parameters, timeoutMs, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _ProgressTracker.Untrack(parameters);
+            }
+        }
+
+        private async Task<JsonRpcResponse> ExchangeCoreAsync(string method, object? parameters, int timeoutMs, CancellationToken token)
+        {
             if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
                 throw new InvalidOperationException("Client not initialized. Call ConnectAsync first.");
 
@@ -763,6 +790,19 @@ namespace Voltaic.Mcp
 
         private async Task<JsonRpcResponse> SendStatelessAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, int timeoutMs, CancellationToken token)
         {
+            _ProgressTracker.Track(parameters);
+            try
+            {
+                return await SendStatelessTrackedAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _ProgressTracker.Untrack(parameters);
+            }
+        }
+
+        private async Task<JsonRpcResponse> SendStatelessTrackedAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, int timeoutMs, CancellationToken token)
+        {
             if (String.IsNullOrEmpty(method)) throw new ArgumentNullException(nameof(method));
 
             JsonRpcResponse response = await SendStatelessCoreAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
@@ -904,6 +944,34 @@ namespace Voltaic.Mcp
             return DeserializeResult<T>(response.Result)!;
         }
 
+        // Answers every input request with the registered request handler for its method; null when one cannot be
+        // answered (no handler, an error, or a cancellation).
+        private async Task<IReadOnlyDictionary<string, object?>?> AnswerInputRequestsAsync(McpInputRequiredResult inputRequired, CancellationToken token)
+        {
+            if (inputRequired.InputRequests == null || inputRequired.InputRequests.Count == 0) return null;
+            Dictionary<string, object?> responses = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, McpInputRequest> entry in inputRequired.InputRequests)
+            {
+                if (!_RequestDispatcher.HasHandler(entry.Value.Method))
+                {
+                    LogMessage($"No request handler is registered for input request '{entry.Key}' ({entry.Value.Method})");
+                    return null;
+                }
+
+                JsonRpcRequest request = new JsonRpcRequest { Method = entry.Value.Method, Params = entry.Value.Params, Id = "input-" + entry.Key };
+                JsonRpcResponse? answer = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                if (answer == null || answer.Error != null)
+                {
+                    LogMessage($"The handler for input request '{entry.Key}' ({entry.Value.Method}) did not produce a result");
+                    return null;
+                }
+
+                responses[entry.Key] = answer.Result;
+            }
+
+            return responses;
+        }
+
         /// <summary>
         /// Calls a tool over the stateless transport, following the Multi Round-Trip Requests (MRTR)
         /// pattern. When the server responds with an input-required result and
@@ -915,7 +983,7 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="name">The tool name. Must not be null or empty.</param>
         /// <param name="arguments">The tool arguments, or null.</param>
-        /// <param name="provideInputResponses">Callback that returns the responses for an input-required result, or null to return the input-required result without retrying.</param>
+        /// <param name="provideInputResponses">Callback that returns the responses for an input-required result, or null to answer each input request with the handler registered for its method through <see cref="RegisterRequestHandler"/>. When a request has no handler or its handler fails, the input-required result is returned without retrying.</param>
         /// <param name="maxInputRounds">The maximum number of input rounds to satisfy. Default is 3. Minimum meaningful value is 1.</param>
         /// <param name="token">Cancellation token for the operation.</param>
         /// <returns>The final (or last) JSON-RPC response.</returns>
@@ -964,12 +1032,21 @@ namespace Voltaic.Mcp
                 }
 
                 round++;
-                if (provideInputResponses == null || round > maxInputRounds)
+                if (round > maxInputRounds)
                 {
                     return response;
                 }
 
-                pendingResponses = provideInputResponses(inputRequired);
+                // Without a callback, the handlers registered with RegisterRequestHandler answer the input requests
+                // (the client declared the matching capabilities for them).
+                pendingResponses = provideInputResponses != null
+                    ? provideInputResponses(inputRequired)
+                    : await AnswerInputRequestsAsync(inputRequired, token).ConfigureAwait(false);
+                if (pendingResponses == null)
+                {
+                    return response;
+                }
+
                 requestState = inputRequired.RequestState;
             }
         }
@@ -1496,8 +1573,11 @@ namespace Voltaic.Mcp
                 retryMs = events.RetryMs;
             }
 
-            // Resumption exists only in the handshake era (2025-03-26 to 2025-11-25); 2026-07-28 has none.
-            if (!_Stateless && AutoReconnectSse && !String.IsNullOrEmpty(lastEventId) && !String.IsNullOrEmpty(SessionId) && !String.IsNullOrEmpty(_EventsUrl))
+            // Resumption exists only in the handshake era (2025-03-26 to 2025-11-25); 2026-07-28 has none. The Streamable
+            // HTTP endpoint resumes with or without a session (sessions are optional); the legacy /events endpoint
+            // needs one.
+            if (!_Stateless && AutoReconnectSse && !String.IsNullOrEmpty(lastEventId) && !String.IsNullOrEmpty(_EventsUrl)
+                && (_Streamable || !String.IsNullOrEmpty(SessionId)))
             {
                 return await ResumeResponseStreamAsync(lastEventId!, retryMs, requestIdJson, token).ConfigureAwait(false);
             }
@@ -1517,7 +1597,7 @@ namespace Voltaic.Mcp
                 {
                     using HttpRequestMessage request = CreateStreamRequest(lastEventId);
                     using HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-                    if ((int)response.StatusCode == 404 && _Streamable)
+                    if ((int)response.StatusCode == 404 && _Streamable && !String.IsNullOrEmpty(SessionId))
                     {
                         LogMessage("Response stream resumption found the session gone");
                         throw McpProtocolException.SessionNotFound();
@@ -1611,7 +1691,8 @@ namespace Voltaic.Mcp
                 }
 
                 LogMessage($"Received server request: {payload}");
-                _ = Task.Run(() => AnswerServerRequestAsync(serverRequest));
+                _RequestDispatcher.Reserve(serverRequest.Id);
+                    _ = Task.Run(() => AnswerServerRequestAsync(serverRequest));
                 return;
             }
 
@@ -1728,6 +1809,13 @@ namespace Voltaic.Mcp
                 {
                     // A cancellation of a request the server sent stops its handler; the notification is still raised.
                     _RequestDispatcher.TryHandleCancellation(notification);
+
+                    // Progress reaches the application only for a request in flight, at a bounded rate.
+                    if (!_ProgressTracker.Accept(notification))
+                    {
+                        LogMessage("Dropped a progress notification for an unknown progress token, or above the progress rate limit");
+                        return;
+                    }
 
                     // Invoke each handler individually to ensure exception isolation
                     if (NotificationReceived != null)
