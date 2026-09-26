@@ -1,8 +1,9 @@
 # Bug: `McpHttpServer` creates handshake sessions for requests that never initialized
 
-**Affects:** Voltaic 2.0.0 (built from `f646623`); also present in 1.1.0.
+**Status:** Fixed in Voltaic 2.1.0 (see `CHANGELOG.md` and the `McpHttp.Sessions` Touchstone suite).
+**Affects:** Voltaic 2.0.0; also present in 1.1.0.
 **Component:** `src/Voltaic/Mcp/McpHttpServer.cs` — `HandleMcpRequestAsync` (the `/mcp` Streamable HTTP endpoint) and `HandleRpcRequestAsync` (the `/rpc` JSON-RPC endpoint).
-**Found by:** the Hydra MCP test suite (`Hydra/src/Test.Shared/McpCases.cs`, case `InitializeRejectsUnknownVersion`), then reproduced directly against Voltaic 2.0.0.
+**Found by:** a downstream MCP test suite (a case asserting that `initialize` rejects an unknown version), then reproduced directly against Voltaic 2.0.0.
 
 ## Summary
 
@@ -24,7 +25,7 @@ The stateless `2026-07-28` path is not affected. It uses a throwaway `ClientConn
 
 ## Reproduction (Voltaic 2.0.0)
 
-Any `McpHttpServer` with default endpoints. Below, the Hydra MCP server (Voltaic 2.0.0) is listening on `127.0.0.1:18190`, with `H` set to `-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream"`.
+Any `McpHttpServer` with default endpoints. Below, a Voltaic 2.0.0 MCP server is listening on `127.0.0.1:18190`, with `H` set to `-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream"`.
 
 ```bash
 # 1. initialize with an unsupported version -> error, but a session is issued
@@ -100,7 +101,7 @@ Specifically:
 
 ### `/rpc` (compatibility JSON-RPC), keep it lenient without leaking
 
-`/rpc` is documented as request/response JSON-RPC. Existing callers (Hydra's test harness, scripts, `curl`) POST `tools/list` / `tools/call` there with no `initialize` and no session, and that has to keep working. Recommended:
+`/rpc` is documented as request/response JSON-RPC. Existing callers (test harnesses, scripts, `curl`) POST `tools/list` / `tools/call` there with no `initialize` and no session, and that has to keep working. Recommended:
 - A request **with no session ID** (other than a successful `initialize`) runs on an ephemeral, unregistered connection, the way the stateless path does. No `_Sessions` entry, no `ClientConnected`, no `MCP-Session-Id` header.
 - A request **with a session ID** is served only if the session is known. An unknown ID → 404, not adoption.
 - `initialize` on `/rpc`: register a session and echo it only on success, same as `/mcp`.
@@ -126,10 +127,3 @@ Negative:
 - The same made-up-ID request on `/rpc` → 404.
 - A session removed by the idle sweep → later requests with that ID → 404 (the client must re-initialize).
 - A sessionless notification on `/mcp` → 400.
-
-## Downstream follow-up (Hydra)
-
-Once a fixed Voltaic is published, Hydra can tighten its own coverage:
-- `Hydra/src/Test.Shared/McpCases.cs`, `InitializeRejectsUnknownVersionAsync`: remove the comment that says Voltaic "allocates the handshake session before dispatching the request", and assert that a rejected `initialize` returns **no** `MCP-Session-Id`.
-- Add Hydra cases for the 400 (no session) and 404 (unknown session) behavior on `/mcp`.
-- Confirm Hydra's harness calls to `/rpc` without a session still pass. They should, under the lenient `/rpc` rule above.

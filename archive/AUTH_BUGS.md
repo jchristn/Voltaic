@@ -1,8 +1,9 @@
 # Voltaic authentication, origin, and exposure bugs
 
-**Affects:** Voltaic 2.0.0 (NuGet package). Source references point to the v2.0.0 working tree, which is uncommitted on top of `f646623`. Unless noted, the same code is present in 1.1.0.
-**Found by:** hardening `RestDb.McpServer`, a Voltaic-based MCP server that proxies a database API (raw SQL, settings changes). Every bug below except where marked was then reproduced directly against Voltaic 2.0.0 with no RestDb code involved (see [Reproduction harness](#reproduction-harness)).
-**Tested on:** Windows 11 Pro 10.0.26200, .NET SDK 10.0.401, 2026-09-25.
+**Status:** Fixed in Voltaic 2.1.0. See the v2.1.0 entry in `CHANGELOG.md` and the `Security.*` Touchstone suites.
+**Affects:** Voltaic 2.0.0 and 1.1.0. Line numbers refer to the v2.0.0 source.
+**Found by:** hardening a downstream Voltaic-based MCP server. Every bug below except where marked was then reproduced directly against Voltaic 2.0.0 with no downstream code involved.
+**Tested on:** Windows 11 with the .NET 10 SDK.
 **Related:** [`BUG_TO_FIX.md`](BUG_TO_FIX.md) (handshake sessions created for requests that never initialized). That bug is summarized in [Bug 7](#bug-7-unknown-and-client-chosen-session-ids-are-accepted-see-bug_to_fixmd) and not repeated here.
 
 ## Scope and design intent
@@ -145,7 +146,7 @@ fetch("http://localhost:18310/mcp", {
 ### What goes wrong
 
 1. **Cross-site WebSocket hijacking.** Browsers do **not** apply CORS to WebSockets. Any page can run `new WebSocket("ws://localhost:PORT/mcp")`, and the browser sends that page's `Origin`. The server's Origin check is the only defence, and there is none. The page can then send any JSON-RPC message and read every reply.
-2. **WebSocket cannot be authenticated at all.** It should support the same HTTP headers as REST (for example `Authorization: Bearer …` or an API-key header on the upgrade request, validated by the same `AuthenticationHandler` delegate). Today a host that needs auth has to put its own listener in front of Voltaic and proxy frames. That is what RestDb had to do (`RestMcpWebSocketBridge.cs`).
+2. **WebSocket cannot be authenticated at all.** It should support the same HTTP headers as REST (for example `Authorization: Bearer …` or an API-key header on the upgrade request, validated by the same `AuthenticationHandler` delegate). Today a host that needs auth has to put its own listener in front of Voltaic and proxy frames. That is what the downstream application had to do.
 
 ### Reproduction (Voltaic 2.0.0, `McpWebsocketsServer("localhost", 18312, "/mcp")`)
 
@@ -156,8 +157,7 @@ curl -s -m 3 -o /dev/null -w "%{http_code}\n" -H "Connection: Upgrade" -H "Upgra
   -H "Origin: https://evil.example" http://localhost:18312/mcp
 # 101
 
-# I. A full tools/call over a socket opened with Origin: https://evil.example (wsprobe.py below)
-python wsprobe.py 127.0.0.1 18312 localhost:18312 https://evil.example
+# I. A full tools/call over a socket opened with Origin: https://evil.example (raw WebSocket client)
 # upgrade: HTTP/1.1 101 Switching Protocols
 # reply: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\u0022invoked\u0022:\u0022ws\u0022}"}]},"id":1}
 # Server log: INVOKED transport=ws caller=null
@@ -211,7 +211,7 @@ public Func<string?, bool>? OriginValidator { get; set; }
 
 ### What goes wrong
 
-Once Bug 2 is fixed, Voltaic's own WebSocket client still cannot talk to an authenticated Voltaic WebSocket server. RestDb's token-protected WebSocket tests had to use `System.Net.WebSockets.ClientWebSocket` directly, with `Options.SetRequestHeader("Authorization", …)`, instead of `McpWebsocketsClient`.
+Once Bug 2 is fixed, Voltaic's own WebSocket client still cannot talk to an authenticated Voltaic WebSocket server. The downstream application's token-protected WebSocket tests had to use `System.Net.WebSockets.ClientWebSocket` directly, with `Options.SetRequestHeader("Authorization", …)`, instead of `McpWebsocketsClient`.
 
 ### Suggested fix
 
@@ -262,7 +262,7 @@ netstat -ano | grep LISTEN | grep -E ":1831[025] "
 # 0.0.0.0:18310   0.0.0.0:18312   0.0.0.0:18315   [::]:18310   [::]:18312   [::]:18315
 
 # F. From the LAN address, spoofing Host: localhost -> the tool runs
-curl -s -D - -X POST http://192.168.71.1:18310/mcp -H "Host: localhost:18310" \
+curl -s -D - -X POST http://<lan-ip>:18310/mcp -H "Host: localhost:18310" \
   -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"marker","arguments":{}}}'
 # HTTP/1.1 200 OK
@@ -270,17 +270,17 @@ curl -s -D - -X POST http://192.168.71.1:18310/mcp -H "Host: localhost:18310" \
 # Server log: INVOKED transport=http caller=null
 
 # G. Without the spoof, http.sys rejects the host name
-curl -s -o /dev/null -w "%{http_code}\n" http://192.168.71.1:18310/
+curl -s -o /dev/null -w "%{http_code}\n" http://<lan-ip>:18310/
 # 400
 
 # H. The same for WebSocket
 curl -s -m 3 -o /dev/null -w "%{http_code}\n" -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  -H "Host: localhost:18312" http://192.168.71.1:18312/mcp
+  -H "Host: localhost:18312" http://<lan-ip>:18312/mcp
 # 101
 ```
 
-`192.168.71.1` is a non-loopback adapter address on the test machine; any LAN address behaves the same.
+`<lan-ip>` is any non-loopback address of the machine running the server.
 
 ### Suggested fix
 
@@ -290,7 +290,7 @@ curl -s -m 3 -o /dev/null -w "%{http_code}\n" -H "Connection: Upgrade" -H "Upgra
 - **Document the binding semantics:** `+`/`*` means all interfaces, and `localhost` is enforced as loopback by Voltaic.
 - **Optionally expose a property** such as `RequireLoopbackClients` (default: true when the hostname is loopback) for hosts that deliberately want the old behaviour.
 
-This check was added in RestDb's front listener and confirmed to block requests F and H (`403 Remote connections are not allowed.`), while loopback clients keep working.
+This check was added in the downstream application's front listener and confirmed to block requests F and H (`403 Remote connections are not allowed.`), while loopback clients keep working.
 
 ### Tests to add
 
@@ -354,7 +354,7 @@ Make `MessageFraming` accept only the LSP-style header grammar:
 
 Voltaic's own `JsonRpcClient` / `McpTcpClient` already write only `Content-Length` and `Content-Type` (`MessageFraming.WriteMessageAsync`, `MessageFraming.cs:179-190`), so this does not affect Voltaic-to-Voltaic traffic. Third-party LSP-style clients also send only those two headers.
 
-RestDb currently enforces rule 1 (first line only) in a front listener (`RestMcpTcpBridge.cs`), confirmed to drop request J before it reaches Voltaic.
+The downstream application enforced rule 1 (first line only) in a front listener, confirmed to drop request J before it reaches Voltaic.
 
 ### Tests to add
 
@@ -377,7 +377,7 @@ RestDb currently enforces rule 1 (first line only) in a front listener (`RestMcp
 ### What goes wrong
 
 - **The standards require the header.** RFC 6750 §3 requires `WWW-Authenticate: Bearer …` on a `401` for bearer-token auth. The MCP authorization spec requires the `401` to carry `WWW-Authenticate` with `resource_metadata` so clients can discover the authorization server.
-- **Hosts cannot shape how clients react to a 401.** MCP clients treat a `401` as the start of the OAuth flow. Against RestDb's front listener, which sends a bare `WWW-Authenticate: Bearer`, the MCP Inspector CLI attempted interactive OAuth and Claude Code 2.1.281 attempted Dynamic Client Registration ("Dynamic Client Registration rejected (HTTP 401): Missing or invalid bearer token"). A Voltaic host cannot send even that bare challenge, let alone `resource_metadata` or `error="invalid_token"`. Whether a fuller challenge changes those clients' behaviour was not tested.
+- **Hosts cannot shape how clients react to a 401.** MCP clients treat a `401` as the start of the OAuth flow. Against the downstream application's front listener, which sends a bare `WWW-Authenticate: Bearer`, the MCP Inspector CLI attempted interactive OAuth and Claude Code 2.1.281 attempted Dynamic Client Registration ("Dynamic Client Registration rejected (HTTP 401): Missing or invalid bearer token"). A Voltaic host cannot send even that bare challenge, let alone `resource_metadata` or `error="invalid_token"`. Whether a fuller challenge changes those clients' behaviour was not tested.
 - **Hosts can't send `Retry-After` either** for rate-limit style rejections.
 - **Failure responses grant CORS to every origin** (`:1175-1179`). This is harmless on its own, but it should follow the Bug 1 origin rules.
 
@@ -429,99 +429,9 @@ When fixing Bug 7, consider **binding sessions to the authenticated principal**:
 
 ---
 
-## Reproduction harness
+## Verification
 
-Everything above was reproduced with this program against the **Voltaic 2.0.0 NuGet package**. `vrepro.csproj` targets `net10.0` with `<PackageReference Include="Voltaic" Version="2.0.0" />`. Each server exposes a `marker` tool that logs every invocation, so the server log confirms what actually ran, rather than relying on the response alone.
-
-```csharp
-using System.Net;
-using Voltaic.Core;
-using Voltaic.Mcp;
-
-object schema = new { type = "object", properties = new { } };
-
-Task<object> Marker(string transport, RpcCallContext? caller)
-{
-    Console.WriteLine($"INVOKED transport={transport} caller={(caller == null ? "null" : caller.Principal)}");
-    return Task.FromResult<object>(new { invoked = transport });
-}
-
-using McpHttpServer http = new McpHttpServer("localhost", 18310);
-http.RegisterTool("marker", "Marker tool", schema, (RpcParameters? a, RpcCallContext? c, CancellationToken t) => Marker("http", c));
-
-using McpHttpServer httpAuth = new McpHttpServer("localhost", 18315);
-httpAuth.AuthenticationHandler = request =>
-{
-    bool ok = request.Headers["Authorization"] == "Bearer good";
-    return Task.FromResult(new AuthenticationResult { IsAuthenticated = ok, Principal = ok ? "good-user" : null, StatusCode = 401, ErrorMessage = ok ? null : "denied" });
-};
-httpAuth.RegisterTool("marker", "Marker tool", schema, (RpcParameters? a, RpcCallContext? c, CancellationToken t) => Marker("http-auth", c));
-
-using McpTcpServer tcp = new McpTcpServer(IPAddress.Loopback, 18311);
-tcp.RegisterTool("marker", "Marker tool", schema, (RpcParameters? a, RpcCallContext? c, CancellationToken t) => Marker("tcp", c));
-
-using McpWebsocketsServer ws = new McpWebsocketsServer("localhost", 18312, "/mcp");
-ws.RegisterTool("marker", "Marker tool", schema, (RpcParameters? a, RpcCallContext? c, CancellationToken t) => Marker("ws", c));
-
-using JsonRpcServer rpc = new JsonRpcServer(IPAddress.Loopback, 18313);
-rpc.RegisterMethod("marker", (RpcParameters? a) => { Console.WriteLine("INVOKED transport=jsonrpc-tcp"); return (object)"invoked"; });
-
-Task[] tasks =
-{
-    Task.Run(() => http.StartAsync()),
-    Task.Run(() => httpAuth.StartAsync()),
-    Task.Run(() => tcp.StartAsync()),
-    Task.Run(() => ws.StartAsync()),
-    Task.Run(() => rpc.StartAsync())
-};
-
-Console.WriteLine("READY");
-await Task.Delay(Timeout.Infinite);
-```
-
-Server log from the full run, which covers every `INVOKED` line referenced above:
-
-```
-INVOKED transport=http caller=null        # Bug 1, request B (foreign origin, text/plain)
-INVOKED transport=http caller=null        # Bug 4, request F (LAN address, spoofed Host)
-INVOKED transport=ws caller=null          # Bug 2, request I (foreign-origin WebSocket)
-INVOKED transport=jsonrpc-tcp             # Bug 5, request K (HTTP POST to JsonRpcServer)
-INVOKED transport=tcp caller=null         # Bug 5, request J (HTTP POST to McpTcpServer)
-INVOKED transport=http-auth caller=good-user   # Bug 6, request M (valid token)
-```
-
-`wsprobe.py` performs a raw WebSocket handshake with a chosen `Host` and `Origin`, then sends one masked `tools/call` text frame:
-
-```python
-import socket, os, base64, json, sys
-host, port, hosthdr, origin = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-s = socket.create_connection((host, port), timeout=5)
-key = base64.b64encode(os.urandom(16)).decode()
-s.sendall((f"GET /mcp HTTP/1.1\r\nHost: {hosthdr}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-           f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nOrigin: {origin}\r\n\r\n").encode())
-resp = b""
-while b"\r\n\r\n" not in resp: resp += s.recv(1024)
-print("upgrade:", resp.split(b"\r\n")[0].decode())
-payload = json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"marker","arguments":{}}}).encode()
-mask = os.urandom(4)
-hdr = bytes([0x81, 0x80 | len(payload)]) + mask if len(payload) < 126 else bytes([0x81, 0xFE]) + len(payload).to_bytes(2,'big') + mask
-s.sendall(hdr + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
-data = s.recv(4096)
-n = data[1] & 0x7F; off = 2
-if n == 126: n = int.from_bytes(data[2:4],'big'); off = 4
-print("reply:", data[off:off+n].decode())
-```
-
-## Reference implementation (RestDb workaround)
-
-Until these land in Voltaic, `RestDb.McpServer` works around Bugs 1, 2, 4, and 5 by running each Voltaic server on a private loopback port behind its own front listener. The files are uncommitted in `C:\Code\Misc\RestDb-2.0\src\RestDb.McpServer\Classes\`:
-
-- `RestMcpAccessPolicy.cs`: the Origin rules, the constant-time bearer token check, and the loopback host and address helpers (including IPv4-mapped IPv6).
-- `RestMcpHttpBridge.cs`: HTTP front listener with the loopback remote-address check, the Origin check before preflight, CORS that echoes the origin, the token check, `WWW-Authenticate: Bearer`, and health and preflight exempt from the token.
-- `RestMcpWebSocketBridge.cs`: checks Origin and the token on the upgrade request, then relays frames to the inner Voltaic WebSocket server, passing subprotocols through.
-- `RestMcpTcpBridge.cs`: requires the first line to be `Content-Length:` or `Content-Type:` before forwarding.
-
-The matching tests are in `src\RestDb.Test.Shared\McpAccessAssertions.cs` (28 cases, each confirmed to fail when its protection is disabled). They can be adapted into Touchstone descriptors here. Once Bugs 1–4 are fixed in Voltaic, RestDb can drop the HTTP and WebSocket front listeners, and once Bug 5 is fixed, the TCP one as well.
+Each bug was reproduced against Voltaic 2.0.0 with a marker tool that logged every invocation, so the server log (not only the response) showed what ran. The fixes in 2.1.0 are covered by the `Security.Policies`, `Security.HttpServers`, `Security.WebSocket`, `Security.Framing`, and `McpHttp.Sessions` Touchstone suites, and each negative case was confirmed to fail with its protection disabled.
 
 ## Suggested order of work
 
