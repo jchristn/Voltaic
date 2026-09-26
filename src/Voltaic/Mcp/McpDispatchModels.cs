@@ -65,7 +65,8 @@ namespace Voltaic.Mcp
 
     /// <summary>
     /// Typed, recursive view of the subset of JSON Schema that Voltaic validates
-    /// (<c>type</c>, <c>required</c>, and <c>properties</c>). Other keywords are ignored.
+    /// (<c>type</c>, <c>required</c>, <c>properties</c>, <c>patternProperties</c>, and
+    /// <c>additionalProperties</c>). Other keywords are ignored.
     /// </summary>
     internal sealed class McpJsonSchema
     {
@@ -77,5 +78,12 @@ namespace Voltaic.Mcp
 
         [JsonPropertyName("properties")]
         public Dictionary<string, McpJsonSchema>? Properties { get; set; }
+
+        [JsonPropertyName("patternProperties")]
+        public Dictionary<string, McpJsonSchema>? PatternProperties { get; set; }
+
+        [JsonPropertyName("additionalProperties")]
+        [JsonConverter(typeof(McpAdditionalPropertiesRuleConverter))]
+        public McpAdditionalPropertiesRule? AdditionalProperties { get; set; }
     }
 }

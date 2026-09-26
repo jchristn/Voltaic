@@ -180,14 +180,14 @@ namespace Test.Shared
                         TestAssert.Throws<ArgumentNullException>(() => new JsonRpcServer(null!, 0), "Null IP should fail.");
                         TestAssert.Throws<ArgumentOutOfRangeException>(() => new JsonRpcServer(IPAddress.Loopback, -1), "Negative port should fail.");
                         TestAssert.Throws<ArgumentOutOfRangeException>(() => new JsonRpcServer(IPAddress.Loopback, 65536), "Port above range should fail.");
-                        using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
+                        using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDiagnosticMethods: false);
                         TestAssert.Equal(100, server.MaxQueueSize);
                         return Task.CompletedTask;
                     }),
 
                     Case(suiteId, "JsonRpcServerPropertyValidation", "JsonRpcServer validates MaxQueueSize and DefaultContentType", ct =>
                     {
-                        using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
+                        using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDiagnosticMethods: false);
                         server.MaxQueueSize = 1;
                         TestAssert.Equal(1, server.MaxQueueSize);
                         TestAssert.Throws<ArgumentOutOfRangeException>(() => server.MaxQueueSize = 0, "Queue size below one should fail.");
@@ -200,7 +200,7 @@ namespace Test.Shared
 
                     Case(suiteId, "JsonRpcServerRegisterMethodValidation", "JsonRpcServer RegisterMethod overloads validate handlers", ct =>
                     {
-                        using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
+                        using JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDiagnosticMethods: false);
                         TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("sync", (Func<RpcParameters?, object>)null!), "Sync handler should be required.");
                         TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("async", (Func<RpcParameters?, Task<object>>)null!), "Async handler should be required.");
                         TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("token", (Func<RpcParameters?, CancellationToken, Task<object>>)null!), "Token handler should be required.");
@@ -209,7 +209,7 @@ namespace Test.Shared
 
                     Case(suiteId, "JsonRpcServerStopDisposeIdempotent", "JsonRpcServer Stop and Dispose are idempotent", ct =>
                     {
-                        JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
+                        JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, 0, includeDiagnosticMethods: false);
                         server.Stop();
                         server.Stop();
                         server.Dispose();
@@ -220,7 +220,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpServerPropertiesAndDispose", "McpServer properties use null fallbacks and Dispose is idempotent", ct =>
                     {
-                        McpServer server = new McpServer(includeDefaultMethods: false);
+                        McpServer server = new McpServer(includeDiagnosticTools: false);
                         server.ProtocolVersion = "custom";
                         server.ServerName = "name";
                         server.ServerVersion = "version";
@@ -240,7 +240,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpServerRegisterMethodValidation", "McpServer RegisterMethod overloads validate handlers", ct =>
                     {
-                        using McpServer server = new McpServer(includeDefaultMethods: false);
+                        using McpServer server = new McpServer(includeDiagnosticTools: false);
                         TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("sync", (Func<RpcParameters?, object>)null!), "Sync handler should be required.");
                         TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("async", (Func<RpcParameters?, Task<object>>)null!), "Async handler should be required.");
                         TestAssert.Throws<ArgumentNullException>(() => server.RegisterMethod("token", (Func<RpcParameters?, CancellationToken, Task<object>>)null!), "Token handler should be required.");
@@ -249,7 +249,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpServerRegistrationValidation", "McpServer validates tools, resources, templates, and prompts", ct =>
                     {
-                        using McpServer server = new McpServer(includeDefaultMethods: false);
+                        using McpServer server = new McpServer(includeDiagnosticTools: false);
                         TestRegisterValidation(server.RegisterTool, server.RegisterResource, server.RegisterResourceTemplate, server.RegisterPrompt);
                         return Task.CompletedTask;
                     }),
@@ -265,7 +265,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpHttpServerProperties", "McpHttpServer validates mutable server properties", ct =>
                     {
-                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDefaultMethods: false);
+                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDiagnosticTools: false);
                         server.SessionTimeoutSeconds = 10;
                         TestAssert.Equal(10, server.SessionTimeoutSeconds);
                         TestAssert.Throws<ArgumentOutOfRangeException>(() => server.SessionTimeoutSeconds = 9, "Session timeout below ten should fail.");
@@ -287,7 +287,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpHttpServerSessionHelpers", "McpHttpServer session helper methods handle missing sessions", ct =>
                     {
-                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDefaultMethods: false);
+                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDiagnosticTools: false);
                         TestAssert.False(server.SendNotificationToSession("missing", "event"), "Missing session should not queue notifications.");
                         server.BroadcastNotification("event");
                         server.NotifyToolsChanged();
@@ -304,7 +304,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpHttpServerRegistrationValidation", "McpHttpServer validates tools, resources, templates, and prompts", ct =>
                     {
-                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDefaultMethods: false);
+                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDiagnosticTools: false);
                         TestRegisterValidation(server.RegisterTool, server.RegisterResource, server.RegisterResourceTemplate, server.RegisterPrompt);
                         return Task.CompletedTask;
                     }),
@@ -312,7 +312,7 @@ namespace Test.Shared
                     Case(suiteId, "McpTcpServerPropertiesAndValidation", "McpTcpServer validates constructor, properties, and notification helpers", async ct =>
                     {
                         TestAssert.Throws<ArgumentNullException>(() => new McpTcpServer(null!, 0), "Null IP should fail.");
-                        using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
+                        using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 0, includeDiagnosticTools: false);
                         server.ProtocolVersion = null!;
                         server.ServerName = null!;
                         server.ServerVersion = null!;
@@ -327,7 +327,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpTcpServerRegistrationValidation", "McpTcpServer validates tools, resources, templates, and prompts", ct =>
                     {
-                        using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
+                        using McpTcpServer server = new McpTcpServer(IPAddress.Loopback, 0, includeDiagnosticTools: false);
                         TestRegisterValidation(server.RegisterTool, server.RegisterResource, server.RegisterResourceTemplate, server.RegisterPrompt);
                         return Task.CompletedTask;
                     }),
@@ -343,7 +343,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpWebsocketsServerProperties", "McpWebsocketsServer validates mutable properties", async ct =>
                     {
-                        using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 0, includeDefaultMethods: false);
+                        using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 0, includeDiagnosticTools: false);
                         server.MaxMessageSize = 4096;
                         TestAssert.Equal(4096, server.MaxMessageSize);
                         TestAssert.Throws<ArgumentOutOfRangeException>(() => server.MaxMessageSize = 4095, "Message size below 4096 should fail.");
@@ -369,7 +369,7 @@ namespace Test.Shared
 
                     Case(suiteId, "McpWebsocketsServerRegistrationValidation", "McpWebsocketsServer validates tools, resources, templates, and prompts", ct =>
                     {
-                        using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 0, includeDefaultMethods: false);
+                        using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 0, includeDiagnosticTools: false);
                         TestRegisterValidation(server.RegisterTool, server.RegisterResource, server.RegisterResourceTemplate, server.RegisterPrompt);
                         return Task.CompletedTask;
                     }),

@@ -127,9 +127,19 @@ namespace Voltaic.Mcp
             return result;
         }
 
-        public object Ping(RpcParameters? args)
+        public McpEmptyResult Ping(RpcParameters? args)
         {
             return new McpEmptyResult();
+        }
+
+        public bool UnregisterTool(string name)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            lock (_Lock)
+            {
+                return _Tools.RemoveAll(tool => StringComparer.Ordinal.Equals(tool.Definition.Name, name)) > 0;
+            }
         }
 
         public ToolDefinition RegisterTool(ToolDefinition definition, Func<RpcParameters?, CancellationToken, Task<object>> handler)

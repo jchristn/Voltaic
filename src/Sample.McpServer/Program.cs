@@ -107,8 +107,6 @@ namespace Sample.McpServer
             return args?.GetString("message") ?? "empty";
         };
 
-        private static readonly Func<RpcParameters?, object> _PingHandler = (_) => "pong";
-
         // Async handler with cancellation support
         private static readonly Func<RpcParameters?, CancellationToken, Task<object>> _SlowComputeHandler = async (args, token) =>
         {
@@ -130,15 +128,17 @@ namespace Sample.McpServer
 
             CancellationTokenSource cts = new CancellationTokenSource();
 
-            // Create all three server types
-            McpHttpServer httpServer = new McpHttpServer(_Localhost, _HttpPort, "/rpc", "/events", includeDefaultMethods: true);
+            // Create all three server types. Each publishes only what this sample registers; pass
+            // includeDiagnosticTools: true to also publish Voltaic's echo and getTime diagnostic tools.
+            // The MCP protocol methods, including ping, are always registered.
+            McpHttpServer httpServer = new McpHttpServer(_Localhost, _HttpPort, "/rpc", "/events");
 
             // initialize negotiates at most MaximumHandshakeProtocolVersion (default 2025-11-25). Stateless
             // 2026-07-28 clients such as Claude Code 2.1.x use server/discover instead and need no setting.
             // Uncomment to pin handshake clients to an older revision:
             // httpServer.MaximumHandshakeProtocolVersion = McpProtocol.ProtocolVersion20250618;
-            McpTcpServer tcpServer = new McpTcpServer(IPAddress.Parse(_Localhost), _TcpPort, includeDefaultMethods: true);
-            McpWebsocketsServer wsServer = new McpWebsocketsServer(_Localhost, _WebsocketPort, "/mcp", includeDefaultMethods: true);
+            McpTcpServer tcpServer = new McpTcpServer(IPAddress.Parse(_Localhost), _TcpPort);
+            McpWebsocketsServer wsServer = new McpWebsocketsServer(_Localhost, _WebsocketPort, "/mcp");
 
             Console.CancelKeyPress += (sender, e) =>
             {
@@ -309,17 +309,6 @@ namespace Sample.McpServer
                     required = new[] { "message" }
                 },
                 _EchoHandler);
-
-            server.RegisterTool(
-                "ping",
-                "Returns 'pong' to verify server connectivity",
-                new
-                {
-                    type = "object",
-                    properties = new { },
-                    required = new string[] { }
-                },
-                _PingHandler);
 
             server.RegisterTool(
                 "slowCompute",
@@ -552,9 +541,6 @@ namespace Sample.McpServer
                 return args?.GetString("message") ?? "empty";
             });
 
-            // ping method
-            server.RegisterMethod("ping", (_) => "pong");
-
             // async method with cancellation support
             server.RegisterMethod("slowCompute", _SlowComputeHandler);
         }
@@ -658,9 +644,6 @@ namespace Sample.McpServer
             {
                 return args?.GetString("message") ?? "empty";
             });
-
-            // ping method
-            server.RegisterMethod("ping", (_) => "pong");
 
             // async method with cancellation support
             server.RegisterMethod("slowCompute", _SlowComputeHandler);

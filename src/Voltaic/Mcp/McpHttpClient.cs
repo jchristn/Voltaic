@@ -35,8 +35,10 @@ namespace Voltaic.Mcp
         public bool IsSseConnected => _IsSseConnected;
 
         /// <summary>
-        /// Gets or sets the MCP protocol version header sent after a session is established.
-        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>.
+        /// Gets or sets the MCP protocol version. <see cref="ConnectAsync"/> and <see cref="ConnectStreamableAsync"/>
+        /// request this version in <c>initialize</c> and replace it with the version the server negotiates;
+        /// it is then sent in the <c>MCP-Protocol-Version</c> header of every request in the session.
+        /// Default is <see cref="McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace restores the default.
         /// </summary>
         public string ProtocolVersion
         {
@@ -45,8 +47,9 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets the client name reported in the <c>_meta</c> client info of stateless
-        /// (2026-07-28) requests. Default is <c>Voltaic.Mcp.HttpClient</c>.
+        /// Gets or sets the client name reported in the <c>clientInfo</c> of the <c>initialize</c> handshake
+        /// and in the <c>_meta</c> client info of stateless (2026-07-28) requests.
+        /// Default is <c>Voltaic.Mcp.HttpClient</c>.
         /// </summary>
         public string ClientName
         {
@@ -55,8 +58,8 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Gets or sets the client version reported in the <c>_meta</c> client info of stateless
-        /// (2026-07-28) requests. Default is <c>1.0.0</c>.
+        /// Gets or sets the client version reported in the <c>clientInfo</c> of the <c>initialize</c> handshake
+        /// and in the <c>_meta</c> client info of stateless (2026-07-28) requests. Default is <c>1.0.0</c>.
         /// </summary>
         public string ClientVersion
         {
@@ -168,8 +171,11 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Asynchronously connects to an HTTP MCP server at the specified base URL.
-        /// This method will make an initial request to establish a session.
+        /// Asynchronously connects to an HTTP MCP server at the specified base URL using the JSON-RPC
+        /// endpoint for requests and the SSE endpoint for notifications.
+        /// Performs the MCP handshake: sends <c>initialize</c> (requesting <see cref="ProtocolVersion"/> and
+        /// reporting <see cref="ClientName"/> and <see cref="ClientVersion"/>), stores the session ID and the
+        /// negotiated protocol version the server returns, then sends <c>notifications/initialized</c>.
         /// </summary>
         /// <param name="baseUrl">The base URL of the server (e.g., "http://localhost:8080").</param>
         /// <param name="rpcPath">The RPC endpoint path. Default is "/rpc".</param>
@@ -188,8 +194,7 @@ namespace Voltaic.Mcp
                 _BaseUrl = baseUrl.TrimEnd('/');
                 _RpcUrl = $"{_BaseUrl}{rpcPath}";
                 _EventsUrl = $"{_BaseUrl}{eventsPath}";
-                // Make initial ping request to establish session
-                await CallAsync<string>("ping", null, _RequestTimeoutMs, token).ConfigureAwait(false);
+                await PerformHandshakeAsync(token).ConfigureAwait(false);
 
                 _ConnectedUtc = DateTime.UtcNow;
                 LogMessage($"Connected to {baseUrl}");
@@ -207,6 +212,9 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Asynchronously connects to an HTTP MCP server using the Streamable HTTP transport.
         /// Uses a single endpoint path for both RPC (POST) and SSE (GET), with Mcp-Session-Id headers.
+        /// Performs the MCP handshake: sends <c>initialize</c> (requesting <see cref="ProtocolVersion"/> and
+        /// reporting <see cref="ClientName"/> and <see cref="ClientVersion"/>), stores the session ID and the
+        /// negotiated protocol version the server returns, then sends <c>notifications/initialized</c>.
         /// This establishes the RPC/session side of the transport; call <see cref="StartSseAsync(System.Threading.CancellationToken)"/> to start the SSE stream used for notifications.
         /// </summary>
         /// <param name="baseUrl">The base URL of the server (e.g., "http://localhost:7891").</param>
@@ -225,8 +233,7 @@ namespace Voltaic.Mcp
                 _BaseUrl = baseUrl.TrimEnd('/');
                 _RpcUrl = $"{_BaseUrl}{mcpPath}";
                 _EventsUrl = $"{_BaseUrl}{mcpPath}";
-                // Make initial ping request to establish session
-                await CallAsync<string>("ping", null, _RequestTimeoutMs, token).ConfigureAwait(false);
+                await PerformHandshakeAsync(token).ConfigureAwait(false);
 
                 _ConnectedUtc = DateTime.UtcNow;
                 LogMessage($"Connected to {baseUrl} via Streamable HTTP");
@@ -379,6 +386,27 @@ namespace Voltaic.Mcp
                 }
 
                 return (T)Convert.ChangeType(response.Result, typeof(T));
+            }
+        }
+
+        /// <summary>
+        /// Sends the MCP <c>ping</c> request and completes when the server answers with any successful result.
+        /// Voltaic 2.x servers and other specification-conformant servers answer with an empty object
+        /// (<c>{}</c>); Voltaic 1.x servers answered with the string <c>"pong"</c>. Both are accepted, so use
+        /// this method rather than <c>CallAsync&lt;string&gt;("ping")</c> to check connectivity.
+        /// </summary>
+        /// <param name="timeoutMs">The timeout in milliseconds to wait for a response. Zero (the default) uses <see cref="RequestTimeoutMs"/>.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that completes when the server has answered the ping.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized, or when the server answers the ping with a JSON-RPC error.</exception>
+        /// <exception cref="HttpRequestException">Thrown when the HTTP request fails.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled or times out.</exception>
+        public async Task PingAsync(int timeoutMs = 0, CancellationToken token = default)
+        {
+            JsonRpcResponse response = await CallAsync("ping", null, timeoutMs, token).ConfigureAwait(false);
+            if (response.Error != null)
+            {
+                throw new InvalidOperationException($"Ping failed with RPC error {response.Error.Code}: {response.Error.Message}");
             }
         }
 
@@ -801,6 +829,37 @@ namespace Voltaic.Mcp
             {
                 _IsSseConnected = false;
             }
+        }
+
+        private async Task PerformHandshakeAsync(CancellationToken token)
+        {
+            Dictionary<string, object?> parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                { "protocolVersion", _ProtocolVersion },
+                { "capabilities", new Dictionary<string, object?>(StringComparer.Ordinal) },
+                { "clientInfo", new Dictionary<string, object?>(StringComparer.Ordinal) { { "name", _ClientName }, { "version", _ClientVersion } } }
+            };
+
+            JsonRpcResponse response = await CallAsync("initialize", parameters, _RequestTimeoutMs, token).ConfigureAwait(false);
+            if (response.Error != null)
+            {
+                throw new InvalidOperationException($"initialize failed with RPC error {response.Error.Code}: {response.Error.Message}");
+            }
+
+            string? negotiatedVersion = response.Result == null
+                ? null
+                : new RpcParameters(JsonSerializer.Serialize(response.Result)).GetString("protocolVersion");
+            if (!String.IsNullOrEmpty(negotiatedVersion))
+            {
+                if (!McpProtocol.IsSupportedVersion(negotiatedVersion!))
+                {
+                    throw new InvalidOperationException($"The server negotiated unsupported MCP protocol version '{negotiatedVersion}'.");
+                }
+
+                _ProtocolVersion = negotiatedVersion!;
+            }
+
+            await NotifyAsync("notifications/initialized", null, _RequestTimeoutMs, token).ConfigureAwait(false);
         }
 
         private Dictionary<string, object?> BuildStatelessParams(IReadOnlyDictionary<string, object?>? parameters)

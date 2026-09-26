@@ -3,6 +3,7 @@ namespace Voltaic.Mcp
     using Voltaic.Core;
     using System;
     using System.Collections.Concurrent;
+    using System.Collections.Generic;
     using System.Net.WebSockets;
     using System.Text;
     using System.Text.Json;
@@ -73,6 +74,8 @@ namespace Voltaic.Mcp
         private int _MaxMessageSize = 1048576; // 1 MB
         private string? _Endpoint;
         private DateTime _ConnectedUtc;
+        private readonly Dictionary<string, string> _RequestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _RequestHeadersLock = new object();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpWebsocketsClient"/> class.
@@ -80,6 +83,28 @@ namespace Voltaic.Mcp
         public McpWebsocketsClient()
         {
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
+        }
+
+        /// <summary>
+        /// Sets a header sent on the WebSocket upgrade request, for example <c>Authorization: Bearer &lt;token&gt;</c>
+        /// or an API-key header such as <c>X-API-Key</c>, which an authenticated
+        /// <see cref="McpWebsocketsServer"/> checks with its <see cref="McpWebsocketsServer.AuthenticationHandler"/>.
+        /// Header names are case-insensitive; setting the same name again replaces the value, and a null or empty
+        /// <paramref name="value"/> removes the header. Headers apply to the next <see cref="ConnectAsync"/>; an
+        /// open connection is not affected. Thread-safe.
+        /// </summary>
+        /// <param name="name">The header name. Must not be null or empty.</param>
+        /// <param name="value">The header value, or null or empty to remove the header.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null or empty.</exception>
+        public void SetRequestHeader(string name, string? value)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+
+            lock (_RequestHeadersLock)
+            {
+                if (String.IsNullOrEmpty(value)) _RequestHeaders.Remove(name);
+                else _RequestHeaders[name] = value!;
+            }
         }
 
         /// <summary>
@@ -99,6 +124,13 @@ namespace Voltaic.Mcp
 
                 _WebSocket = new ClientWebSocket();
                 _WebSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+                lock (_RequestHeadersLock)
+                {
+                    foreach (KeyValuePair<string, string> header in _RequestHeaders)
+                    {
+                        _WebSocket.Options.SetRequestHeader(header.Key, header.Value);
+                    }
+                }
 
                 Uri uri = new Uri(url);
                 await _WebSocket.ConnectAsync(uri, token).ConfigureAwait(false);
@@ -119,6 +151,23 @@ namespace Voltaic.Mcp
                 _IsConnected = false;
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Sends the MCP <c>ping</c> request and completes when the server answers with any successful result.
+        /// Voltaic 2.x servers and other specification-conformant servers answer with an empty object
+        /// (<c>{}</c>); Voltaic 1.x servers answered with the string <c>"pong"</c>. Both are accepted, so use
+        /// this method rather than <c>CallAsync&lt;string&gt;("ping")</c> to check connectivity.
+        /// </summary>
+        /// <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that completes when the server has answered the ping.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client is not connected.</exception>
+        /// <exception cref="Exception">Thrown when the server answers the ping with a JSON-RPC error.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled or times out.</exception>
+        public async Task PingAsync(int timeoutMs = 30000, CancellationToken token = default)
+        {
+            await CallAsync<object?>("ping", null, timeoutMs, token).ConfigureAwait(false);
         }
 
         /// <summary>

@@ -86,6 +86,28 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Creates the error an HTTP server returns (with HTTP 404) when a request carries an
+        /// <c>MCP-Session-Id</c> the server did not issue, has expired, or was terminated. The code is
+        /// <c>-32001</c>. A client that receives it should start a new session with <c>initialize</c>.
+        /// The rejected session ID is deliberately not echoed back.
+        /// </summary>
+        /// <returns>Protocol exception.</returns>
+        public static McpProtocolException SessionNotFound()
+        {
+            return new McpProtocolException(-32001, "Session not found. Send an initialize request without an MCP-Session-Id header to start a new session.");
+        }
+
+        /// <summary>
+        /// Creates the error an HTTP server returns (with HTTP 400) when a request that needs a session
+        /// arrives without an <c>MCP-Session-Id</c> header. The code is <c>-32600</c> (invalid request).
+        /// </summary>
+        /// <returns>Protocol exception.</returns>
+        public static McpProtocolException SessionRequired()
+        {
+            return new McpProtocolException(-32600, "Missing MCP-Session-Id header. Send an initialize request first to start a session.");
+        }
+
+        /// <summary>
         /// Creates a cancelled request error.
         /// </summary>
         /// <param name="message">Error message.</param>

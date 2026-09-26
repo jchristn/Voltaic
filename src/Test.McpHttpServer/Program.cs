@@ -28,7 +28,7 @@ namespace Test.McpHttpServer
             Console.WriteLine("=== MCP HTTP Server ===");
             Console.WriteLine($"Starting server on port {port}...");
 
-            McpHttpServer server = new McpHttpServer("localhost", port);
+            McpHttpServer server = new McpHttpServer("localhost", port, includeDiagnosticTools: true);
             server.EnableCors = true;
 
             // Subscribe to log events
@@ -283,14 +283,16 @@ namespace Test.McpHttpServer
                         break;
 
                     case "methods":
-                        Console.WriteLine("Available RPC methods:");
-                        Console.WriteLine("  - echo(message)     : Echoes back the message");
-                        Console.WriteLine("  - getTime()         : Returns current UTC time");
+                        Console.WriteLine("Available tools (invoke through tools/call):");
+                        Console.WriteLine("  - echo(message)     : Echoes back the message (diagnostic)");
+                        Console.WriteLine("  - getTime()         : Returns current UTC time (diagnostic)");
                         Console.WriteLine("  - add(a, b)         : Adds two numbers");
                         Console.WriteLine("  - multiply(x, y)    : Multiplies two numbers");
                         Console.WriteLine("  - greet(name)       : Returns a greeting");
-                        Console.WriteLine("  - getSessions()     : Returns list of active sessions");
-                        Console.WriteLine("  - ping()            : Returns 'pong'");
+                        Console.WriteLine("  - slowCompute(value): Squares a number after a delay");
+                        Console.WriteLine("Protocol methods:");
+                        Console.WriteLine("  - ping              : Returns {}");
+                        Console.WriteLine("  - initialize, tools/list, tools/call, resources/*, prompts/*, server/discover");
                         break;
 
                     case "stop":

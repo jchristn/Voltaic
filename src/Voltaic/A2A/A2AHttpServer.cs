@@ -244,6 +244,7 @@ namespace Voltaic.A2A
         private CancellationTokenSource? _TokenSource;
         private Task? _ListenTask;
         private bool _IsDisposed;
+        private OriginPolicy _OriginPolicy = new OriginPolicy();
 
         public AgentCard AgentCard { get; set; }
 
@@ -253,15 +254,47 @@ namespace Voltaic.A2A
 
         public Func<HttpListenerRequest, Task<AuthenticationResult>>? AuthenticationHandler { get; set; }
 
+        /// <summary>
+        /// Gets or sets whether CORS headers are sent. When enabled, a request from a browser origin that
+        /// <see cref="OriginPolicy"/> allows receives <c>Access-Control-Allow-Origin</c> set to that origin (never
+        /// <c>*</c>), <c>Vary: Origin</c>, and the <see cref="CorsHeaders"/>. Requests without an <c>Origin</c>
+        /// header receive no CORS headers. Origins the policy rejects get HTTP 403 whether CORS is on or off.
+        /// Default is true.
+        /// </summary>
         public bool EnableCors { get; set; } = true;
 
+        /// <summary>
+        /// Gets or sets additional CORS headers sent to allowed browser origins when <see cref="EnableCors"/> is
+        /// true. An <c>Access-Control-Allow-Origin</c> or <c>Vary</c> entry is ignored, because the allowed origin
+        /// is always echoed; use <see cref="OriginPolicy"/> to choose origins.
+        /// </summary>
         public Dictionary<string, string> CorsHeaders { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            { "Access-Control-Allow-Origin", "*" },
             { "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS" },
-            { "Access-Control-Allow-Headers", "*" },
+            { "Access-Control-Allow-Headers", HttpAccessGuard.DefaultAllowHeaders },
             { "Access-Control-Max-Age", "86400" }
         };
+
+        /// <summary>
+        /// Gets or sets the policy that decides which browser origins may call the server. A request whose
+        /// <c>Origin</c> the policy rejects receives HTTP 403 with no CORS headers, before preflight handling and
+        /// authentication, including requests for the public Agent Card. The default allows requests without an
+        /// <c>Origin</c> header and loopback origins. Setting null restores the default policy.
+        /// </summary>
+        public OriginPolicy OriginPolicy
+        {
+            get => _OriginPolicy;
+            set => _OriginPolicy = value ?? new OriginPolicy();
+        }
+
+        /// <summary>
+        /// Gets or sets whether only loopback clients are served. When true, a request whose remote address is
+        /// not loopback receives HTTP 403. Default is true when the server is constructed with a loopback host
+        /// name (<c>localhost</c>, <c>127.x.x.x</c>, or <c>::1</c>) and false otherwise. On Windows a
+        /// <c>localhost</c> prefix is served on every interface and routed by the spoofable <c>Host</c> header,
+        /// so this check is what keeps such a server local.
+        /// </summary>
+        public bool RestrictToLoopbackClients { get; set; }
 
         public event EventHandler<string>? Log;
 
@@ -272,6 +305,7 @@ namespace Voltaic.A2A
 
             _Hostname = hostname;
             _Port = port;
+            RestrictToLoopbackClients = LoopbackAddresses.IsLoopbackHostname(hostname);
             _RpcPath = NormalizePath(rpcPath);
             AgentCard = agentCard ?? throw new ArgumentNullException(nameof(agentCard));
             Handler = handler;
@@ -344,7 +378,22 @@ namespace Voltaic.A2A
         {
             try
             {
-                AddCors(context.Response);
+                if (!HttpAccessGuard.IsRemoteAllowed(context.Request, RestrictToLoopbackClients))
+                {
+                    Log?.Invoke(this, $"Rejected remote client {context.Request.RemoteEndPoint}: the server accepts loopback clients only");
+                    await HttpAccessGuard.RejectAsync(context, 403, "Remote connections are not allowed.", token).ConfigureAwait(false);
+                    return;
+                }
+
+                string? origin = HttpAccessGuard.GetOrigin(context.Request);
+                if (!_OriginPolicy.IsAllowed(origin))
+                {
+                    Log?.Invoke(this, $"Rejected request from disallowed origin '{origin}'");
+                    await HttpAccessGuard.RejectAsync(context, 403, "Origin not allowed.", token).ConfigureAwait(false);
+                    return;
+                }
+
+                AddCors(context);
                 if (context.Request.HttpMethod == "OPTIONS")
                 {
                     context.Response.StatusCode = 204;
@@ -358,6 +407,12 @@ namespace Voltaic.A2A
                     AuthenticationResult auth = await AuthenticationHandler(context.Request).ConfigureAwait(false);
                     if (!auth.IsAuthenticated)
                     {
+                        foreach (KeyValuePair<string, string> header in auth.Headers)
+                        {
+                            if (String.IsNullOrEmpty(header.Key) || header.Value == null) continue;
+                            context.Response.AddHeader(header.Key, header.Value);
+                        }
+
                         await SendTextAsync(context, auth.StatusCode, auth.ErrorMessage ?? "Unauthorized", token).ConfigureAwait(false);
                         return;
                     }
@@ -1073,17 +1128,9 @@ namespace Voltaic.A2A
             await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
         }
 
-        private void AddCors(HttpListenerResponse response)
+        private void AddCors(HttpListenerContext context)
         {
-            if (!EnableCors)
-            {
-                return;
-            }
-
-            foreach (KeyValuePair<string, string> header in CorsHeaders)
-            {
-                response.Headers[header.Key] = header.Value;
-            }
+            HttpAccessGuard.ApplyCorsHeaders(context, EnableCors, CorsHeaders);
         }
 
         private static bool IsPublicAgentCardRequest(HttpListenerRequest request)

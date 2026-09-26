@@ -6,10 +6,12 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 
 | API family | Status | Descriptor suites |
 |---|---:|---|
-| `AuthenticationResult` | Covered | `ModelApi.Supporting.*`, `ModelApi.Mcp.Matrix.AuthenticationResultCustomValues` |
+| `AuthenticationResult` | Covered | `ModelApi.Supporting.*`, `ModelApi.Mcp.Matrix.AuthenticationResultCustomValues`, `Security.Policies.AuthenticationResultHeadersAreNeverNull`, `Security.Policies.BearerChallengeFormatsRfc6750`, `Security.HttpServers.AuthenticationFailureCarriesResultHeaders`, `Security.HttpServers.A2AAuthenticationFailureCarriesResultHeaders`, `Security.WebSocket.AuthenticationRejectsMissingOrWrongCredentials` (`Headers`, `BearerChallenge`) |
+| `OriginPolicy` | Covered | `Security.Policies.*` (defaults, lookalike and opaque origins, allowlist normalization, wildcard, `AllowLoopbackOrigins`, `OriginValidator`), `Security.HttpServers.*`, `Security.WebSocket.*` (server enforcement) |
+| `LoopbackAddresses` | Covered | `Security.Policies.LoopbackAddressesRecognizeLoopbackOnly`, `Security.HttpServers.LoopbackRestrictionDefaultsFollowHostname`, `Security.HttpServers.RemoteClientWithSpoofedHostIsRejected`, `Security.WebSocket.RemoteClientWithSpoofedHostIsRejected` |
 | `RpcCallContext` | Covered | `McpHttp.Server.CallContext.*` (ambient and explicit-context propagation, unauthenticated null, ping bypass, concurrent isolation) |
 | `ClientConnectedEventArgs` | Covered | `ModelApi.Supporting.*`, `JsonRpc.Tcp.Integration.ClientAndServerEvents`, `McpHttp.Client.Matrix.DisconnectRaisesEvent` |
-| `ClientConnection` | Covered | `ClientConnection.*`, `ClientConnection.Matrix.*` |
+| `ClientConnection` | Covered | `ClientConnection.*`, `ClientConnection.Matrix.*`, `McpHttp.Sessions.MarkActivityUpdatesLastActivity`, `McpHttp.Sessions.RequestsKeepSessionsAlive` (`MarkActivity`), `Security.WebSocket.ValidCredentialsConnectAndCallerFlowsIntoHandlers` (`Caller`) |
 | `ClientConnectionTypeEnum` | Covered | `ClientConnection.Matrix.TypedConstructorAllEnumValues`, `ModelApi.Mcp.Matrix.ClientConnectionTypeEnumAllValues` |
 | `ClientDisconnectedEventArgs` | Covered | `ModelApi.Supporting.*`, `McpHttp.Client.Matrix.DisconnectRaisesEvent` |
 | `JsonRpcClient` | Covered | `PublicApi.Clients.Validation.*`, `JsonRpc.Tcp.Integration.*` |
@@ -18,7 +20,7 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | `JsonRpcRequestEventArgs` | Covered | `ModelApi.Supporting.JsonRpcEventArgs`, `JsonRpc.Tcp.Integration.ClientNotificationRaisesServerRequestReceived` |
 | `JsonRpcResponse` | Covered | `ModelApi.JsonRpc.*`, `ModelApi.JsonRpc.Matrix.*`, transport integration suites |
 | `JsonRpcResponseEventArgs` | Covered | `ModelApi.Supporting.JsonRpcEventArgs`, `JsonRpc.Tcp.Integration.ClientAndServerEvents` |
-| `JsonRpcServer` | Covered | `PublicApi.Servers.Validation.*`, `JsonRpc.Tcp.Integration.*` |
+| `JsonRpcServer` | Covered | `PublicApi.Servers.Validation.*`, `JsonRpc.Tcp.Integration.*`, `Mcp.DiagnosticTools.JsonRpcServerDiagnosticsOptIn` (`includeDiagnosticMethods`) |
 | `IJsonRpcErrorProvider` | Covered | `ApiSurface.Inventory.ExportedTypesAreTracked`, protocol exception mapping suites |
 | `A2AProtocol` | Covered | `A2A.Protocol.*`, `A2A.Compatibility.*` |
 | `A2AJson` | Covered | `A2A.Protocol.AgentCardSerializesV1Shape`, `A2A.Protocol.TaskStateAndRoleUseA2AWireNames`, `A2A.Compatibility.*` |
@@ -28,7 +30,7 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | `A2AClient` | Covered | `A2A.Protocol.JsonRpcSendMessageAndGetTask`, `A2A.Protocol.JsonRpcStreamingMessageUsesSse`, `A2A.Protocol.PushNotificationConfigCrud`, `A2A.Protocol.ExtendedAgentCardJsonRpcAndRest`, `A2A.Protocol.ReturnImmediatelyPersistsSubmittedTask`, `A2A.Compatibility.JsonRpcClientEnvelopeMatchesOfficialSdk` |
 | `A2AHttpJsonClient` | Covered | `A2A.Protocol.HttpJsonClientCoversRestBinding`, `A2A.Compatibility.HttpJsonClientRoutesMatchOfficialSdk`, `A2A.Compatibility.HttpJsonListTasksQueryMatchesOfficialSdk`, `A2A.Compatibility.HttpJsonClientParsesOfficialRestSse` |
 | `A2AGrpcClient` | Covered | `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.GrpcErrorMapsToA2AProtocolException`, `A2A.Protocol.GrpcPreservesRichMessagePartsAndMetadata`, `A2A.Protocol.GrpcSubscribeAndCancelTask`, `A2A.Protocol.GrpcAuthenticationBlocksRpcButAllowsAgentCard` |
-| `A2AHttpServer` | Covered | `A2A.Protocol.*`, official-style JSON-RPC and HTTP+JSON compatibility cases |
+| `A2AHttpServer` | Covered | `A2A.Protocol.*`, official-style JSON-RPC and HTTP+JSON compatibility cases, `Security.HttpServers.A2A*` (`OriginPolicy`, CORS echo, `RestrictToLoopbackClients`, auth failure headers) |
 | `A2AGrpcServer` | Covered | `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.GrpcErrorMapsToA2AProtocolException`, `A2A.Protocol.GrpcPreservesRichMessagePartsAndMetadata`, `A2A.Protocol.GrpcSubscribeAndCancelTask`, `A2A.Protocol.GrpcAuthenticationBlocksRpcButAllowsAgentCard`, sample/manual harness coverage |
 | `IA2AAgentHandler` | Covered | `A2A.Protocol.*`, sample/test handlers |
 | `A2ARequestContext` | Covered | `A2A.Protocol.*`, handler integration coverage, `A2A.Protocol.AuthenticatedCallerReachesAgentContext`, `A2A.Protocol.GrpcAuthenticatedCallerReachesAgentContext`, `A2A.Protocol.UnauthenticatedRequestHasNullCallerInContext` (Principal/Claims propagation) |
@@ -40,20 +42,20 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | A2A message/content models | Covered | `A2A.Protocol.TaskStateAndRoleUseA2AWireNames`, send/stream/task integration cases |
 | A2A task lifecycle models | Covered | `A2A.Protocol.JsonRpcSendMessageAndGetTask`, `A2A.Protocol.JsonRpcStreamingMessageUsesSse`, `A2A.Protocol.ReturnImmediatelyPersistsSubmittedTask`, `A2A.Protocol.GrpcSubscribeAndCancelTask`, HTTP+JSON and gRPC client/server cases |
 | A2A push notification config models | Covered | `A2A.Protocol.PushNotificationConfigCrud`, `A2A.Protocol.GrpcClientServerCoversA2AService`, `A2A.Protocol.OfficialRestPushConfigBodyAccepted`, `A2A.Compatibility.HttpJsonClientRoutesMatchOfficialSdk` |
-| `McpClient` | Covered | `PublicApi.Clients.Validation.McpClient*`, `McpStdio.Integration.*` |
-| `McpHttpClient` | Covered | `PublicApi.Clients.Validation.McpHttpClient*`, `McpHttp.Client.Matrix.*` |
-| `McpHttpServer` | Covered | `PublicApi.Servers.Validation.McpHttpServer*`, `McpHttp.Protocol.*`, `McpHttp.Streamable.Matrix.*`, `McpHttp.Registry.Matrix.*`, `McpHttp.Server.Negotiation.*` (`MaximumHandshakeProtocolVersion`), `McpHttp.Server.AuthParity.*` (authenticated and unauthenticated requests share one pipeline), `McpVersion.StatelessResults.*` |
-| `McpServer` | Covered | `McpServer.Api.*`, `PublicApi.Servers.Validation.McpServer*`, `McpStdio.*.InitializeRequesting20260728NegotiatesHandshake`, `McpHttp.Server.Negotiation.MaximumHandshakeProtocolVersionValidatedOnEveryServer` |
+| `McpClient` | Covered | `PublicApi.Clients.Validation.McpClient*`, `McpStdio.Integration.*` (including `PingAsync`) |
+| `McpHttpClient` | Covered | `PublicApi.Clients.Validation.McpHttpClient*`, `McpHttp.Client.Matrix.*`, `Mcp.DiagnosticTools.HttpClientAcceptsLegacyPong`, `Mcp.DiagnosticTools.HttpClientPingSurfacesErrors` (`PingAsync`), `Mcp.DiagnosticTools.HttpClientConnectFailsWhenInitializeFails`, `McpHttp.Sessions.ClientHandshakeNegotiatesVersionAndSendsInitialized`, `McpHttp.Sessions.LegacyClientConnectsAndReceivesEventsNotifications` (initialize handshake on connect) |
+| `McpHttpServer` | Covered | `PublicApi.Servers.Validation.McpHttpServer*`, `McpHttp.Protocol.*`, `McpHttp.Streamable.Matrix.*`, `McpHttp.Registry.Matrix.*`, `McpHttp.Server.Negotiation.*` (`MaximumHandshakeProtocolVersion`), `McpHttp.Server.AuthParity.*` (authenticated and unauthenticated requests share one pipeline), `McpVersion.StatelessResults.*`, `Mcp.DiagnosticTools.*` (protocol methods always registered, opt-in diagnostic tools, protocol `ping` result, `UnregisterTool`, tools reachable only through `tools/call`), `Mcp.SchemaValidation.*` (`additionalProperties`, `patternProperties`), `McpHttp.Sessions.*` (initialize-only sessions, 400/404 rules, principal binding, `RequireInitializedSessions`), `Security.HttpServers.*` (`OriginPolicy`, CORS echo, `RestrictToLoopbackClients`, JSON content type, auth failure headers) |
+| `McpServer` | Covered | `McpServer.Api.*`, `PublicApi.Servers.Validation.McpServer*`, `McpStdio.*.InitializeRequesting20260728NegotiatesHandshake`, `McpHttp.Server.Negotiation.MaximumHandshakeProtocolVersionValidatedOnEveryServer`, `Mcp.DiagnosticTools.UnregisterToolOnEveryServer` |
 | `McpTcpClient` | Covered | `PublicApi.Clients.Validation.McpTcpClientIsJsonRpcClient`, `McpTcp.Parity.*` |
-| `McpTcpServer` | Covered | `PublicApi.Servers.Validation.McpTcpServer*`, `McpTcp.Parity.*` (including `InitializeRequesting20260728NegotiatesHandshake` and `MaximumHandshakeProtocolVersionHonored`) |
-| `McpWebsocketsClient` | Covered | `PublicApi.Clients.Validation.McpWebsocketsClient*`, `McpWebSocket.Parity.*` |
-| `McpWebsocketsServer` | Covered | `PublicApi.Servers.Validation.McpWebsocketsServer*`, `McpWebSocket.Parity.*` (including `InitializeRequesting20260728NegotiatesHandshake` and `MaximumHandshakeProtocolVersionHonored`) |
-| `MessageFraming` | Covered | `MessageFraming.*`, `MessageFraming.Edge.*` |
+| `McpTcpServer` | Covered | `PublicApi.Servers.Validation.McpTcpServer*`, `McpTcp.Parity.*` (including `InitializeRequesting20260728NegotiatesHandshake` and `MaximumHandshakeProtocolVersionHonored`), `Mcp.DiagnosticTools.TcpDefaultAndOptIn`, `Mcp.DiagnosticTools.UnregisterToolOnEveryServer` |
+| `McpWebsocketsClient` | Covered | `PublicApi.Clients.Validation.McpWebsocketsClient*`, `McpWebSocket.Parity.*` (including `PingAsync`), `Security.WebSocket.ValidCredentialsConnectAndCallerFlowsIntoHandlers`, `Security.WebSocket.SetRequestHeaderRemovalAppliesToNextConnect` (`SetRequestHeader`) |
+| `McpWebsocketsServer` | Covered | `PublicApi.Servers.Validation.McpWebsocketsServer*`, `McpWebSocket.Parity.*` (including `InitializeRequesting20260728NegotiatesHandshake` and `MaximumHandshakeProtocolVersionHonored`), `Mcp.DiagnosticTools.WebSocketDiagnosticsAreTools`, `Mcp.DiagnosticTools.UnregisterToolOnEveryServer`, `Security.WebSocket.*` (`AuthenticationHandler`, `OriginPolicy`, `RestrictToLoopbackClients`, caller context) |
+| `MessageFraming` | Covered | `MessageFraming.*`, `MessageFraming.Edge.*`, `Security.Framing.*` (strict LSP header grammar, HTTP requests dropped by `JsonRpcServer` and `McpTcpServer`) |
 | `RequestSentEventArgs` | Covered | `ModelApi.Supporting.RequestSentEventArgs`, `JsonRpc.Tcp.Integration.ClientAndServerEvents`, `McpHttp.Client.Matrix.ResponseEvents` |
 | `ResponseReceivedEventArgs` | Covered | `ModelApi.Supporting.ResponseReceivedEventArgs`, `JsonRpc.Tcp.Integration.ClientAndServerEvents`, `McpHttp.Client.Matrix.ResponseEvents` |
 | `ToolDefinition` | Covered | `ModelApi.Supporting.ToolDefinitionDefaults`, `McpProtocol.Content.ToolDefinitionSerialization`, `ModelApi.Mcp.Matrix.ToolDefinitionOmittedOptionalFields`, `McpHttp.Registry.Matrix.ToolsListMetadata` |
 | `McpProtocol` | Covered | `McpProtocol.Models.*`, `ModelApi.Mcp.Matrix.Protocol*`, HTTP/TCP/WebSocket initialize suites, `McpHttp.Server.Negotiation.*` (`NegotiateHandshakeVersion`, `NewestHandshakeProtocolVersion`, `IsHandshakeVersion`) |
-| `McpProtocolException` | Covered | `ModelApi.Mcp.Matrix.ProtocolException*`, `JsonRpc.Tcp.Integration.McpProtocolExceptionMapsToProtocolError`, HTTP invalid-params suites |
+| `McpProtocolException` | Covered | `ModelApi.Mcp.Matrix.ProtocolException*`, `JsonRpc.Tcp.Integration.McpProtocolExceptionMapsToProtocolError`, HTTP invalid-params suites, `McpHttp.Sessions.SessionErrorFactoriesUseSpecCodes` (`SessionNotFound`, `SessionRequired`) |
 | `McpImplementation` | Covered | `McpProtocol.Models.ImplementationSerialization`, `ModelApi.Mcp.Matrix.ImplementationOmittedNulls` |
 | `McpIcon` | Covered | `McpProtocol.Models.ImplementationSerialization`, `ModelApi.Mcp.Matrix.IconAllFields` |
 | `McpAnnotations` | Covered | `McpProtocol.Content.ToolDefinitionSerialization`, `ModelApi.Mcp.Matrix.AnnotationsAllHints` |

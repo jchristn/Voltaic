@@ -1,8 +1,63 @@
 # Changelog
 
-## Unreleased
+## v2.1.0
+A security release (reports: `archive/BUG_TO_FIX.md`, `archive/AUTH_BUGS.md`). It fixes handshake sessions being created for requests that never initialized, and closes the ways a web page in the user's browser, or another host on the network, could reach a Voltaic server the developer believed was local-only. Defaults change as a result; see "Upgrading to v2.1.0" in the README for the one-line fixes.
+
+### Security fixes
+- **Browser origins are validated** on `McpHttpServer`, `McpWebsocketsServer`, and `A2AHttpServer`, as the MCP Streamable HTTP specification requires. Before, any page could call tools with a preflight-free `text/plain` POST and read the result, because every response carried `Access-Control-Allow-Origin: *`, and any page could open a WebSocket (browsers do not apply CORS to WebSockets). Requests without an `Origin` header (non-browser clients) and loopback origins (`http(s)://localhost`, `127.0.0.0/8`, `[::1]`, any port) are allowed; every other origin gets 403 with no CORS headers, before preflight handling and authentication. Configure with the new `OriginPolicy` property (`AllowedOrigins`, `AllowLoopbackOrigins`, `OriginValidator`).
+- **CORS echoes the allowed origin** instead of `*`, adds `Vary: Origin`, and uses an explicit `Access-Control-Allow-Headers` list (which, unlike `*`, covers `Authorization`). `/events` no longer hard-codes `*`. An `Access-Control-Allow-Origin` entry in `CorsHeaders` is ignored.
+- **Servers bound to a loopback name serve loopback clients only.** On Windows, `HttpListener` (http.sys) serves a `localhost` prefix on every interface and routes by the `Host` header, so a LAN client could reach a "localhost" server by sending `Host: localhost`. The new `RestrictToLoopbackClients` property (default true for `localhost`, `127.x.x.x`, and `::1`) rejects non-loopback remote addresses with 403 on `McpHttpServer`, `McpWebsocketsServer`, and `A2AHttpServer`.
+- **Handshake sessions are created only by a successful `initialize`** (`McpHttpServer`, `/mcp` and `/rpc`). Before, a session was registered and returned for a rejected `initialize`, for any request without a session, and for any client-chosen `MCP-Session-Id`, which was adopted as-is. Now: a rejected `initialize` creates nothing; `POST /mcp` without a session gets 400 (`-32600`) except `initialize` and `ping` (a sessionless `ping` is answered without creating a session); `POST /rpc` without a session runs on a temporary connection with no session header; an unknown, expired, or terminated session ID gets 404 (`-32001`, via the new `McpProtocolException.SessionNotFound()`) on every endpoint.
+- **Sessions are bound to the authenticated principal** that created them. Another principal presenting the ID gets 404.
+- **`McpWebsocketsServer` supports authentication.** The new `AuthenticationHandler` (same delegate as `McpHttpServer`) runs on the upgrade request; the caller is stored in the new `ClientConnection.Caller` and is the ambient `RpcCallContext.Current` for every request on the socket. Before, the caller was always null on WebSocket and the transport could not be authenticated at all.
+- **The TCP framing parser is strict.** `MessageFraming` accepts only `Content-Length` (once, digits only) and `Content-Type` header lines, enforces the 1024-byte header limit on complete headers, and fails fast on anything else. Before, it skipped unknown lines, so an HTTP request from a browser `fetch()` with a matching `Content-Length` ran methods on `JsonRpcServer` and `McpTcpServer`.
+- **`POST /mcp` requires `Content-Type: application/json`** (415 otherwise), removing the preflight-free `text/plain` path even for allowed origins.
+
+### Added
+- `OriginPolicy` and `LoopbackAddresses` in `Voltaic.Core`.
+- `OriginPolicy` and `RestrictToLoopbackClients` on `McpHttpServer`, `McpWebsocketsServer`, and `A2AHttpServer`.
+- `McpHttpServer.RequireInitializedSessions` (default true). Set it to false to serve clients that open a session with a request other than `initialize`, such as `McpHttpClient` from Voltaic 2.0.0 and earlier: any successful sessionless request is then issued a new session. Unknown IDs are still rejected in both modes.
+- `McpWebsocketsServer.AuthenticationHandler`, `ClientConnection.Caller`, and `McpWebsocketsClient.SetRequestHeader(name, value)`.
+- `AuthenticationResult.Headers`, written on rejections by `McpHttpServer`, `McpWebsocketsServer`, and `A2AHttpServer`, and `AuthenticationResult.BearerChallenge(resourceMetadataUrl, error, errorDescription, errorMessage)`, which builds a 401 with an RFC 6750 `WWW-Authenticate: Bearer` challenge.
+- `ClientConnection.MarkActivity()`. HTTP sessions are marked active on every request and on SSE keep-alives, so `SessionTimeoutSeconds` now expires only idle sessions (before, only notification traffic counted).
+- `McpProtocolException.SessionNotFound()` and `McpProtocolException.SessionRequired()`.
+- Touchstone suites `McpHttp.Sessions`, `Security.Policies`, `Security.HttpServers`, `Security.WebSocket`, and `Security.Framing` (65 new cases; 493 in total). Every negative security case was confirmed to fail with its protection disabled.
+
+### Changed
+- `McpHttpClient.ConnectAsync` and `ConnectStreamableAsync` perform the MCP handshake (`initialize`, then `notifications/initialized`) instead of a `ping`, report `ClientName`/`ClientVersion` in `clientInfo`, and adopt the negotiated protocol version in `ProtocolVersion`. Connecting fails when `initialize` returns an error.
+- On an authenticated `McpHttpServer`, the `AuthenticationHandler` now also runs for `ping`: an authenticated ping carries its caller (and can use that caller's session); a ping that fails authentication is still answered, without a caller.
+- The `?session=` query parameter is accepted only on GET streams (`/events`, `GET /mcp`), keeping session IDs out of URLs and logs for POST and DELETE.
+- `/events` distinguishes a missing session (400) from an unknown one (404).
+- Negotiated session versions are released when a session is removed.
+
+### Tests
+- The test fixtures start servers without `Task.Run`, so readiness probes no longer hit a closed port. A refused loopback connection costs about 500ms on Windows; the suite now runs in about 37 seconds instead of about 130.
+
+## v2.0.0
+A breaking release. MCP servers built on Voltaic now publish only the tools the host application registers, answer `ping` the way the MCP specification requires, and invoke tools only through `tools/call`. See [MIGRATE_V1_TO_V2.md](MIGRATE_V1_TO_V2.md) for step-by-step upgrade instructions. The design notes are in `archive/DEFAULT_TOOL_FIX.md`.
+
+### Breaking changes
+- **Protocol methods and demo tools are separated.** Every MCP server (`McpHttpServer`, `McpTcpServer`, `McpServer`, `McpWebsocketsServer`) now always registers the MCP protocol methods. The constructor parameter `includeDefaultMethods` (default `true`), which controlled protocol methods and demo tools together, is replaced by `includeDiagnosticTools` (default `false`), which controls only the `echo` and `getTime` diagnostic tools. In v1.x, turning off the demo tools also turned off `initialize`, `tools/list`, and every other protocol method.
+- **Demo tools are no longer published by default.** `tools/list` returns only the application's tools. The `ping` tool is gone (`ping` is a protocol method), and `getSessions` (HTTP) and `getClients` (TCP, WebSocket) are removed. `getSessions` returned every active `Mcp-Session-Id`, which was enough for one caller to end or read another caller's session, including across tenants on an authenticated server.
+- **`ping` returns `{}`.** The protocol `ping` is now served by its own handler, returns `McpEmptyResult` (`{}`, plus `resultType: "complete"` under `2026-07-28`), and can no longer be replaced by a tool. In v1.x it returned the demo tool's `"pong"`, which is not a valid MCP result. A v1.x `McpHttpClient` cannot connect to a v2.0.0 server, because its connection probe requires `"pong"`.
+- **The `ping` authentication bypass covers only the protocol handler.** In v1.x an application tool named `ping` was also reachable without authentication on `McpHttpServer`. Tools are now always authenticated.
+- **Tools are invoked only through `tools/call`.** `RegisterTool` no longer also registers the tool as a bare JSON-RPC method, so a client can no longer skip `tools/call` and its input and output schema validation. A bare call to a tool name returns `-32601`.
+- **Tool input schemas enforce `additionalProperties` and `patternProperties`.** `additionalProperties: false` rejects undeclared arguments with `-32602` and names the property; an `additionalProperties` schema validates undeclared arguments; `patternProperties` names are allowed and validated. v1.x ignored these keywords, so a misspelled argument was dropped silently. Schemas without them behave as before.
+- **`RegisterBuiltInMethods()` is replaced** by `RegisterProtocolMethods()` and `RegisterDiagnosticTools()` on `McpHttpServer`, `McpTcpServer`, and `McpWebsocketsServer`, and by `RegisterDiagnosticMethods()` on `JsonRpcServer`.
+- **`JsonRpcServer` diagnostic methods are opt-in.** The `includeDefaultMethods` parameter (default `true`) is replaced by `includeDiagnosticMethods` (default `false`), which registers `ping` (still `"pong"` on plain JSON-RPC), `echo`, `getTime`, and `add`. `getClients` is removed.
+
+### Added
+- `UnregisterTool(string name)` on `McpHttpServer`, `McpTcpServer`, `McpServer`, and `McpWebsocketsServer`. Returns `true` when a tool was removed. Like `RegisterTool`, it does not notify clients; call `NotifyToolsChanged()`/`NotifyToolsChangedAsync()` afterwards.
+- `PingAsync(...)` on `McpHttpClient`, `McpClient`, and `McpWebsocketsClient`. It accepts any successful result, so it works against v2.0.0 servers (`{}`) and v1.x servers (`"pong"`). `McpHttpClient.ConnectAsync` and `ConnectStreamableAsync` use it.
+- The `Mcp.DiagnosticTools` and `Mcp.SchemaValidation` Touchstone suites (19 cases), covering both directions: protocol methods without diagnostic tools on every transport, opt-in diagnostics, `ping` result shape under handshake and stateless revisions, the authentication bypass, a tool named `ping`, bare tool calls, `UnregisterTool`, the client against a `"pong"` server, and `additionalProperties`/`patternProperties`. The Claude Code 2.1.x stateless replay now also asserts that `tools/list` contains exactly the application's tools (428 cases in total).
+
+### Fixed
 - Fixed the `McpHttpServer` JSON-RPC endpoint (`/rpc` by default) ignoring the stateless `2026-07-28` revision. `server/discover` advertises that revision on every endpoint, so a client such as Claude Code that chose it and sent requests to `/rpc` received results without `resultType` and rejected `tools/list`. The JSON-RPC endpoint now resolves the protocol version the same way as the MCP endpoint and serves stateless-era requests without a session. Requests without a protocol-version header or stateless routing headers keep the existing JSON-RPC behavior.
-- Added `McpVersion.StatelessResults` cases that replay the Claude Code 2.1.x sequence against the JSON-RPC endpoint with and without authentication, reject a stateless request missing `Mcp-Method` there, and confirm plain JSON-RPC requests are unchanged (409 cases in total).
+- Added `McpVersion.StatelessResults` cases that replay the Claude Code 2.1.x sequence against the JSON-RPC endpoint with and without authentication, reject a stateless request missing `Mcp-Method` there, and confirm plain JSON-RPC requests are unchanged.
+
+### Samples and test applications
+- `Sample.McpServer` publishes only its own tools and no longer overrides `ping`.
+- `Test.McpServer`, `Test.McpHttpServer`, and `Test.McpWebsocketsServer` enable the diagnostic tools explicitly; `Test.JsonRpcServer` enables the diagnostic methods. Their help text reflects the v2.0.0 surface.
 
 ## v1.1.0
 Fixes MCP clients on the stateless `2026-07-28` revision, such as Claude Code 2.1.x, seeing zero tools from Voltaic MCP servers. Confirmed end to end against Claude Code 2.1.281 over Streamable HTTP, with and without an `AuthenticationHandler`.

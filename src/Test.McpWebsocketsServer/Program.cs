@@ -26,7 +26,7 @@ namespace Test.McpWebsocketsServer
             Console.WriteLine("=== MCP WebSocket Server ===");
             Console.WriteLine($"Starting server on port {port}...");
 
-            McpWebsocketsServer server = new McpWebsocketsServer("localhost", port);
+            McpWebsocketsServer server = new McpWebsocketsServer("localhost", port, includeDiagnosticTools: true);
 
             // Subscribe to log events
             server.Log += (sender, message) => Console.WriteLine(message);
@@ -178,13 +178,15 @@ namespace Test.McpWebsocketsServer
 
                     case "methods":
                         Console.WriteLine("Available RPC methods:");
-                        Console.WriteLine("  - echo(message)     : Echoes back the message");
-                        Console.WriteLine("  - getTime()         : Returns current UTC time");
                         Console.WriteLine("  - add(a, b)         : Adds two numbers");
                         Console.WriteLine("  - multiply(x, y)    : Multiplies two numbers");
                         Console.WriteLine("  - greet(name)       : Returns a greeting");
-                        Console.WriteLine("  - getClients()      : Returns list of connected clients");
-                        Console.WriteLine("  - ping()            : Returns 'pong'");
+                        Console.WriteLine("  - asyncLookup(key)  : Looks up a value after a delay");
+                        Console.WriteLine("Diagnostic tools (invoke through tools/call):");
+                        Console.WriteLine("  - echo(message)     : Echoes back the message");
+                        Console.WriteLine("  - getTime()         : Returns current UTC time");
+                        Console.WriteLine("Protocol methods:");
+                        Console.WriteLine("  - ping              : Returns {}");
                         break;
 
                     case "stop":

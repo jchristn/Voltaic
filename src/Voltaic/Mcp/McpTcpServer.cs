@@ -83,16 +83,21 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="ip">The IP address to listen on.</param>
         /// <param name="port">The port number to listen on.</param>
-        /// <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
-        public McpTcpServer(IPAddress ip, int port, bool includeDefaultMethods = true)
+        /// <param name="includeDiagnosticTools">
+        /// True to also publish the diagnostic tools <c>echo</c> and <c>getTime</c> in <c>tools/list</c>.
+        /// Default is false, so the server publishes only the tools the application registers. The MCP protocol
+        /// methods (<c>initialize</c>, <c>ping</c>, <c>tools/*</c>, <c>resources/*</c>, <c>prompts/*</c>, and so on)
+        /// are always registered regardless of this value.
+        /// </param>
+        /// <exception cref="ArgumentNullException">Thrown when ip is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
+        public McpTcpServer(IPAddress ip, int port, bool includeDiagnosticTools = false)
             : base(ip, port, false)
         {
             _Endpoint = new McpEndpoint("Voltaic.Mcp.TcpServer");
 
-            if (includeDefaultMethods)
-            {
-                RegisterBuiltInMethods();
-            }
+            RegisterProtocolMethods();
+            if (includeDiagnosticTools) RegisterDiagnosticTools();
         }
 
         /// <summary>
@@ -129,7 +134,6 @@ namespace Voltaic.Mcp
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Endpoint.RegisterTool(definition, (args, _) => Task.FromResult(handler(args)));
-            RegisterMethod(definition.Name, handler);
         }
 
         /// <summary>
@@ -166,7 +170,6 @@ namespace Voltaic.Mcp
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Endpoint.RegisterTool(definition, (args, _) => handler(args));
-            RegisterMethod(definition.Name, handler);
         }
 
         /// <summary>
@@ -203,7 +206,21 @@ namespace Voltaic.Mcp
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Endpoint.RegisterTool(definition, handler);
-            RegisterMethod(definition.Name, handler);
+        }
+
+        /// <summary>
+        /// Removes a previously registered tool so it no longer appears in <c>tools/list</c> and
+        /// <c>tools/call</c> for it returns a "not found" error. Clients are not notified automatically;
+        /// call <see cref="NotifyToolsChangedAsync"/> afterwards to send <c>notifications/tools/list_changed</c>.
+        /// Thread-safe.
+        /// </summary>
+        /// <param name="name">The tool name. Matched case-sensitively. Must not be null or empty.</param>
+        /// <returns>True if a tool with that name was registered and has been removed; false if no such tool existed.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when name is null or empty.</exception>
+        public bool UnregisterTool(string name)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            return _Endpoint.UnregisterTool(name);
         }
 
         /// <summary>
@@ -484,17 +501,16 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
-        /// Note: Unlike JsonRpcServer, this does not include the 'add' method.
+        /// Registers the MCP protocol methods: <c>initialize</c>, <c>ping</c>, <c>tools/*</c>,
+        /// <c>resources/*</c>, <c>prompts/*</c>, <c>completion/complete</c>, <c>logging/setLevel</c>, and the
+        /// client notification handlers. Called once by the constructor, regardless of
+        /// <c>includeDiagnosticTools</c>. A derived class that overrides this method must call the base
+        /// implementation, or the server will not speak MCP.
         /// </summary>
-        protected override void RegisterBuiltInMethods()
+        protected virtual void RegisterProtocolMethods()
         {
-            // MCP Protocol Methods
-            RegisterMethod("initialize", (args) =>
-            {
-                return _Endpoint.Initialize(args);
-            });
-
+            RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
+            RegisterMethod("ping", (args) => _Endpoint.Ping(args));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
@@ -508,17 +524,15 @@ namespace Voltaic.Mcp
             RegisterMethod("logging/setLevel", (args) => _Endpoint.SetLogLevel(args));
             RegisterMethod("notifications/cancelled", (args) => _Endpoint.Cancelled(args));
             RegisterMethod("notifications/initialized", (args) => _Endpoint.Initialized(args));
+        }
 
-            RegisterTool("ping",
-                "Returns 'pong' to verify server connectivity",
-                new
-                {
-                    type = "object",
-                    properties = new { },
-                    required = Array.Empty<string>()
-                },
-                (_) => "pong");
-
+        /// <summary>
+        /// Registers the optional diagnostic tools <c>echo</c> and <c>getTime</c>. Called by the constructor
+        /// only when <c>includeDiagnosticTools</c> is true. Derived classes may override this to publish a
+        /// different diagnostic set.
+        /// </summary>
+        protected virtual void RegisterDiagnosticTools()
+        {
             RegisterTool("echo",
                 "Echoes back the provided message",
                 new
@@ -549,16 +563,16 @@ namespace Voltaic.Mcp
                     required = Array.Empty<string>()
                 },
                 (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+        }
 
-            RegisterTool("getClients",
-                "Returns a list of all connected client IDs",
-                new
-                {
-                    type = "object",
-                    properties = new { },
-                    required = Array.Empty<string>()
-                },
-                (_) => GetConnectedClients());
+        /// <summary>
+        /// Registers the MCP diagnostic tools in place of the plain JSON-RPC diagnostic methods of
+        /// <see cref="JsonRpcServer"/>, so a derived class that calls this method gets MCP tools rather than
+        /// bare methods. The constructor calls <see cref="RegisterDiagnosticTools"/> directly.
+        /// </summary>
+        protected override void RegisterDiagnosticMethods()
+        {
+            RegisterDiagnosticTools();
         }
     }
 }

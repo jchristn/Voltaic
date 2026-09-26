@@ -52,13 +52,16 @@ namespace Test.Shared
                         JsonProbe error = json.Get("error");
                         TestAssert.Equal(-32602, error.Get("code").Int());
                         TestAssert.True(error.Get("message").String()!.Contains("Unsupported MCP protocol version"), "Error should describe unsupported version.");
+                        TestAssert.True(String.IsNullOrEmpty(response.SessionId), "A rejected initialize must not issue a session.");
+                        TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "A rejected initialize must not register a session.");
                     }),
 
                     Case(suiteId, "ToolsListAndCall", "tools/list and tools/call expose registered metadata and structured results", async ct =>
                     {
                         await using HttpServerFixture fixture = await HttpServerFixture.StartAsync(ct).ConfigureAwait(false);
 
-                        RpcResult listResponse = await fixture.PostRpcAsync("tools/list", new { }, 3, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeAsync(ct).ConfigureAwait(false);
+                        RpcResult listResponse = await fixture.PostRpcAsync("tools/list", new { }, 3, sessionId, ct).ConfigureAwait(false);
                         JsonProbe listJson = JsonProbe.Parse(listResponse.Body);
                         JsonProbe tools = listJson.Get("result").Get("tools");
                         TestAssert.True(tools.EnumerateArray().Any(tool => tool.Get("name").String() == "sum"), "Registered tool should be listed.");
@@ -79,7 +82,8 @@ namespace Test.Shared
                     {
                         await using HttpServerFixture fixture = await HttpServerFixture.StartAsync(ct).ConfigureAwait(false);
 
-                        RpcResult listResponse = await fixture.PostRpcAsync("resources/list", new { }, 5, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeAsync(ct).ConfigureAwait(false);
+                        RpcResult listResponse = await fixture.PostRpcAsync("resources/list", new { }, 5, sessionId, ct).ConfigureAwait(false);
                         JsonProbe listJson = JsonProbe.Parse(listResponse.Body);
                         JsonProbe resources = listJson.Get("result").Get("resources");
                         TestAssert.True(resources.EnumerateArray().Any(resource => resource.Get("uri").String() == "voltaic://docs/readme"), "Static resource should be listed.");
@@ -107,7 +111,8 @@ namespace Test.Shared
                     {
                         await using HttpServerFixture fixture = await HttpServerFixture.StartAsync(ct).ConfigureAwait(false);
 
-                        RpcResult listResponse = await fixture.PostRpcAsync("prompts/list", new { }, 9, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeAsync(ct).ConfigureAwait(false);
+                        RpcResult listResponse = await fixture.PostRpcAsync("prompts/list", new { }, 9, sessionId, ct).ConfigureAwait(false);
                         JsonProbe listJson = JsonProbe.Parse(listResponse.Body);
                         JsonProbe prompts = listJson.Get("result").Get("prompts");
                         TestAssert.True(prompts.EnumerateArray().Any(prompt => prompt.Get("name").String() == "summarize"), "Prompt should be listed.");
@@ -169,11 +174,23 @@ namespace Test.Shared
                 ConfigureServer(server);
 
                 CancellationTokenSource tokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
-                Task serverTask = Task.Run(() => server.StartAsync(tokenSource.Token), CancellationToken.None);
+                // StartAsync starts the listener before its first await, so the probe below never hits a closed
+                // port (a refused loopback connect costs ~500ms on Windows).
+                Task serverTask = server.StartAsync(tokenSource.Token);
 
                 HttpServerFixture fixture = new HttpServerFixture(server, port, tokenSource, serverTask);
                 await fixture.WaitUntilReadyAsync(token).ConfigureAwait(false);
                 return fixture;
+            }
+
+            public async Task<string?> InitializeAsync(CancellationToken token)
+            {
+                RpcResult response = await PostRpcAsync("initialize", new
+                {
+                    protocolVersion = McpProtocol.LatestProtocolVersion,
+                    clientInfo = new { name = "test-client", version = "1.0.0" }
+                }, "initialize", null, token).ConfigureAwait(false);
+                return response.SessionId;
             }
 
             public async Task<RpcResult> PostRpcAsync(string method, object? parameters, object id, string? sessionId, CancellationToken token)

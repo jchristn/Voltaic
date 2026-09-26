@@ -47,6 +47,8 @@ namespace Test.Shared
     {
         private readonly CancellationTokenSource _TokenSource;
         private readonly Task _ServerTask;
+        private readonly SemaphoreSlim _SessionLock = new SemaphoreSlim(1, 1);
+        private string? _SharedSessionId;
 
         private HttpMcpTestServerFixture(McpHttpServer server, string hostname, int port, CancellationTokenSource tokenSource, Task serverTask)
         {
@@ -71,29 +73,76 @@ namespace Test.Shared
         public static async Task<HttpMcpTestServerFixture> StartAsync(
             CancellationToken token,
             Action<McpHttpServer>? configure = null,
-            bool includeDefaultMethods = true,
+            bool includeDiagnosticTools = false,
             string hostname = "localhost",
             string rpcPath = "/rpc",
             string eventsPath = "/events",
             string? mcpPath = "/mcp")
         {
             int port = TestPorts.GetFreePort();
-            McpHttpServer server = new McpHttpServer(hostname, port, rpcPath, eventsPath, includeDefaultMethods, mcpPath);
+            McpHttpServer server = new McpHttpServer(hostname, port, rpcPath, eventsPath, includeDiagnosticTools, mcpPath);
             server.ServerName = "Voltaic.Test";
             server.ServerVersion = "0.3.0-test";
             configure?.Invoke(server);
 
             CancellationTokenSource tokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Task serverTask = Task.Run(() => server.StartAsync(tokenSource.Token), CancellationToken.None);
+            // StartAsync starts the listener before its first await, so the probe below never hits a closed
+            // port (a refused loopback connect costs ~500ms on Windows).
+            Task serverTask = server.StartAsync(tokenSource.Token);
 
             HttpMcpTestServerFixture fixture = new HttpMcpTestServerFixture(server, hostname, port, tokenSource, serverTask);
             await fixture.WaitUntilReadyAsync(token).ConfigureAwait(false);
             return fixture;
         }
 
+        /// <summary>
+        /// Posts to the MCP endpoint. When <paramref name="sessionId"/> is null and the method needs a session
+        /// (anything but initialize and ping), the fixture's shared session is used, opened with initialize on
+        /// first use. Tests that exercise sessionless behavior call <see cref="PostJsonRpcAsync"/> directly.
+        /// </summary>
         public async Task<RpcResult> PostMcpAsync(string method, object? parameters, object? id, string? sessionId, CancellationToken token)
         {
+            if (sessionId == null && method != "initialize" && method != "ping")
+            {
+                sessionId = await GetSharedSessionAsync(token).ConfigureAwait(false);
+            }
+
             return await PostJsonRpcAsync("/mcp/", method, parameters, id, sessionId, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Opens a session with initialize and returns its ID, or null when the server issued none
+        /// (for example when authentication rejected the initialize).
+        /// </summary>
+        public async Task<string?> InitializeSessionAsync(CancellationToken token, string path = "/mcp/")
+        {
+            object parameters = new
+            {
+                protocolVersion = McpProtocol.LatestProtocolVersion,
+                capabilities = new { },
+                clientInfo = new { name = "Voltaic.Test", version = "1.0.0" }
+            };
+
+            RpcResult result = await PostJsonRpcAsync(path, "initialize", parameters, "fixture-initialize", null, token).ConfigureAwait(false);
+            return result.SessionId;
+        }
+
+        private async Task<string?> GetSharedSessionAsync(CancellationToken token)
+        {
+            await _SessionLock.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (_SharedSessionId == null || !Server.GetActiveSessions().Contains(_SharedSessionId))
+                {
+                    _SharedSessionId = await InitializeSessionAsync(token).ConfigureAwait(false);
+                }
+
+                return _SharedSessionId;
+            }
+            finally
+            {
+                _SessionLock.Release();
+            }
         }
 
         public async Task<RpcResult> PostRpcAsync(string method, object? parameters, object? id, string? sessionId, CancellationToken token)
@@ -211,10 +260,10 @@ namespace Test.Shared
         public static async Task<TcpJsonRpcFixture> StartAsync(
             CancellationToken token,
             Action<JsonRpcServer>? configure = null,
-            bool includeDefaultMethods = true)
+            bool includeDiagnosticMethods = true)
         {
             int port = TestPorts.GetFreePort();
-            JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, port, includeDefaultMethods);
+            JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, port, includeDiagnosticMethods);
             configure?.Invoke(server);
 
             return await StartServerAsync(server, port, token).ConfigureAwait(false);
@@ -223,10 +272,10 @@ namespace Test.Shared
         public static async Task<TcpJsonRpcFixture> StartMcpTcpAsync(
             CancellationToken token,
             Action<McpTcpServer>? configure = null,
-            bool includeDefaultMethods = true)
+            bool includeDiagnosticTools = false)
         {
             int port = TestPorts.GetFreePort();
-            McpTcpServer server = new McpTcpServer(IPAddress.Loopback, port, includeDefaultMethods);
+            McpTcpServer server = new McpTcpServer(IPAddress.Loopback, port, includeDiagnosticTools);
             configure?.Invoke(server);
 
             return await StartServerAsync(server, port, token).ConfigureAwait(false);
@@ -236,7 +285,9 @@ namespace Test.Shared
         {
 
             CancellationTokenSource tokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Task serverTask = Task.Run(() => server.StartAsync(tokenSource.Token), CancellationToken.None);
+            // StartAsync starts the listener before its first await, so the probe below never hits a closed
+            // port (a refused loopback connect costs ~500ms on Windows).
+            Task serverTask = server.StartAsync(tokenSource.Token);
             TcpJsonRpcFixture fixture = new TcpJsonRpcFixture(server, port, tokenSource, serverTask);
             await fixture.WaitUntilReadyAsync(token).ConfigureAwait(false);
             return fixture;
@@ -318,14 +369,16 @@ namespace Test.Shared
         public static async Task<WebSocketMcpFixture> StartAsync(
             CancellationToken token,
             Action<McpWebsocketsServer>? configure = null,
-            bool includeDefaultMethods = true)
+            bool includeDiagnosticTools = false)
         {
             int port = TestPorts.GetFreePort();
-            McpWebsocketsServer server = new McpWebsocketsServer("localhost", port, "/mcp", includeDefaultMethods);
+            McpWebsocketsServer server = new McpWebsocketsServer("localhost", port, "/mcp", includeDiagnosticTools);
             configure?.Invoke(server);
 
             CancellationTokenSource tokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Task serverTask = Task.Run(() => server.StartAsync(tokenSource.Token), CancellationToken.None);
+            // StartAsync starts the listener before its first await, so the probe below never hits a closed
+            // port (a refused loopback connect costs ~500ms on Windows).
+            Task serverTask = server.StartAsync(tokenSource.Token);
             WebSocketMcpFixture fixture = new WebSocketMcpFixture(server, port, tokenSource, serverTask);
             await Task.Delay(100, token).ConfigureAwait(false);
             return fixture;

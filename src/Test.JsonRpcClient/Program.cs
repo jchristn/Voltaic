@@ -206,7 +206,6 @@ namespace Test.JsonRpcClient
                             Console.WriteLine("  call multiply {\"x\":4,\"y\":7}    - Call multiply method");
                             Console.WriteLine("  call greet {\"name\":\"Alice\"}    - Call greet method");
                             Console.WriteLine("  call getTime                       - Get server time");
-                            Console.WriteLine("  call getClients                    - Get list of connected clients");
                             Console.WriteLine("  notify log {\"message\":\"Test\"}  - Send notification");
                             break;
 

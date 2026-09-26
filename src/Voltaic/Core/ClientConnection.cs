@@ -27,6 +27,16 @@ namespace Voltaic.Core
         public string SessionId { get; }
 
         /// <summary>
+        /// Gets or sets the authenticated caller that opened this connection, or null when the server has no
+        /// authentication handler (or the connection is not authenticated).
+        /// <see cref="Voltaic.Mcp.McpWebsocketsServer"/> sets it from the upgrade request's
+        /// <see cref="AuthenticationResult"/> and makes it the ambient <see cref="RpcCallContext.Current"/> for
+        /// every request on the socket. <see cref="Voltaic.Mcp.McpHttpServer"/> sets it when a session is
+        /// created and rejects later requests on that session from a different principal.
+        /// </summary>
+        public RpcCallContext? Caller { get; set; }
+
+        /// <summary>
         /// Gets the timestamp of the last activity on this connection.
         /// Updated when notifications are enqueued or dequeued.
         /// </summary>
@@ -214,6 +224,16 @@ namespace Voltaic.Core
                 return notification;
             }
             return null;
+        }
+
+        /// <summary>
+        /// Records activity on this connection by setting <see cref="LastActivity"/> to the current UTC time.
+        /// HTTP servers call this for every request a session sends, so a session that is in use is not
+        /// expired by idle-session cleanup. Safe to call from multiple threads and after disposal.
+        /// </summary>
+        public void MarkActivity()
+        {
+            LastActivity = DateTime.UtcNow;
         }
 
         /// <summary>

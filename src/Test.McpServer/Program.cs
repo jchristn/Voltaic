@@ -15,7 +15,8 @@ namespace Test.McpServer
             Console.Error.WriteLine("Press Ctrl+C or close stdin to stop");
             Console.Error.WriteLine();
 
-            McpServer server = new McpServer();
+            // The test host enables the diagnostic echo and getTime tools so the stdio suites can exercise them.
+            McpServer server = new McpServer(includeDiagnosticTools: true);
 
             // Subscribe to logs (goes to stderr)
             server.Log += (sender, message) =>

@@ -69,6 +69,39 @@
             not authenticated or the result carried no claims.
             </summary>
         </member>
+        <member name="P:Voltaic.A2A.A2AHttpServer.EnableCors">
+            <summary>
+            Gets or sets whether CORS headers are sent. When enabled, a request from a browser origin that
+            <see cref="P:Voltaic.A2A.A2AHttpServer.OriginPolicy"/> allows receives <c>Access-Control-Allow-Origin</c> set to that origin (never
+            <c>*</c>), <c>Vary: Origin</c>, and the <see cref="P:Voltaic.A2A.A2AHttpServer.CorsHeaders"/>. Requests without an <c>Origin</c>
+            header receive no CORS headers. Origins the policy rejects get HTTP 403 whether CORS is on or off.
+            Default is true.
+            </summary>
+        </member>
+        <member name="P:Voltaic.A2A.A2AHttpServer.CorsHeaders">
+            <summary>
+            Gets or sets additional CORS headers sent to allowed browser origins when <see cref="P:Voltaic.A2A.A2AHttpServer.EnableCors"/> is
+            true. An <c>Access-Control-Allow-Origin</c> or <c>Vary</c> entry is ignored, because the allowed origin
+            is always echoed; use <see cref="P:Voltaic.A2A.A2AHttpServer.OriginPolicy"/> to choose origins.
+            </summary>
+        </member>
+        <member name="P:Voltaic.A2A.A2AHttpServer.OriginPolicy">
+            <summary>
+            Gets or sets the policy that decides which browser origins may call the server. A request whose
+            <c>Origin</c> the policy rejects receives HTTP 403 with no CORS headers, before preflight handling and
+            authentication, including requests for the public Agent Card. The default allows requests without an
+            <c>Origin</c> header and loopback origins. Setting null restores the default policy.
+            </summary>
+        </member>
+        <member name="P:Voltaic.A2A.A2AHttpServer.RestrictToLoopbackClients">
+            <summary>
+            Gets or sets whether only loopback clients are served. When true, a request whose remote address is
+            not loopback receives HTTP 403. Default is true when the server is constructed with a loopback host
+            name (<c>localhost</c>, <c>127.x.x.x</c>, or <c>::1</c>) and false otherwise. On Windows a
+            <c>localhost</c> prefix is served on every interface and routed by the spoofable <c>Host</c> header,
+            so this check is what keeps such a server local.
+            </summary>
+        </member>
         <member name="T:Voltaic.A2A.A2AJson">
             <summary>
             JSON configuration used by Voltaic's A2A implementation.
@@ -805,6 +838,28 @@
             Only used when <see cref="P:Voltaic.Core.AuthenticationResult.IsAuthenticated"/> is false.
             </summary>
         </member>
+        <member name="P:Voltaic.Core.AuthenticationResult.Headers">
+            <summary>
+            Gets or sets headers to add to the response when authentication fails, for example
+            <c>WWW-Authenticate</c> (required on a 401 by RFC 6750 and the MCP authorization specification)
+            or <c>Retry-After</c>. Names are case-insensitive. Ignored when <see cref="P:Voltaic.Core.AuthenticationResult.IsAuthenticated"/> is true.
+            Never null; setting null stores an empty dictionary. HTTP and WebSocket servers write these headers
+            on the rejection; the A2A gRPC server does not.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.AuthenticationResult.BearerChallenge(System.String,System.String,System.String,System.String)">
+            <summary>
+            Creates a failed result for bearer-token authentication: status 401 and a
+            <c>WWW-Authenticate: Bearer</c> challenge in the RFC 6750 format, for example
+            <c>Bearer resource_metadata="https://api.example/.well-known/oauth-protected-resource", error="invalid_token"</c>.
+            Parameter values are quoted, and embedded quotes and backslashes are escaped.
+            </summary>
+            <param name="resourceMetadataUrl">Optional protected resource metadata URL (RFC 9728), which MCP clients use to discover the authorization server. Null or empty omits it.</param>
+            <param name="error">Optional RFC 6750 error code, such as <c>invalid_token</c> or <c>insufficient_scope</c>. Null or empty omits it.</param>
+            <param name="errorDescription">Optional human-readable error description. Null or empty omits it.</param>
+            <param name="errorMessage">Optional response body text. Null sends no body.</param>
+            <returns>A failed authentication result carrying the challenge header.</returns>
+        </member>
         <member name="T:Voltaic.Core.ClientConnectedEventArgs">
             <summary>
             Provides data for client connection events.
@@ -847,6 +902,16 @@
         <member name="P:Voltaic.Core.ClientConnection.SessionId">
             <summary>
             Gets the unique identifier or session ID for this client connection.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.ClientConnection.Caller">
+            <summary>
+            Gets or sets the authenticated caller that opened this connection, or null when the server has no
+            authentication handler (or the connection is not authenticated).
+            <see cref="T:Voltaic.Mcp.McpWebsocketsServer"/> sets it from the upgrade request's
+            <see cref="T:Voltaic.Core.AuthenticationResult"/> and makes it the ambient <see cref="P:Voltaic.Core.RpcCallContext.Current"/> for
+            every request on the socket. <see cref="T:Voltaic.Mcp.McpHttpServer"/> sets it when a session is
+            created and rejects later requests on that session from a different principal.
             </summary>
         </member>
         <member name="P:Voltaic.Core.ClientConnection.LastActivity">
@@ -933,6 +998,13 @@
             <param name="token">Cancellation token for the operation.</param>
             <returns>A task that represents the asynchronous operation. The task result contains the dequeued notification, or null if the connection is disposed or no item is available after the wait completes.</returns>
             <exception cref="T:System.OperationCanceledException">Thrown when the cancellation token is triggered before a notification is available.</exception>
+        </member>
+        <member name="M:Voltaic.Core.ClientConnection.MarkActivity">
+            <summary>
+            Records activity on this connection by setting <see cref="P:Voltaic.Core.ClientConnection.LastActivity"/> to the current UTC time.
+            HTTP servers call this for every request a session sends, so a session that is in use is not
+            expired by idle-session cleanup. Safe to call from multiple threads and after disposal.
+            </summary>
         </member>
         <member name="M:Voltaic.Core.ClientConnection.DequeueAll">
             <summary>
@@ -1069,6 +1141,49 @@
             <param name="requestId">The unique request identifier.</param>
             <param name="request">The JSON-RPC request.</param>
             <param name="taskCompletionSource">The task completion source for awaiting the response.</param>
+        </member>
+        <member name="T:Voltaic.Core.HttpAccessGuard">
+            <summary>
+            Shared request gates for the HttpListener-based servers (MCP HTTP, MCP WebSocket, and A2A HTTP):
+            loopback-only enforcement, Origin validation, CORS headers that echo an allowed origin, and
+            authentication-failure responses.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.HttpAccessGuard.DefaultAllowHeaders">
+            <summary>
+            The request headers MCP and A2A browser clients send, used as the default
+            <c>Access-Control-Allow-Headers</c> value. A wildcard is not used because it does not cover
+            <c>Authorization</c>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.HttpAccessGuard.IsRemoteAllowed(System.Net.HttpListenerRequest,System.Boolean)">
+            <summary>
+            Returns false when the server only serves loopback clients and the request came from elsewhere.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.HttpAccessGuard.GetOrigin(System.Net.HttpListenerRequest)">
+            <summary>
+            Returns the request's Origin header, or null when absent.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.HttpAccessGuard.ApplyCorsHeaders(System.Net.HttpListenerContext,System.Boolean,System.Collections.Generic.Dictionary{System.String,System.String})">
+            <summary>
+            Writes CORS headers for an allowed request. Nothing is written when CORS is disabled or the request
+            carries no Origin (non-browser clients need no CORS grant). The allowed origin is echoed, never
+            <c>*</c>, together with <c>Vary: Origin</c>; any <c>Access-Control-Allow-Origin</c> entry in
+            <paramref name="corsHeaders"/> is ignored.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.HttpAccessGuard.RejectAsync(System.Net.HttpListenerContext,System.Int32,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Rejects a request with 403 and no CORS grant.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.HttpAccessGuard.WriteAuthenticationFailureAsync(System.Net.HttpListenerContext,Voltaic.Core.AuthenticationResult,System.Boolean,System.Collections.Generic.Dictionary{System.String,System.String},System.Threading.CancellationToken)">
+            <summary>
+            Writes an authentication failure: the result's status code, its headers (for example
+            WWW-Authenticate), CORS for an allowed origin, and the error message as text/plain.
+            </summary>
         </member>
         <member name="T:Voltaic.Core.IJsonRpcErrorProvider">
             <summary>
@@ -1500,7 +1615,12 @@
             </summary>
             <param name="ip">IP address to listen on.</param>
             <param name="port">The port number to listen on.</param>
-            <param name="includeDefaultMethods">True to include default methods such as echo, ping, getTime, add, and getClients.</param>
+            <param name="includeDiagnosticMethods">
+            True to register the diagnostic methods <c>ping</c>, <c>echo</c>, <c>getTime</c>, and <c>add</c>.
+            Default is false, so the server exposes only the methods the application registers.
+            </param>
+            <exception cref="T:System.ArgumentNullException">Thrown when ip is null.</exception>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         </member>
         <member name="M:Voltaic.Core.JsonRpcServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
@@ -1597,16 +1717,48 @@
             </summary>
             <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
-        <member name="M:Voltaic.Core.JsonRpcServer.RegisterBuiltInMethods">
+        <member name="M:Voltaic.Core.JsonRpcServer.RegisterDiagnosticMethods">
             <summary>
-            Registers the built-in RPC methods: ping, echo, getTime, add, and getClients.
-            This method is virtual to allow derived classes to customize the set of built-in methods.
+            Registers the diagnostic RPC methods: <c>ping</c>, <c>echo</c>, <c>getTime</c>, and <c>add</c>.
+            Called by the constructor only when <c>includeDiagnosticMethods</c> is true. This method is virtual
+            to allow derived classes to customize the diagnostic set.
             </summary>
+        </member>
+        <member name="T:Voltaic.Core.LoopbackAddresses">
+            <summary>
+            Helpers that decide whether a host name or remote address is loopback. HTTP and WebSocket servers
+            use them to keep a server bound to <c>localhost</c> local-only on every platform, and to recognize
+            loopback browser origins. All members are thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.LoopbackAddresses.IsLoopback(System.Net.IPAddress)">
+            <summary>
+            Returns true when <paramref name="address"/> is a loopback address: any <c>127.0.0.0/8</c> address,
+            <c>::1</c>, or an IPv4-mapped IPv6 form of a <c>127.0.0.0/8</c> address (for example
+            <c>::ffff:127.0.0.1</c>). Returns false for null and for every other address, including the
+            machine's own LAN addresses.
+            </summary>
+            <param name="address">The address to test. May be null.</param>
+            <returns>True for loopback addresses; otherwise false.</returns>
+        </member>
+        <member name="M:Voltaic.Core.LoopbackAddresses.IsLoopbackHostname(System.String)">
+            <summary>
+            Returns true when <paramref name="hostname"/> names the loopback interface: <c>localhost</c>
+            (case-insensitive), an IPv4 literal in <c>127.0.0.0/8</c>, or <c>::1</c> with or without brackets.
+            Returns false for null, empty, wildcard (<c>*</c>, <c>+</c>), and every other name or address.
+            </summary>
+            <param name="hostname">The configured host name. May be null.</param>
+            <returns>True for loopback host names; otherwise false.</returns>
         </member>
         <member name="T:Voltaic.Core.MessageFraming">
             <summary>
             Provides LSP-style message framing for JSON-RPC 2.0 messages.
             Messages are formatted as: Content-Length: {size}\r\n\r\n{json_body}
+            The reader accepts only the LSP header grammar: every header line must be <c>Content-Length</c>
+            (exactly once, digits only) or <c>Content-Type</c>, and the complete header block may not exceed
+            1024 bytes. Anything else, including an HTTP request line or HTTP headers such as <c>Host</c> or
+            <c>Origin</c>, raises <see cref="T:System.IO.InvalidDataException"/> and the connection is closed, so a web page
+            cannot drive a TCP server with a cross-protocol <c>fetch()</c>.
             </summary>
         </member>
         <member name="M:Voltaic.Core.MessageFraming.ReadMessageAsync(System.IO.Stream,System.Byte[],System.Int32,System.Int32,System.Threading.CancellationToken)">
@@ -1633,7 +1785,13 @@
         </member>
         <member name="M:Voltaic.Core.MessageFraming.ParseContentLength(System.String)">
             <summary>
-            Parses the Content-Length value from the header string.
+            Parses the Content-Length value from the header string. Only Content-Length (exactly once, digits
+            only) and Content-Type lines are allowed.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.MessageFraming.ValidateHeaderPrefix(System.Byte[],System.Int32,System.Int32)">
+            <summary>
+            Rejects a buffer whose first bytes cannot begin a Content-Length or Content-Type header line.
             </summary>
         </member>
         <member name="M:Voltaic.Core.MessageFraming.WriteMessageAsync(System.IO.Stream,System.String,System.String,System.Threading.CancellationToken)">
@@ -1650,6 +1808,64 @@
             <summary>
             Creates a buffer for message reading operations.
             </summary>
+        </member>
+        <member name="T:Voltaic.Core.OriginPolicy">
+            <summary>
+            Decides which browser origins may call an HTTP or WebSocket server. The MCP Streamable HTTP
+            specification requires servers to validate the <c>Origin</c> header on every request to prevent DNS
+            rebinding and cross-site requests, so this policy applies whether or not authentication is configured.
+            <para>
+            The default policy allows requests without an <c>Origin</c> header (non-browser clients such as SDKs,
+            <c>curl</c>, and other servers) and requests from loopback origins (<c>http(s)://localhost</c>,
+            <c>127.0.0.0/8</c>, and <c>[::1]</c> on any port). Every other origin is rejected with HTTP 403 unless it
+            is listed in <see cref="P:Voltaic.Core.OriginPolicy.AllowedOrigins"/>.
+            </para>
+            Configure the policy before the server starts. Reads are thread-safe; changing the policy while the
+            server is handling requests is not synchronized.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.OriginPolicy.AllowedOrigins">
+            <summary>
+            Gets or sets browser origins allowed in addition to loopback origins, for example
+            <c>https://app.example.com</c> or <c>http://intranet.local:8080</c>. Matching compares scheme, host,
+            and port case-insensitively, and treats a default port (80 for http, 443 for https) as equal to an
+            omitted port. The entry <c>*</c> allows every origin, which is not recommended because it re-enables
+            cross-site and DNS rebinding access. Default is empty. Setting null stores an empty list.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.OriginPolicy.AllowLoopbackOrigins">
+            <summary>
+            Gets or sets whether loopback origins (<c>http(s)://localhost</c>, <c>127.0.0.0/8</c>, and
+            <c>[::1]</c> on any port) are always allowed. Default is true, so local browser tools such as the
+            MCP Inspector keep working.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.OriginPolicy.OriginValidator">
+            <summary>
+            Gets or sets an optional validator that replaces the built-in rules. It receives the raw
+            <c>Origin</c> header value, or null when the request has none, and returns true to allow the request.
+            Default is null, which uses <see cref="P:Voltaic.Core.OriginPolicy.AllowedOrigins"/> and <see cref="P:Voltaic.Core.OriginPolicy.AllowLoopbackOrigins"/>.
+            Exceptions thrown by the validator are treated as a rejection.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.OriginPolicy.IsAllowed(System.String)">
+            <summary>
+            Returns true when a request carrying <paramref name="origin"/> may be served.
+            A null origin (the header is absent) is allowed unless <see cref="P:Voltaic.Core.OriginPolicy.OriginValidator"/> says otherwise.
+            An empty or malformed origin, including the literal <c>null</c> sent by sandboxed pages and
+            <c>file:</c> documents, is rejected unless listed or allowed by the validator.
+            </summary>
+            <param name="origin">The <c>Origin</c> header value, or null when absent.</param>
+            <returns>True when the request is allowed; otherwise false.</returns>
+        </member>
+        <member name="M:Voltaic.Core.OriginPolicy.IsLoopbackOrigin(System.String)">
+            <summary>
+            Returns true when <paramref name="origin"/> is an <c>http</c> or <c>https</c> origin whose host is
+            <c>localhost</c>, a <c>127.0.0.0/8</c> address, or <c>[::1]</c>. Lookalikes such as
+            <c>http://localhost.evil.example</c> or <c>http://127.0.0.1.evil.example</c> are not loopback.
+            </summary>
+            <param name="origin">The origin to test. May be null.</param>
+            <returns>True for loopback origins; otherwise false.</returns>
         </member>
         <member name="T:Voltaic.Core.RequestSentEventArgs">
             <summary>
@@ -2001,6 +2217,47 @@
             <param name="client">The client connection.</param>
             <param name="request">The JSON-RPC request.</param>
         </member>
+        <member name="T:Voltaic.Mcp.McpAdditionalPropertiesRule">
+            <summary>
+            The parsed value of a JSON Schema <c>additionalProperties</c> keyword: either a boolean or a
+            schema that undeclared properties must satisfy.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpAdditionalPropertiesRule.Allowed">
+            <summary>
+            Gets or sets whether properties not declared in <c>properties</c> or matched by
+            <c>patternProperties</c> are allowed. False corresponds to <c>additionalProperties: false</c>.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpAdditionalPropertiesRule.Schema">
+            <summary>
+            Gets or sets the schema that undeclared properties must satisfy, or null when the keyword
+            was a boolean.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpAdditionalPropertiesRuleConverter">
+            <summary>
+            Reads and writes the JSON Schema <c>additionalProperties</c> keyword, which may be a boolean or a
+            schema object, without any System.Text.Json DOM type.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpAdditionalPropertiesRuleConverter.Read(System.Text.Json.Utf8JsonReader@,System.Type,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Reads the keyword. Unsupported token types are skipped and treated as allowing additional properties.
+            </summary>
+            <param name="reader">The reader positioned at the keyword's value.</param>
+            <param name="typeToConvert">The target type.</param>
+            <param name="options">Serializer options.</param>
+            <returns>The parsed rule.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpAdditionalPropertiesRuleConverter.Write(System.Text.Json.Utf8JsonWriter,Voltaic.Mcp.McpAdditionalPropertiesRule,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Writes the keyword as a boolean, or as the schema object when one is present.
+            </summary>
+            <param name="writer">The writer.</param>
+            <param name="value">The rule to write.</param>
+            <param name="options">Serializer options.</param>
+        </member>
         <member name="T:Voltaic.Mcp.McpClientCapabilities">
             <summary>
             Capabilities a client can expose to an MCP server.
@@ -2149,6 +2406,20 @@
             <param name="args">The command-line arguments to pass to the server.</param>
             <param name="token">Cancellation token for the operation.</param>
             <returns>A task that represents the asynchronous operation. The task result is true if the launch was successful; otherwise, false.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpClient.PingAsync(System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Sends the MCP <c>ping</c> request and completes when the server answers with any successful result.
+            Voltaic 2.x servers and other specification-conformant servers answer with an empty object
+            (<c>{}</c>); Voltaic 1.x servers answered with the string <c>"pong"</c>. Both are accepted, so use
+            this method rather than <c>CallAsync&lt;string&gt;("ping")</c> to check connectivity.
+            </summary>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that completes when the server has answered the ping.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected.</exception>
+            <exception cref="T:System.Exception">Thrown when the server answers the ping with a JSON-RPC error.</exception>
+            <exception cref="T:System.OperationCanceledException">Thrown when the operation is cancelled or times out.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpClient.CallAsync``1(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
             <summary>
@@ -2622,7 +2893,8 @@
         <member name="T:Voltaic.Mcp.McpJsonSchema">
             <summary>
             Typed, recursive view of the subset of JSON Schema that Voltaic validates
-            (<c>type</c>, <c>required</c>, and <c>properties</c>). Other keywords are ignored.
+            (<c>type</c>, <c>required</c>, <c>properties</c>, <c>patternProperties</c>, and
+            <c>additionalProperties</c>). Other keywords are ignored.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpEmptyResult">
@@ -2659,20 +2931,23 @@
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.ProtocolVersion">
             <summary>
-            Gets or sets the MCP protocol version header sent after a session is established.
-            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>.
+            Gets or sets the MCP protocol version. <see cref="M:Voltaic.Mcp.McpHttpClient.ConnectAsync(System.String,System.String,System.String,System.Threading.CancellationToken)"/> and <see cref="M:Voltaic.Mcp.McpHttpClient.ConnectStreamableAsync(System.String,System.String,System.Threading.CancellationToken)"/>
+            request this version in <c>initialize</c> and replace it with the version the server negotiates;
+            it is then sent in the <c>MCP-Protocol-Version</c> header of every request in the session.
+            Default is <see cref="F:Voltaic.Mcp.McpProtocol.LatestProtocolVersion"/>. Setting null or whitespace restores the default.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.ClientName">
             <summary>
-            Gets or sets the client name reported in the <c>_meta</c> client info of stateless
-            (2026-07-28) requests. Default is <c>Voltaic.Mcp.HttpClient</c>.
+            Gets or sets the client name reported in the <c>clientInfo</c> of the <c>initialize</c> handshake
+            and in the <c>_meta</c> client info of stateless (2026-07-28) requests.
+            Default is <c>Voltaic.Mcp.HttpClient</c>.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.ClientVersion">
             <summary>
-            Gets or sets the client version reported in the <c>_meta</c> client info of stateless
-            (2026-07-28) requests. Default is <c>1.0.0</c>.
+            Gets or sets the client version reported in the <c>clientInfo</c> of the <c>initialize</c> handshake
+            and in the <c>_meta</c> client info of stateless (2026-07-28) requests. Default is <c>1.0.0</c>.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.IsStateless">
@@ -2739,8 +3014,11 @@
         </member>
         <member name="M:Voltaic.Mcp.McpHttpClient.ConnectAsync(System.String,System.String,System.String,System.Threading.CancellationToken)">
             <summary>
-            Asynchronously connects to an HTTP MCP server at the specified base URL.
-            This method will make an initial request to establish a session.
+            Asynchronously connects to an HTTP MCP server at the specified base URL using the JSON-RPC
+            endpoint for requests and the SSE endpoint for notifications.
+            Performs the MCP handshake: sends <c>initialize</c> (requesting <see cref="P:Voltaic.Mcp.McpHttpClient.ProtocolVersion"/> and
+            reporting <see cref="P:Voltaic.Mcp.McpHttpClient.ClientName"/> and <see cref="P:Voltaic.Mcp.McpHttpClient.ClientVersion"/>), stores the session ID and the
+            negotiated protocol version the server returns, then sends <c>notifications/initialized</c>.
             </summary>
             <param name="baseUrl">The base URL of the server (e.g., "http://localhost:8080").</param>
             <param name="rpcPath">The RPC endpoint path. Default is "/rpc".</param>
@@ -2753,6 +3031,9 @@
             <summary>
             Asynchronously connects to an HTTP MCP server using the Streamable HTTP transport.
             Uses a single endpoint path for both RPC (POST) and SSE (GET), with Mcp-Session-Id headers.
+            Performs the MCP handshake: sends <c>initialize</c> (requesting <see cref="P:Voltaic.Mcp.McpHttpClient.ProtocolVersion"/> and
+            reporting <see cref="P:Voltaic.Mcp.McpHttpClient.ClientName"/> and <see cref="P:Voltaic.Mcp.McpHttpClient.ClientVersion"/>), stores the session ID and the
+            negotiated protocol version the server returns, then sends <c>notifications/initialized</c>.
             This establishes the RPC/session side of the transport; call <see cref="M:Voltaic.Mcp.McpHttpClient.StartSseAsync(System.Threading.CancellationToken)"/> to start the SSE stream used for notifications.
             </summary>
             <param name="baseUrl">The base URL of the server (e.g., "http://localhost:7891").</param>
@@ -2788,6 +3069,20 @@
             <returns>A task that represents the asynchronous operation. The task result contains the method result.</returns>
             <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
             <exception cref="T:System.Exception">Thrown when the remote method returns an error.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.PingAsync(System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Sends the MCP <c>ping</c> request and completes when the server answers with any successful result.
+            Voltaic 2.x servers and other specification-conformant servers answer with an empty object
+            (<c>{}</c>); Voltaic 1.x servers answered with the string <c>"pong"</c>. Both are accepted, so use
+            this method rather than <c>CallAsync&lt;string&gt;("ping")</c> to check connectivity.
+            </summary>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Zero (the default) uses <see cref="P:Voltaic.Mcp.McpHttpClient.RequestTimeoutMs"/>.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that completes when the server has answered the ping.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized, or when the server answers the ping with a JSON-RPC error.</exception>
+            <exception cref="T:System.Net.Http.HttpRequestException">Thrown when the HTTP request fails.</exception>
+            <exception cref="T:System.OperationCanceledException">Thrown when the operation is cancelled or times out.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpClient.CallAsync(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
             <summary>
@@ -2915,16 +3210,65 @@
             This value is applied to new client connections when they are established.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.RequireInitializedSessions">
+            <summary>
+            Gets or sets whether handshake-era sessions are created only by a successful <c>initialize</c>.
+            Default is true, which follows the MCP Streamable HTTP specification:
+            <list type="bullet">
+            <item><description>A session is created, <see cref="E:Voltaic.Mcp.McpHttpServer.ClientConnected"/> is raised, and the <c>MCP-Session-Id</c> header is returned only when <c>initialize</c> succeeds. A rejected <c>initialize</c> creates nothing.</description></item>
+            <item><description>A POST to the MCP endpoint without <c>MCP-Session-Id</c> is rejected with HTTP 400, except <c>initialize</c> and <c>ping</c>. A sessionless <c>ping</c> is answered without creating a session, so it remains usable as a connectivity check.</description></item>
+            <item><description>A POST to the JSON-RPC endpoint without <c>MCP-Session-Id</c> is served on a temporary connection that is never registered, and no session header is returned.</description></item>
+            </list>
+            Set this to false only to serve clients that open a session with a request other than
+            <c>initialize</c>, such as <see cref="T:Voltaic.Mcp.McpHttpClient"/> from Voltaic 2.0.0 and earlier, which
+            connected with <c>ping</c>. When false, any successful sessionless request (one with an <c>id</c>
+            whose response is a result, not an error) on either endpoint is also issued a new session.
+            In both modes session IDs are always generated by the server, a request carrying an
+            <c>MCP-Session-Id</c> the server does not know (never issued, expired, or terminated) is rejected
+            with HTTP 404, and a failed request never creates a session.
+            The stateless <c>2026-07-28</c> revision never uses sessions and is not affected.
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.EnableCors">
             <summary>
-            Gets or sets whether CORS (Cross-Origin Resource Sharing) is enabled.
-            When enabled, the server will accept requests from any origin.
-            Default is true to support browser-based clients.
+            Gets or sets whether CORS (Cross-Origin Resource Sharing) headers are sent.
+            When enabled, a request from a browser origin that <see cref="P:Voltaic.Mcp.McpHttpServer.OriginPolicy"/> allows receives
+            <c>Access-Control-Allow-Origin</c> set to that origin (never <c>*</c>), <c>Vary: Origin</c>, and the
+            <see cref="P:Voltaic.Mcp.McpHttpServer.CorsHeaders"/>. Requests without an <c>Origin</c> header receive no CORS headers.
+            This setting never widens access: origins the policy rejects get HTTP 403 whether CORS is on or off.
+            Default is true.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.CorsHeaders">
             <summary>
-            Headers to use when CORS support is enabled.
+            Additional CORS headers sent to allowed browser origins when <see cref="P:Voltaic.Mcp.McpHttpServer.EnableCors"/> is true.
+            Defaults: <c>Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS</c>, an explicit
+            <c>Access-Control-Allow-Headers</c> list (including <c>Authorization</c> and the MCP headers),
+            <c>Access-Control-Expose-Headers: Mcp-Session-Id, MCP-Protocol-Version</c>, and
+            <c>Access-Control-Max-Age: 86400</c>. An <c>Access-Control-Allow-Origin</c> or <c>Vary</c> entry is
+            ignored, because the allowed origin is always echoed; use <see cref="P:Voltaic.Mcp.McpHttpServer.OriginPolicy"/> to choose origins.
+            Setting null stores an empty dictionary.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.OriginPolicy">
+            <summary>
+            Gets or sets the policy that decides which browser origins may call the server. The MCP
+            specification requires servers to validate <c>Origin</c> on every request to prevent DNS rebinding
+            and cross-site calls. Requests whose origin the policy rejects receive HTTP 403 with no CORS headers,
+            before routing, preflight handling, or authentication. The default allows requests without an
+            <c>Origin</c> header and loopback origins; add browser origins to <see cref="P:Voltaic.Core.OriginPolicy.AllowedOrigins"/>.
+            Setting null restores the default policy.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.RestrictToLoopbackClients">
+            <summary>
+            Gets or sets whether only loopback clients are served. When true, a request whose remote address is
+            not loopback (<c>127.0.0.0/8</c>, <c>::1</c>, or an IPv4-mapped loopback address) receives HTTP 403.
+            Default is true when the server is constructed with a loopback host name (<c>localhost</c>,
+            <c>127.x.x.x</c>, or <c>::1</c>) and false otherwise. This matters on Windows, where
+            <see cref="T:System.Net.HttpListener"/> (http.sys) listens on every interface for a <c>localhost</c> prefix and
+            routes by the <c>Host</c> header, which a remote client can spoof. Bind to <c>+</c>, <c>*</c>, or a
+            specific address to serve remote clients, or set this to false explicitly.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.TokenSource">
@@ -3002,7 +3346,11 @@
             The handler receives the full <see cref="T:System.Net.HttpListenerRequest"/> so it can inspect headers, query strings,
             client certificates, or any other request property needed for authentication.
             The following endpoints always bypass authentication to allow connectivity validation:
-            the health check endpoint (<c>/</c>) and the <c>ping</c> JSON-RPC method.
+            the health check endpoint (<c>/</c>) and the MCP protocol <c>ping</c> request, which returns an
+            empty result and reaches no application code. Tools are never reachable through this bypass,
+            including a tool named <c>ping</c>, because tools are invoked only through <c>tools/call</c>.
+            An application that replaces the <c>ping</c> method with <c>RegisterMethod</c> is responsible
+            for what that method exposes.
             CORS preflight (<c>OPTIONS</c>) requests also bypass authentication.
             Authenticated requests run through exactly the same MCP protocol pipeline as unauthenticated
             ones (version resolution, stateless 2026-07-28 routing, batching rules, and session tracking),
@@ -3038,12 +3386,18 @@
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpHttpServer"/> class.
             </summary>
-            <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
+            <param name="hostname">The hostname to listen on. Use <c>*</c> or <c>+</c> for all interfaces (requires admin or root privileges). A loopback name (<c>localhost</c>, <c>127.0.0.1</c>, <c>::1</c>) serves loopback clients only; see <see cref="P:Voltaic.Mcp.McpHttpServer.RestrictToLoopbackClients"/>.</param>
             <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
             <param name="rpcPath">The URL path for JSON-RPC requests. Default is "/rpc".</param>
             <param name="eventsPath">The URL path for Server-Sent Events connections. Default is "/events".</param>
-            <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getSessions.</param>
+            <param name="includeDiagnosticTools">
+            True to also publish the diagnostic tools <c>echo</c> and <c>getTime</c> in <c>tools/list</c>.
+            Default is false, so the server publishes only the tools the application registers. The MCP protocol
+            methods (<c>initialize</c>, <c>ping</c>, <c>tools/*</c>, <c>resources/*</c>, <c>prompts/*</c>, and so on)
+            are always registered regardless of this value.
+            </param>
             <param name="mcpPath">The URL path for the MCP Streamable HTTP endpoint. Default is "/mcp". Set to null to disable.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when the hostname is null or empty.</exception>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
@@ -3102,7 +3456,8 @@
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
-            This registers both the method handler and the tool definition for tools/list.
+            The tool is listed by <c>tools/list</c> and invoked only through <c>tools/call</c>, which validates
+            arguments against the input schema. It is not callable as a bare JSON-RPC method.
             </summary>
             <param name="name">The name of the tool.</param>
             <param name="description">A description of what the tool does.</param>
@@ -3130,7 +3485,8 @@
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
-            This registers both the method handler and the tool definition for tools/list.
+            The tool is listed by <c>tools/list</c> and invoked only through <c>tools/call</c>, which validates
+            arguments against the input schema. It is not callable as a bare JSON-RPC method.
             Use this overload when the handler needs to perform asynchronous operations such as
             database queries, HTTP calls, or file I/O.
             </summary>
@@ -3160,7 +3516,8 @@
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
-            This registers both the method handler and the tool definition for tools/list.
+            The tool is listed by <c>tools/list</c> and invoked only through <c>tools/call</c>, which validates
+            arguments against the input schema. It is not callable as a bare JSON-RPC method.
             Use this overload when the handler needs to perform cancellable asynchronous operations.
             </summary>
             <param name="name">The name of the tool.</param>
@@ -3185,6 +3542,17 @@
             </summary>
             <param name="definition">The tool definition.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.UnregisterTool(System.String)">
+            <summary>
+            Removes a previously registered tool so it no longer appears in <c>tools/list</c> and
+            <c>tools/call</c> for it returns a "not found" error. Clients are not notified automatically;
+            call <see cref="M:Voltaic.Mcp.McpHttpServer.NotifyToolsChanged"/> afterwards to send <c>notifications/tools/list_changed</c>.
+            Thread-safe.
+            </summary>
+            <param name="name">The tool name. Matched case-sensitively. Must not be null or empty.</param>
+            <returns>True if a tool with that name was registered and has been removed; false if no such tool existed.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when name is null or empty.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
@@ -3414,16 +3782,64 @@
             </summary>
             <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterBuiltInMethods">
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterProtocolMethods">
             <summary>
-            Registers the built-in MCP methods including protocol methods (initialize, tools/list) and utility tools.
-            This method is virtual to allow derived classes to customize the set of built-in methods.
+            Registers the MCP protocol methods: <c>initialize</c>, <c>ping</c>, <c>server/discover</c>,
+            <c>tools/*</c>, <c>resources/*</c>, <c>prompts/*</c>, <c>completion/complete</c>,
+            <c>logging/setLevel</c>, and the client notification handlers. Called once by the constructor,
+            regardless of <c>includeDiagnosticTools</c>. A derived class that overrides this method must call
+            the base implementation, or the server will not speak MCP.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterDiagnosticTools">
+            <summary>
+            Registers the optional diagnostic tools <c>echo</c> and <c>getTime</c>. Called by the constructor
+            only when <c>includeDiagnosticTools</c> is true. Derived classes may override this to publish a
+            different diagnostic set.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.GetSessionId(System.Net.HttpListenerContext)">
             <summary>
-            Extracts the session ID from the request using the Mcp-Session-Id header
-            or the session query string parameter.
+            Extracts the session ID from the Mcp-Session-Id header (or its legacy spelling).
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.GetStreamSessionId(System.Net.HttpListenerContext)">
+            <summary>
+            Extracts the session ID for a GET (SSE) request. Besides the headers, the session query string
+            parameter is accepted, because browser EventSource clients cannot set request headers. POST and
+            DELETE never read the query string, so session IDs stay out of URLs and access logs there.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.TryGetActiveSession(System.String,Voltaic.Core.ClientConnection@)">
+            <summary>
+            Returns the live session for an ID the server issued, marking it active. False when the ID was
+            never issued, has expired, or was terminated, or when the session belongs to a different
+            authenticated principal than the current request (a session is bound to the principal that
+            created it, so another caller cannot adopt it).
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.CreateProvisionalConnection">
+            <summary>
+            Creates a connection that is not registered as a session. It becomes a session only if
+            <see cref="M:Voltaic.Mcp.McpHttpServer.RegisterSession(Voltaic.Core.ClientConnection)"/> is called after the request succeeds.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.ShouldIssueSession(Voltaic.Core.JsonRpcRequest,Voltaic.Core.JsonRpcResponse)">
+            <summary>
+            Decides whether a request served without a session earns one: it must be a request (not a
+            notification) whose response is a result, and it must be initialize unless
+            <see cref="P:Voltaic.Mcp.McpHttpServer.RequireInitializedSessions"/> is false.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RegisterSession(Voltaic.Core.ClientConnection)">
+            <summary>
+            Registers a provisional connection as a session and raises <see cref="E:Voltaic.Mcp.McpHttpServer.ClientConnected"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpServer.RecordNegotiatedVersion(System.String,Voltaic.Core.JsonRpcRequest,Voltaic.Core.JsonRpcResponse)">
+            <summary>
+            Records the protocol version a successful initialize negotiated for a session, so later
+            batching and header policy can be keyed on it.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpServer.SetSessionIdHeaders(System.Net.HttpListenerResponse,System.String)">
@@ -3999,6 +4415,22 @@
             <param name="sessionId">Invalid session identifier.</param>
             <returns>Protocol exception.</returns>
         </member>
+        <member name="M:Voltaic.Mcp.McpProtocolException.SessionNotFound">
+            <summary>
+            Creates the error an HTTP server returns (with HTTP 404) when a request carries an
+            <c>MCP-Session-Id</c> the server did not issue, has expired, or was terminated. The code is
+            <c>-32001</c>. A client that receives it should start a new session with <c>initialize</c>.
+            The rejected session ID is deliberately not echoed back.
+            </summary>
+            <returns>Protocol exception.</returns>
+        </member>
+        <member name="M:Voltaic.Mcp.McpProtocolException.SessionRequired">
+            <summary>
+            Creates the error an HTTP server returns (with HTTP 400) when a request that needs a session
+            arrives without an <c>MCP-Session-Id</c> header. The code is <c>-32600</c> (invalid request).
+            </summary>
+            <returns>Protocol exception.</returns>
+        </member>
         <member name="M:Voltaic.Mcp.McpProtocolException.CancelledRequest(System.String,System.Object)">
             <summary>
             Creates a cancelled request error.
@@ -4273,7 +4705,8 @@
         <member name="T:Voltaic.Mcp.McpSchemaValidator">
             <summary>
             A DOM-free, best-effort JSON Schema validator covering the subset Voltaic enforces
-            (<c>type</c>, <c>required</c>, and nested object <c>properties</c>). It parses values with the
+            (<c>type</c>, <c>required</c>, nested object <c>properties</c>, <c>patternProperties</c>, and
+            <c>additionalProperties</c>). It parses values with the
             streaming <see cref="T:System.Text.Json.Utf8JsonReader"/> rather than any System.Text.Json DOM type.
             </summary>
         </member>
@@ -4356,7 +4789,12 @@
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpServer"/> class.
             </summary>
-            <param name="includeDefaultMethods">True to include default methods such as echo, ping, and getTime.</param>
+            <param name="includeDiagnosticTools">
+            True to also publish the diagnostic tools <c>echo</c> and <c>getTime</c> in <c>tools/list</c>.
+            Default is false, so the server publishes only the tools the application registers. The MCP protocol
+            methods (<c>initialize</c>, <c>ping</c>, <c>tools/*</c>, <c>resources/*</c>, <c>prompts/*</c>, and so on)
+            are always registered regardless of this value.
+            </param>
         </member>
         <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
@@ -4390,7 +4828,8 @@
         <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using a synchronous handler.
-            This registers both the method handler and the tool definition for tools/list.
+            The tool is listed by <c>tools/list</c> and invoked only through <c>tools/call</c>, which validates
+            arguments against the input schema. It is not callable as a bare JSON-RPC method.
             </summary>
             <param name="name">The name of the tool.</param>
             <param name="description">A description of what the tool does.</param>
@@ -4418,7 +4857,8 @@
         <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler.
-            This registers both the method handler and the tool definition for tools/list.
+            The tool is listed by <c>tools/list</c> and invoked only through <c>tools/call</c>, which validates
+            arguments against the input schema. It is not callable as a bare JSON-RPC method.
             Use this overload when the handler needs to perform asynchronous operations such as
             database queries, HTTP calls, or file I/O.
             </summary>
@@ -4448,7 +4888,8 @@
         <member name="M:Voltaic.Mcp.McpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
             Registers a tool with metadata for MCP protocol tool discovery using an asynchronous handler that accepts a cancellation token.
-            This registers both the method handler and the tool definition for tools/list.
+            The tool is listed by <c>tools/list</c> and invoked only through <c>tools/call</c>, which validates
+            arguments against the input schema. It is not callable as a bare JSON-RPC method.
             Use this overload when the handler needs to perform cancellable asynchronous operations.
             </summary>
             <param name="name">The name of the tool.</param>
@@ -4473,6 +4914,15 @@
             </summary>
             <param name="definition">The tool definition.</param>
             <param name="handler">The async function that handles the tool invocation with cancellation support.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpServer.UnregisterTool(System.String)">
+            <summary>
+            Removes a previously registered tool so it no longer appears in <c>tools/list</c> and
+            <c>tools/call</c> for it returns a "not found" error. Thread-safe.
+            </summary>
+            <param name="name">The tool name. Matched case-sensitively. Must not be null or empty.</param>
+            <returns>True if a tool with that name was registered and has been removed; false if no such tool existed.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when name is null or empty.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
@@ -4764,7 +5214,14 @@
             </summary>
             <param name="ip">The IP address to listen on.</param>
             <param name="port">The port number to listen on.</param>
-            <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
+            <param name="includeDiagnosticTools">
+            True to also publish the diagnostic tools <c>echo</c> and <c>getTime</c> in <c>tools/list</c>.
+            Default is false, so the server publishes only the tools the application registers. The MCP protocol
+            methods (<c>initialize</c>, <c>ping</c>, <c>tools/*</c>, <c>resources/*</c>, <c>prompts/*</c>, and so on)
+            are always registered regardless of this value.
+            </param>
+            <exception cref="T:System.ArgumentNullException">Thrown when ip is null.</exception>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,System.Object})">
             <summary>
@@ -4843,6 +5300,17 @@
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.UnregisterTool(System.String)">
+            <summary>
+            Removes a previously registered tool so it no longer appears in <c>tools/list</c> and
+            <c>tools/call</c> for it returns a "not found" error. Clients are not notified automatically;
+            call <see cref="M:Voltaic.Mcp.McpTcpServer.NotifyToolsChangedAsync(System.Threading.CancellationToken)"/> afterwards to send <c>notifications/tools/list_changed</c>.
+            Thread-safe.
+            </summary>
+            <param name="name">The tool name. Matched case-sensitively. Must not be null or empty.</param>
+            <returns>True if a tool with that name was registered and has been removed; false if no such tool existed.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when name is null or empty.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.RegisterTool(System.String,System.String,System.Object,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
@@ -4991,10 +5459,27 @@
             <param name="token">Cancellation token.</param>
             <returns>A task that represents the asynchronous operation.</returns>
         </member>
-        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterBuiltInMethods">
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterProtocolMethods">
             <summary>
-            Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
-            Note: Unlike JsonRpcServer, this does not include the 'add' method.
+            Registers the MCP protocol methods: <c>initialize</c>, <c>ping</c>, <c>tools/*</c>,
+            <c>resources/*</c>, <c>prompts/*</c>, <c>completion/complete</c>, <c>logging/setLevel</c>, and the
+            client notification handlers. Called once by the constructor, regardless of
+            <c>includeDiagnosticTools</c>. A derived class that overrides this method must call the base
+            implementation, or the server will not speak MCP.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterDiagnosticTools">
+            <summary>
+            Registers the optional diagnostic tools <c>echo</c> and <c>getTime</c>. Called by the constructor
+            only when <c>includeDiagnosticTools</c> is true. Derived classes may override this to publish a
+            different diagnostic set.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpTcpServer.RegisterDiagnosticMethods">
+            <summary>
+            Registers the MCP diagnostic tools in place of the plain JSON-RPC diagnostic methods of
+            <see cref="T:Voltaic.Core.JsonRpcServer"/>, so a derived class that calls this method gets MCP tools rather than
+            bare methods. The constructor calls <see cref="M:Voltaic.Mcp.McpTcpServer.RegisterDiagnosticTools"/> directly.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpToolCallResult">
@@ -5226,6 +5711,19 @@
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpWebsocketsClient"/> class.
             </summary>
         </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsClient.SetRequestHeader(System.String,System.String)">
+            <summary>
+            Sets a header sent on the WebSocket upgrade request, for example <c>Authorization: Bearer &lt;token&gt;</c>
+            or an API-key header such as <c>X-API-Key</c>, which an authenticated
+            <see cref="T:Voltaic.Mcp.McpWebsocketsServer"/> checks with its <see cref="P:Voltaic.Mcp.McpWebsocketsServer.AuthenticationHandler"/>.
+            Header names are case-insensitive; setting the same name again replaces the value, and a null or empty
+            <paramref name="value"/> removes the header. Headers apply to the next <see cref="M:Voltaic.Mcp.McpWebsocketsClient.ConnectAsync(System.String,System.Threading.CancellationToken)"/>; an
+            open connection is not affected. Thread-safe.
+            </summary>
+            <param name="name">The header name. Must not be null or empty.</param>
+            <param name="value">The header value, or null or empty to remove the header.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="name"/> is null or empty.</exception>
+        </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsClient.ConnectAsync(System.String,System.Threading.CancellationToken)">
             <summary>
             Asynchronously connects to a WebSocket MCP server at the specified URL.
@@ -5234,6 +5732,20 @@
             <param name="token">Cancellation token for the operation.</param>
             <returns>A task that represents the asynchronous operation. The task result is true if the connection was successful; otherwise, false.</returns>
             <exception cref="T:System.ArgumentNullException">Thrown when url is null or empty.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsClient.PingAsync(System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Sends the MCP <c>ping</c> request and completes when the server answers with any successful result.
+            Voltaic 2.x servers and other specification-conformant servers answer with an empty object
+            (<c>{}</c>); Voltaic 1.x servers answered with the string <c>"pong"</c>. Both are accepted, so use
+            this method rather than <c>CallAsync&lt;string&gt;("ping")</c> to check connectivity.
+            </summary>
+            <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000.</param>
+            <param name="token">Cancellation token for the operation.</param>
+            <returns>A task that completes when the server has answered the ping.</returns>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not connected.</exception>
+            <exception cref="T:System.Exception">Thrown when the server answers the ping with a JSON-RPC error.</exception>
+            <exception cref="T:System.OperationCanceledException">Thrown when the operation is cancelled or times out.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsClient.CallAsync``1(System.String,System.Object,System.Int32,System.Threading.CancellationToken)">
             <summary>
@@ -5306,6 +5818,38 @@
             Gets the cancellation token source for the server.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.AuthenticationHandler">
+            <summary>
+            Gets or sets an optional asynchronous authentication handler, the same delegate type as
+            <see cref="P:Voltaic.Mcp.McpHttpServer.AuthenticationHandler"/>. It is invoked with the WebSocket upgrade request, so
+            it can check <c>Authorization</c>, API-key headers, the query string, or client certificates. When it
+            returns a result with <see cref="P:Voltaic.Core.AuthenticationResult.IsAuthenticated"/> false, the upgrade is refused
+            with <see cref="P:Voltaic.Core.AuthenticationResult.StatusCode"/>, <see cref="P:Voltaic.Core.AuthenticationResult.Headers"/> (for
+            example <c>WWW-Authenticate</c>), and <see cref="P:Voltaic.Core.AuthenticationResult.ErrorMessage"/>. When it
+            succeeds, the caller is stored in <see cref="P:Voltaic.Core.ClientConnection.Caller"/> and is the ambient
+            <see cref="P:Voltaic.Core.RpcCallContext.Current"/> for every request on that socket, including the
+            <see cref="T:Voltaic.Core.RpcCallContext"/> handler overloads. Default is null, which accepts every upgrade that
+            passes the origin and loopback checks.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.OriginPolicy">
+            <summary>
+            Gets or sets the policy that decides which browser origins may open a socket. Browsers do not apply
+            CORS to WebSockets, so this check is the defence against cross-site WebSocket hijacking. An upgrade
+            whose <c>Origin</c> the policy rejects receives HTTP 403 before authentication. The default allows
+            upgrades without an <c>Origin</c> header (non-browser clients) and loopback origins.
+            Setting null restores the default policy.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.RestrictToLoopbackClients">
+            <summary>
+            Gets or sets whether only loopback clients are served. When true, an upgrade request whose remote
+            address is not loopback receives HTTP 403. Default is true when the server is constructed with a
+            loopback host name (<c>localhost</c>, <c>127.x.x.x</c>, or <c>::1</c>) and false otherwise. On Windows
+            a <c>localhost</c> prefix is served on every interface and routed by the spoofable <c>Host</c> header,
+            so this check is what keeps such a server local.
+            </summary>
+        </member>
         <member name="E:Voltaic.Mcp.McpWebsocketsServer.Log">
             <summary>
             Occurs when a log message is generated.
@@ -5369,10 +5913,16 @@
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpWebsocketsServer"/> class.
             </summary>
-            <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
+            <param name="hostname">The hostname to listen on. Use <c>*</c> or <c>+</c> for all interfaces (requires admin or root privileges). A loopback name (<c>localhost</c>, <c>127.0.0.1</c>, <c>::1</c>) serves loopback clients only; see <see cref="P:Voltaic.Mcp.McpWebsocketsServer.RestrictToLoopbackClients"/>.</param>
             <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
             <param name="path">The URL path for WebSocket connections. Default is "/mcp".</param>
-            <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
+            <param name="includeDiagnosticTools">
+            True to also publish the diagnostic tools <c>echo</c> and <c>getTime</c> in <c>tools/list</c>.
+            Default is false, so the server publishes only the tools the application registers. The MCP protocol
+            methods (<c>initialize</c>, <c>ping</c>, <c>tools/*</c>, <c>resources/*</c>, <c>prompts/*</c>, and so on)
+            are always registered regardless of this value.
+            </param>
+            <exception cref="T:System.ArgumentNullException">Thrown when the hostname is null or empty.</exception>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,System.Object})">
@@ -5481,6 +6031,17 @@
             </summary>
             <param name="definition">Tool metadata.</param>
             <param name="handler">Tool handler.</param>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.UnregisterTool(System.String)">
+            <summary>
+            Removes a previously registered tool so it no longer appears in <c>tools/list</c> and
+            <c>tools/call</c> for it returns a "not found" error. Clients are not notified automatically;
+            call <see cref="M:Voltaic.Mcp.McpWebsocketsServer.NotifyToolsChangedAsync(System.Threading.CancellationToken)"/> afterwards to send <c>notifications/tools/list_changed</c>.
+            Thread-safe.
+            </summary>
+            <param name="name">The tool name. Matched case-sensitively. Must not be null or empty.</param>
+            <returns>True if a tool with that name was registered and has been removed; false if no such tool existed.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when name is null or empty.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterMethod(System.String,System.Func{Voltaic.Core.RpcParameters,Voltaic.Core.RpcCallContext,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}})">
             <summary>
@@ -5686,10 +6247,20 @@
             </summary>
             <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterBuiltInMethods">
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterProtocolMethods">
             <summary>
-            Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
-            This method is virtual to allow derived classes to customize the set of built-in methods.
+            Registers the MCP protocol methods: <c>initialize</c>, <c>ping</c>, <c>tools/*</c>,
+            <c>resources/*</c>, <c>prompts/*</c>, <c>completion/complete</c>, <c>logging/setLevel</c>, and the
+            client notification handlers. Called once by the constructor, regardless of
+            <c>includeDiagnosticTools</c>. A derived class that overrides this method must call the base
+            implementation, or the server will not speak MCP.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsServer.RegisterDiagnosticTools">
+            <summary>
+            Registers the optional diagnostic tools <c>echo</c> and <c>getTime</c>. Called by the constructor
+            only when <c>includeDiagnosticTools</c> is true. Derived classes may override this to publish a
+            different diagnostic set.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.ToolDefinition">

@@ -2,6 +2,7 @@ namespace Voltaic.Core
 {
     using System;
     using System.IO;
+    using System.Linq;
     using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
@@ -9,11 +10,18 @@ namespace Voltaic.Core
     /// <summary>
     /// Provides LSP-style message framing for JSON-RPC 2.0 messages.
     /// Messages are formatted as: Content-Length: {size}\r\n\r\n{json_body}
+    /// The reader accepts only the LSP header grammar: every header line must be <c>Content-Length</c>
+    /// (exactly once, digits only) or <c>Content-Type</c>, and the complete header block may not exceed
+    /// 1024 bytes. Anything else, including an HTTP request line or HTTP headers such as <c>Host</c> or
+    /// <c>Origin</c>, raises <see cref="InvalidDataException"/> and the connection is closed, so a web page
+    /// cannot drive a TCP server with a cross-protocol <c>fetch()</c>.
     /// </summary>
     public static class MessageFraming
     {
         private const int InitialBufferSize = 4096;
         private const int MaxHeaderSize = 1024; // Reasonable max for "Content-Length: NNNN\r\n\r\n"
+        private const string ContentLengthPrefix = "Content-Length:";
+        private const string ContentTypePrefix = "Content-Type:";
 
         /// <summary>
         /// Reads a complete LSP-framed message from a stream.
@@ -90,6 +98,9 @@ namespace Voltaic.Core
                 return (false, null, offset, count);
             }
 
+            // Fail fast on anything that cannot be an LSP header, such as an HTTP request line.
+            ValidateHeaderPrefix(buffer, offset, count);
+
             // Look for "\r\n\r\n" which ends the headers
             int headerEnd = FindHeaderEnd(buffer, offset, count);
             if (headerEnd == -1)
@@ -105,6 +116,11 @@ namespace Voltaic.Core
 
             // Parse Content-Length from header
             int headerLength = headerEnd - offset;
+            if (headerLength + 4 > MaxHeaderSize)
+            {
+                throw new InvalidDataException("Message header exceeds maximum size");
+            }
+
             string header = Encoding.ASCII.GetString(buffer, offset, headerLength);
             int contentLength = ParseContentLength(header);
 
@@ -148,24 +164,64 @@ namespace Voltaic.Core
         }
 
         /// <summary>
-        /// Parses the Content-Length value from the header string.
+        /// Parses the Content-Length value from the header string. Only Content-Length (exactly once, digits
+        /// only) and Content-Type lines are allowed.
         /// </summary>
         private static int ParseContentLength(string header)
         {
-            // Header format: "Content-Length: 123\r\n" (may have other headers too)
-            string[] lines = header.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
+            string[] lines = header.Split(new[] { "\r\n" }, StringSplitOptions.None);
+            int? contentLength = null;
+
             foreach (string line in lines)
             {
-                if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                if (line.StartsWith(ContentLengthPrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    string value = line.Substring(15).Trim(); // "Content-Length:".Length = 15
-                    if (int.TryParse(value, out int length))
+                    if (contentLength != null)
                     {
-                        return length;
+                        throw new InvalidDataException("Duplicate Content-Length header");
                     }
+
+                    string value = line.Substring(ContentLengthPrefix.Length).Trim();
+                    if (value.Length == 0 || value.Length > 10 || !value.All(Char.IsDigit) || !int.TryParse(value, out int length))
+                    {
+                        throw new InvalidDataException("Content-Length header value is invalid");
+                    }
+
+                    contentLength = length;
+                }
+                else if (!line.StartsWith(ContentTypePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Unexpected message framing header; only Content-Length and Content-Type are allowed");
                 }
             }
-            throw new InvalidDataException("Content-Length header not found or invalid");
+
+            if (contentLength == null)
+            {
+                throw new InvalidDataException("Content-Length header not found or invalid");
+            }
+
+            return contentLength.Value;
+        }
+
+        /// <summary>
+        /// Rejects a buffer whose first bytes cannot begin a Content-Length or Content-Type header line.
+        /// </summary>
+        private static void ValidateHeaderPrefix(byte[] buffer, int offset, int count)
+        {
+            int length = Math.Min(count, ContentLengthPrefix.Length);
+            bool matchesLength = true;
+            bool matchesType = true;
+
+            for (int i = 0; i < length; i++)
+            {
+                char actual = Char.ToLowerInvariant((char)buffer[offset + i]);
+                if (matchesLength && i < ContentLengthPrefix.Length && Char.ToLowerInvariant(ContentLengthPrefix[i]) != actual) matchesLength = false;
+                if (matchesType && i < ContentTypePrefix.Length && Char.ToLowerInvariant(ContentTypePrefix[i]) != actual) matchesType = false;
+                if (!matchesLength && !matchesType)
+                {
+                    throw new InvalidDataException("Data does not begin with a Content-Length or Content-Type header; the connection does not speak LSP-style framing");
+                }
+            }
         }
 
         /// <summary>

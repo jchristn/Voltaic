@@ -70,6 +70,50 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets an optional asynchronous authentication handler, the same delegate type as
+        /// <see cref="McpHttpServer.AuthenticationHandler"/>. It is invoked with the WebSocket upgrade request, so
+        /// it can check <c>Authorization</c>, API-key headers, the query string, or client certificates. When it
+        /// returns a result with <see cref="AuthenticationResult.IsAuthenticated"/> false, the upgrade is refused
+        /// with <see cref="AuthenticationResult.StatusCode"/>, <see cref="AuthenticationResult.Headers"/> (for
+        /// example <c>WWW-Authenticate</c>), and <see cref="AuthenticationResult.ErrorMessage"/>. When it
+        /// succeeds, the caller is stored in <see cref="ClientConnection.Caller"/> and is the ambient
+        /// <see cref="RpcCallContext.Current"/> for every request on that socket, including the
+        /// <see cref="RpcCallContext"/> handler overloads. Default is null, which accepts every upgrade that
+        /// passes the origin and loopback checks.
+        /// </summary>
+        public Func<HttpListenerRequest, Task<AuthenticationResult>>? AuthenticationHandler
+        {
+            get => _AuthenticationHandler;
+            set => _AuthenticationHandler = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the policy that decides which browser origins may open a socket. Browsers do not apply
+        /// CORS to WebSockets, so this check is the defence against cross-site WebSocket hijacking. An upgrade
+        /// whose <c>Origin</c> the policy rejects receives HTTP 403 before authentication. The default allows
+        /// upgrades without an <c>Origin</c> header (non-browser clients) and loopback origins.
+        /// Setting null restores the default policy.
+        /// </summary>
+        public OriginPolicy OriginPolicy
+        {
+            get => _OriginPolicy;
+            set => _OriginPolicy = value ?? new OriginPolicy();
+        }
+
+        /// <summary>
+        /// Gets or sets whether only loopback clients are served. When true, an upgrade request whose remote
+        /// address is not loopback receives HTTP 403. Default is true when the server is constructed with a
+        /// loopback host name (<c>localhost</c>, <c>127.x.x.x</c>, or <c>::1</c>) and false otherwise. On Windows
+        /// a <c>localhost</c> prefix is served on every interface and routed by the spoofable <c>Host</c> header,
+        /// so this check is what keeps such a server local.
+        /// </summary>
+        public bool RestrictToLoopbackClients
+        {
+            get => _RestrictToLoopbackClients;
+            set => _RestrictToLoopbackClients = value;
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
@@ -108,6 +152,10 @@ namespace Voltaic.Mcp
         private int _MaxQueueSize = 100;
         private volatile bool _IsStopping = false;
         private bool _IsDisposed = false;
+        private Func<HttpListenerRequest, Task<AuthenticationResult>>? _AuthenticationHandler;
+        private OriginPolicy _OriginPolicy = new OriginPolicy();
+        private bool _RestrictToLoopbackClients;
+
         /// <summary>
         /// Gets or sets the MCP protocol version the server answers with when an <c>initialize</c>
         /// request names no version. It does not cap negotiation; see
@@ -172,24 +220,32 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Initializes a new instance of the <see cref="McpWebsocketsServer"/> class.
         /// </summary>
-        /// <param name="hostname">The hostname to listen on.  Use * for any hostname (requires admin or root privileges).</param>
+        /// <param name="hostname">The hostname to listen on. Use <c>*</c> or <c>+</c> for all interfaces (requires admin or root privileges). A loopback name (<c>localhost</c>, <c>127.0.0.1</c>, <c>::1</c>) serves loopback clients only; see <see cref="RestrictToLoopbackClients"/>.</param>
         /// <param name="port">The port number to listen on. Must be between 0 and 65535.</param>
         /// <param name="path">The URL path for WebSocket connections. Default is "/mcp".</param>
-        /// <param name="includeDefaultMethods">True to include default MCP methods such as echo, ping, getTime, and getClients.</param>
+        /// <param name="includeDiagnosticTools">
+        /// True to also publish the diagnostic tools <c>echo</c> and <c>getTime</c> in <c>tools/list</c>.
+        /// Default is false, so the server publishes only the tools the application registers. The MCP protocol
+        /// methods (<c>initialize</c>, <c>ping</c>, <c>tools/*</c>, <c>resources/*</c>, <c>prompts/*</c>, and so on)
+        /// are always registered regardless of this value.
+        /// </param>
+        /// <exception cref="ArgumentNullException">Thrown when the hostname is null or empty.</exception>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
-        public McpWebsocketsServer(string hostname, int port, string path = "/mcp", bool includeDefaultMethods = true)
+        public McpWebsocketsServer(string hostname, int port, string path = "/mcp", bool includeDiagnosticTools = false)
         {
             if (String.IsNullOrEmpty(hostname)) throw new ArgumentNullException(nameof(hostname));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
 
             _Hostname = hostname;
             _Port = port;
+            _RestrictToLoopbackClients = LoopbackAddresses.IsLoopbackHostname(hostname);
             _Path = String.IsNullOrEmpty(path) ? "/mcp" : path;
             _Clients = new ConcurrentDictionary<string, ClientConnection>();
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
             _Endpoint = new McpEndpoint("Voltaic.Mcp.WebSocketsServer");
 
-            if (includeDefaultMethods) RegisterBuiltInMethods();
+            RegisterProtocolMethods();
+            if (includeDiagnosticTools) RegisterDiagnosticTools();
         }
 
         /// <summary>
@@ -273,7 +329,6 @@ namespace Voltaic.Mcp
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Endpoint.RegisterTool(definition, (args, _) => Task.FromResult(handler(args)));
-            RegisterMethod(definition.Name, handler);
         }
 
         /// <summary>
@@ -310,7 +365,6 @@ namespace Voltaic.Mcp
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Endpoint.RegisterTool(definition, (args, _) => handler(args));
-            RegisterMethod(definition.Name, handler);
         }
 
         /// <summary>
@@ -347,7 +401,21 @@ namespace Voltaic.Mcp
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             _Endpoint.RegisterTool(definition, handler);
-            RegisterMethod(definition.Name, handler);
+        }
+
+        /// <summary>
+        /// Removes a previously registered tool so it no longer appears in <c>tools/list</c> and
+        /// <c>tools/call</c> for it returns a "not found" error. Clients are not notified automatically;
+        /// call <see cref="NotifyToolsChangedAsync"/> afterwards to send <c>notifications/tools/list_changed</c>.
+        /// Thread-safe.
+        /// </summary>
+        /// <param name="name">The tool name. Matched case-sensitively. Must not be null or empty.</param>
+        /// <returns>True if a tool with that name was registered and has been removed; false if no such tool existed.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when name is null or empty.</exception>
+        public bool UnregisterTool(string name)
+        {
+            if (String.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
+            return _Endpoint.UnregisterTool(name);
         }
 
         /// <summary>
@@ -788,17 +856,16 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Registers the built-in MCP methods: initialize, ping, echo, getTime, and getClients.
-        /// This method is virtual to allow derived classes to customize the set of built-in methods.
+        /// Registers the MCP protocol methods: <c>initialize</c>, <c>ping</c>, <c>tools/*</c>,
+        /// <c>resources/*</c>, <c>prompts/*</c>, <c>completion/complete</c>, <c>logging/setLevel</c>, and the
+        /// client notification handlers. Called once by the constructor, regardless of
+        /// <c>includeDiagnosticTools</c>. A derived class that overrides this method must call the base
+        /// implementation, or the server will not speak MCP.
         /// </summary>
-        protected virtual void RegisterBuiltInMethods()
+        protected virtual void RegisterProtocolMethods()
         {
-            // MCP Protocol Methods
-            RegisterMethod("initialize", (args) =>
-            {
-                return _Endpoint.Initialize(args);
-            });
-
+            RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
+            RegisterMethod("ping", (args) => _Endpoint.Ping(args));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
@@ -812,15 +879,45 @@ namespace Voltaic.Mcp
             RegisterMethod("logging/setLevel", (args) => _Endpoint.SetLogLevel(args));
             RegisterMethod("notifications/cancelled", (args) => _Endpoint.Cancelled(args));
             RegisterMethod("notifications/initialized", (args) => _Endpoint.Initialized(args));
+        }
 
-            RegisterMethod("ping", (_) => "pong");
-            RegisterMethod("echo", (args) =>
-            {
-                McpEchoArguments? echo = args?.Deserialize<McpEchoArguments>();
-                return echo?.Message ?? "empty";
-            });
-            RegisterMethod("getTime", (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
-            RegisterMethod("getClients", (_) => GetConnectedClients());
+        /// <summary>
+        /// Registers the optional diagnostic tools <c>echo</c> and <c>getTime</c>. Called by the constructor
+        /// only when <c>includeDiagnosticTools</c> is true. Derived classes may override this to publish a
+        /// different diagnostic set.
+        /// </summary>
+        protected virtual void RegisterDiagnosticTools()
+        {
+            RegisterTool("echo",
+                "Echoes back the provided message",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        message = new
+                        {
+                            type = "string",
+                            description = "The message to echo back"
+                        }
+                    },
+                    required = new[] { "message" }
+                },
+                (args) =>
+                {
+                    McpEchoArguments? echo = args?.Deserialize<McpEchoArguments>();
+                    return echo?.Message ?? "empty";
+                });
+
+            RegisterTool("getTime",
+                "Returns the current UTC time in ISO format",
+                new
+                {
+                    type = "object",
+                    properties = new { },
+                    required = Array.Empty<string>()
+                },
+                (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
         }
 
         private async Task<HttpListenerContext?> AcceptContextAsync(CancellationToken token)
@@ -859,6 +956,21 @@ namespace Voltaic.Mcp
 
             try
             {
+                if (!HttpAccessGuard.IsRemoteAllowed(context.Request, _RestrictToLoopbackClients))
+                {
+                    LogMessage($"Rejected remote client {context.Request.RemoteEndPoint}: the server accepts loopback clients only");
+                    await HttpAccessGuard.RejectAsync(context, 403, "Remote connections are not allowed.", token).ConfigureAwait(false);
+                    return;
+                }
+
+                string? origin = HttpAccessGuard.GetOrigin(context.Request);
+                if (!_OriginPolicy.IsAllowed(origin))
+                {
+                    LogMessage($"Rejected WebSocket upgrade from disallowed origin '{origin}'");
+                    await HttpAccessGuard.RejectAsync(context, 403, "Origin not allowed.", token).ConfigureAwait(false);
+                    return;
+                }
+
                 if (!context.Request.IsWebSocketRequest)
                 {
                     context.Response.StatusCode = 400;
@@ -867,11 +979,27 @@ namespace Voltaic.Mcp
                     return;
                 }
 
+                RpcCallContext? caller = null;
+                Func<HttpListenerRequest, Task<AuthenticationResult>>? authenticationHandler = _AuthenticationHandler;
+                if (authenticationHandler != null)
+                {
+                    AuthenticationResult authResult = await authenticationHandler(context.Request).ConfigureAwait(false);
+                    if (!authResult.IsAuthenticated)
+                    {
+                        LogMessage($"Authentication failed for WebSocket upgrade from {context.Request.RemoteEndPoint}: {authResult.ErrorMessage ?? "no details"}");
+                        await HttpAccessGuard.WriteAuthenticationFailureAsync(context, authResult, false, null, token).ConfigureAwait(false);
+                        return;
+                    }
+
+                    caller = new RpcCallContext(authResult.Principal, authResult.Claims);
+                }
+
                 HttpListenerWebSocketContext webSocketContext = await context.AcceptWebSocketAsync(null).ConfigureAwait(false);
                 WebSocket webSocket = webSocketContext.WebSocket;
 
                 client = new ClientConnection(clientId, webSocket);
                 client.MaxQueueSize = _MaxQueueSize;
+                client.Caller = caller;
                 _Clients.TryAdd(clientId, client);
 
                 LogMessage($"Client connected: {clientId} from {context.Request.RemoteEndPoint}");
@@ -928,7 +1056,11 @@ namespace Voltaic.Mcp
                                 string message = messageBuilder.ToString();
                                 messageBuilder.Clear();
 
-                                await ProcessRequestAsync(client, message, token).ConfigureAwait(false);
+                                // The authenticated caller of the upgrade is ambient for every request on the socket.
+                                using (RpcCallContext.Push(client.Caller))
+                                {
+                                    await ProcessRequestAsync(client, message, token).ConfigureAwait(false);
+                                }
                             }
                         }
                     }

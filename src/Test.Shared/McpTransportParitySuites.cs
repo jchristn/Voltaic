@@ -124,10 +124,11 @@ namespace Test.Shared
                         await using WebSocketMcpFixture fixture = await WebSocketMcpFixture.StartAsync(ct).ConfigureAwait(false);
                         using McpWebsocketsClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
-                        string pong = await client.CallAsync<string>("ping", token: ct).ConfigureAwait(false);
+                        JsonProbe ping = JsonProbe.From(await client.CallAsync<object?>("ping", token: ct).ConfigureAwait(false));
+                        await client.PingAsync(token: ct).ConfigureAwait(false);
 
                         TestAssert.True(client.IsConnected, "Client should report connected.");
-                        TestAssert.Equal("pong", pong);
+                        TestAssert.True(ping.IsObject && ping.Length == 0, "Protocol ping must return an empty object.");
                     }),
 
                     Case(suiteId, "InitializeAndTools", "McpWebsocketsServer supports initialize and tools over WebSocket", async ct =>

@@ -34,7 +34,7 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
                             server.RegisterMethod("double", args => (int)(args?.GetInt64("value") ?? 0) * 2);
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         int result = await client.CallAsync<int>("double", new { value = 21 }, token: ct).ConfigureAwait(false);
@@ -51,7 +51,7 @@ namespace Test.Shared
                                 await Task.Delay(1, ct).ConfigureAwait(false);
                                 return (object)new { ok = true };
                             });
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("async", token: ct).ConfigureAwait(false));
@@ -64,7 +64,7 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
                             server.RegisterMethod("token", (args, token) => Task.FromResult<object>(new { canBeCanceled = token.CanBeCanceled }));
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         JsonProbe result = JsonProbe.From(await client.CallAsync<object?>("token", token: ct).ConfigureAwait(false));
@@ -77,7 +77,7 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
                             server.RegisterMethod("object", _ => new { answer = 42 });
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         object? result = await client.CallAsync("object", token: ct).ConfigureAwait(false);
@@ -91,7 +91,7 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
                             server.RegisterMethod("null", (Func<RpcParameters?, object>)(_ => null!));
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         string? result = await client.CallAsync<string?>("null", token: ct).ConfigureAwait(false);
@@ -101,7 +101,7 @@ namespace Test.Shared
 
                     Case(suiteId, "MethodNotFoundMapsToClientException", "Unknown methods map to JSON-RPC method-not-found errors", async ct =>
                     {
-                        await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, includeDefaultMethods: false).ConfigureAwait(false);
+                        await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         await TestAssert.ThrowsAsync<Exception>(() => client.CallAsync<string>("missing", token: ct), "Missing method should fail.").ConfigureAwait(false);
@@ -112,7 +112,7 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
                             server.RegisterMethod("explode", _ => throw new InvalidOperationException("boom"));
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         Exception ex = await CaptureExceptionAsync(() => client.CallAsync<string>("explode", token: ct)).ConfigureAwait(false);
@@ -124,7 +124,7 @@ namespace Test.Shared
                         await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, server =>
                         {
                             server.RegisterMethod("bad", _ => throw McpProtocolException.InvalidParams("bad params"));
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         Exception ex = await CaptureExceptionAsync(() => client.CallAsync<string>("bad", token: ct)).ConfigureAwait(false);
@@ -144,7 +144,7 @@ namespace Test.Shared
                                     received.TrySetResult(args);
                                 }
                             };
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         await client.NotifyAsync("notify", new { value = 1 }, ct).ConfigureAwait(false);
@@ -169,7 +169,7 @@ namespace Test.Shared
                                     responseSent.TrySetResult(args);
                                 }
                             };
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
 
                         using JsonRpcClient client = new JsonRpcClient();
                         TaskCompletionSource<ClientConnectedEventArgs> clientConnected = new TaskCompletionSource<ClientConnectedEventArgs>();
@@ -193,7 +193,7 @@ namespace Test.Shared
 
                     Case(suiteId, "BroadcastNotification", "JsonRpcServer broadcasts notifications to connected clients", async ct =>
                     {
-                        await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, includeDefaultMethods: false).ConfigureAwait(false);
+                        await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
                         await WaitUntilAsync(() => fixture.Server.GetConnectedClients().Count == 1, ct).ConfigureAwait(false);
 
@@ -216,7 +216,7 @@ namespace Test.Shared
 
                     Case(suiteId, "KickClient", "JsonRpcServer KickClient removes a connected client", async ct =>
                     {
-                        await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, includeDefaultMethods: false).ConfigureAwait(false);
+                        await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartAsync(ct, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
                         await WaitUntilAsync(() => fixture.Server.GetConnectedClients().Count == 1, ct).ConfigureAwait(false);
 
@@ -237,7 +237,7 @@ namespace Test.Shared
                                 int value = (int)(args?.GetInt64("value") ?? 0);
                                 return value * value;
                             });
-                        }, includeDefaultMethods: false).ConfigureAwait(false);
+                        }, includeDiagnosticMethods: false).ConfigureAwait(false);
                         using JsonRpcClient client = await fixture.ConnectClientAsync(ct).ConfigureAwait(false);
 
                         int[] results = await Task.WhenAll(Enumerable.Range(1, 10)

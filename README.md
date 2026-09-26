@@ -10,9 +10,13 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v1.1.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Voltaic v2.1.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 An `initialize` handshake negotiates at most the newest handshake-era revision, `2025-11-25` (configurable with `MaximumHandshakeProtocolVersion`), because the stateless `2026-07-28` revision defines no `initialize` and no sessions. Clients reach `2026-07-28` through the stateless request path instead: `server/discover` followed by per-request `MCP-Protocol-Version`, `Mcp-Method`, and `_meta` signals. That is how current clients such as Claude Code 2.1.x connect, and Voltaic's stateless responses carry the `resultType`, `ttlMs`, and `cacheScope` fields the revision requires. Version selection is driven by the `McpProtocol` registry and `McpVersionResolver`, and it behaves identically with or without an `AuthenticationHandler`. See [Protocol version negotiation](#protocol-version-negotiation).
+
+> **Upgrading to v2.1.0?** v2.1.0 is a security release with safer defaults. HTTP and WebSocket servers validate the browser `Origin` (foreign origins get 403), a server bound to `localhost` serves loopback clients only, Streamable HTTP sessions are created only by a successful `initialize` (sessionless requests get 400, unknown session IDs get 404), `McpWebsocketsServer` gains an `AuthenticationHandler`, and the TCP transports reject anything that is not LSP-style framing. See [Security defaults](#security-defaults) and [Upgrading to v2.1.0](#upgrading-to-v210).
+>
+> **Upgrading from v1.x?** v2.0.0 is a breaking release. MCP servers no longer publish Voltaic's demo tools (`ping`, `echo`, `getTime`, `getSessions`/`getClients`) unless you opt in, `ping` returns `{}` as the MCP specification requires, tools are callable only through `tools/call`, and tool input schemas enforce `additionalProperties`. See [Upgrading from v1.x](#upgrading-from-v1x) and [MIGRATE_V1_TO_V2.md](MIGRATE_V1_TO_V2.md).
 
 ---
 
@@ -33,13 +37,13 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 
 - Register JSON-RPC methods with synchronous, asynchronous, or cancellation-aware handlers.
 - Register MCP tools with input schema metadata, output schema metadata, structured content, annotations, icons, and full `McpToolCallResult` returns.
-- Validate common JSON Schema object/type/required cases for tool input and structured output.
+- Validate common JSON Schema cases (`type`, `required`, nested `properties`, `patternProperties`, and `additionalProperties`) for tool input and structured output.
 - Expose MCP resources, resource templates, prompts, and completion providers.
 - Handle MCP `initialize`, `tools/list`, `tools/call`, `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, and utility notifications.
 - Send list-changed, resource-updated, progress, cancellation, and log-message notifications where the transport supports server-to-client notifications.
 - Host HTTP compatibility endpoints (`/rpc` and `/events`) alongside the current Streamable HTTP endpoint (`/mcp`).
 - Expose and consume A2A agents through dependency-light `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2AHttpServer`, and `A2AGrpcServer` classes without ASP.NET Core.
-- Run the same 409-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+- Run the same 493-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
 
 ## MCP Endpoint Requirements
 
@@ -52,13 +56,13 @@ Every MCP connection starts with the lifecycle methods:
 
 Base utility methods:
 
-- `ping` - utility request that either side may send to check liveness. A receiver must respond promptly when it receives one.
+- `ping` - utility request that either side may send to check liveness. A receiver must respond promptly when it receives one. Voltaic MCP servers answer with the empty result `{}` (plus `resultType: "complete"` under `2026-07-28`).
 
 Streamable HTTP transport requirements:
 
 - `POST /mcp` receives JSON-RPC requests and notifications.
 - `GET /mcp` opens the SSE stream when the client wants server notifications.
-- Session-aware clients send `MCP-Session-Id` after the server creates a session.
+- A successful `initialize` creates the session and returns `MCP-Session-Id`; clients send it on every later request. A request without it (other than `initialize` or `ping`) gets 400, and an ID the server did not issue, has expired, or was terminated gets 404, which tells the client to re-initialize. See [Sessions](#sessions).
 - After initialization, HTTP clients send `MCP-Protocol-Version` on subsequent requests.
 
 Server feature endpoints are capability-driven. If your server advertises a capability, it must support the corresponding methods:
@@ -69,7 +73,26 @@ Server feature endpoints are capability-driven. If your server advertises a capa
 - `completions` capability: `completion/complete` for prompt argument or resource-template argument suggestions.
 - `logging` capability: `logging/setLevel` from client to server, plus server `notifications/message` when logs are emitted.
 
-Voltaic registers the protocol methods for its MCP server types when default methods are enabled. Your application registers the handlers and data behind those methods with `RegisterTool`, `RegisterResource`, `RegisterResourceTemplate`, `RegisterPrompt`, and `RegisterCompletionProvider`.
+Voltaic always registers the protocol methods for its MCP server types, including `ping`. Your application registers the handlers and data behind those methods with `RegisterTool`, `RegisterResource`, `RegisterResourceTemplate`, `RegisterPrompt`, and `RegisterCompletionProvider`.
+
+### Tools the server publishes
+
+An MCP server publishes only the tools your application registers. `tools/list` shows exactly those tools, so an AI client's model sees only your product's tools.
+
+- **Diagnostic tools are opt-in.** Pass `includeDiagnosticTools: true` to a server constructor to also publish `echo` and `getTime`. They are useful while developing a server and are off by default. Voltaic no longer ships a `getSessions`/`getClients` tool, because it disclosed other clients' session identifiers.
+- **Tools are invoked only through `tools/call`.** `tools/call` validates arguments against the tool's input schema before your handler runs. A tool is not callable as a bare JSON-RPC method, so the schema check cannot be skipped. A tool may share a name with a protocol method (for example, a tool named `ping`) without replacing it.
+- **Tools can be removed.** `UnregisterTool(name)` removes a tool and returns `true` if it existed. Registering and unregistering tools does not notify clients by itself; call `NotifyToolsChanged()` (HTTP) or `NotifyToolsChangedAsync()` (TCP, WebSocket) afterwards to send `notifications/tools/list_changed`.
+
+```csharp
+McpHttpServer server = new McpHttpServer("localhost", 8080);                               // only your tools
+McpHttpServer devServer = new McpHttpServer("localhost", 8081, includeDiagnosticTools: true); // plus echo and getTime
+
+server.RegisterTool("lookup", "Looks up a record", schema, handler);
+server.UnregisterTool("lookup");
+server.NotifyToolsChanged();
+```
+
+Tool input schemas are enforced for `type`, `required`, nested `properties`, `patternProperties`, and `additionalProperties`. With `additionalProperties: false`, a `tools/call` that sends an argument the schema does not declare is rejected with `-32602` and a message naming the property.
 
 ### Protocol version negotiation
 
@@ -507,7 +530,7 @@ The server registrations above are the handlers behind the MCP endpoints:
 - `RegisterResourceTemplate(...)` backs `resources/templates/list` and template-based `resources/read`.
 - `RegisterPrompt(...)` backs `prompts/list` and `prompts/get`.
 - `RegisterCompletionProvider(...)` backs `completion/complete`.
-- `initialize`, `notifications/initialized`, `notifications/cancelled`, `resources/subscribe`, `resources/unsubscribe`, `logging/setLevel`, and `ping` are built in when default methods are enabled.
+- `initialize`, `notifications/initialized`, `notifications/cancelled`, `resources/subscribe`, `resources/unsubscribe`, `logging/setLevel`, and `ping` are always registered.
 
 ---
 
@@ -521,6 +544,8 @@ using System.Text.Json;
 using Voltaic.Core;
 using Voltaic.Mcp;
 
+// Exposes only the methods you register. Pass includeDiagnosticMethods: true to also
+// register the ping, echo, getTime, and add diagnostic methods.
 JsonRpcServer server = new JsonRpcServer(IPAddress.Any, 8080);
 
 // Subscribe to events
@@ -671,7 +696,7 @@ server.RegisterCompletionProvider("ref/prompt", "summarize", "topic",
     }));
 ```
 
-`initialize`, `notifications/initialized`, `notifications/cancelled`, `resources/subscribe`, `resources/unsubscribe`, `logging/setLevel`, and `ping` are built in when default methods are enabled.
+`initialize`, `notifications/initialized`, `notifications/cancelled`, `resources/subscribe`, `resources/unsubscribe`, `logging/setLevel`, and `ping` are always registered.
 
 ### MCP Server (stdio)
 
@@ -706,8 +731,9 @@ server.RegisterTool("add",
         return (object)(a + b);
     });
 
-// Built-in methods are registered automatically:
+// Protocol methods are always registered:
 // - initialize (returns capabilities and serverInfo)
+// - ping (returns {})
 // - tools/list (returns all registered tools)
 // - tools/call (invokes a tool by name)
 // - resources/list, resources/templates/list, resources/read
@@ -717,7 +743,9 @@ server.RegisterTool("add",
 // - logging/setLevel
 // - notifications/initialized (handles client init notification)
 // - notifications/cancelled
-// - ping, echo, getTime (utility tools)
+//
+// tools/list returns only the tools registered above. Construct with
+// new McpServer(includeDiagnosticTools: true) to also publish echo and getTime.
 
 // Run the server (reads from stdin, writes to stdout)
 await server.RunAsync();
@@ -891,7 +919,7 @@ object? result = await client.CallAsync<object>("tools/list");
 Console.WriteLine(result);
 ```
 
-`ConnectStreamableAsync()` establishes the session and POST endpoint. Call `StartSseAsync()` when you want the SSE notification stream to become active on the same `/mcp` endpoint.
+`ConnectStreamableAsync()` performs the MCP handshake: it sends `initialize` (requesting `client.ProtocolVersion` and reporting `ClientName`/`ClientVersion`), stores the session ID and the negotiated protocol version, and sends `notifications/initialized`. `ConnectAsync()` does the same on `/rpc`, and the session it receives is the one `/events` streams to. Call `StartSseAsync()` when you want the SSE notification stream to become active. Connecting fails (returns `false`) when `initialize` returns an error.
 
 When `McpHttpClient` talks to a server over the stateless `2026-07-28` path, it treats a result with `resultType: "input_required"` as a Multi Round-Trip request and any other result as final. A result with no `resultType` is also treated as final, so the client keeps working against servers that predate the field.
 
@@ -949,6 +977,9 @@ McpWebsocketsClient client = new McpWebsocketsClient();
 client.NotificationReceived += (sender, request) =>
     Console.WriteLine($"Server notification: {request.Method}");
 
+// Optional: credentials for a server with an AuthenticationHandler (sent on the upgrade request)
+client.SetRequestHeader("Authorization", "Bearer " + token);
+
 // Connect to the WebSocket server
 await client.ConnectAsync("ws://localhost:8080/mcp");
 
@@ -961,6 +992,45 @@ await client.NotifyAsync("log", new { message = "Hello from WebSocket client" })
 ```
 
 ---
+
+## Security defaults
+
+Voltaic servers usually run on a developer workstation or next to data they expose, often without authentication. Since v2.1.0 the defaults assume a web page in the user's browser, or another host on the network, may try to reach them.
+
+| Protection | Applies to | Default | How to change it |
+|---|---|---|---|
+| Browser `Origin` validation (MCP spec requirement; blocks cross-site calls and DNS rebinding) | `McpHttpServer`, `McpWebsocketsServer`, `A2AHttpServer` | Requests without `Origin` and loopback origins (`http(s)://localhost`, `127.0.0.0/8`, `[::1]`, any port) are allowed; every other origin gets 403 before preflight or authentication | `server.OriginPolicy.AllowedOrigins.Add("https://app.example.com")`, `AllowLoopbackOrigins`, or a custom `OriginValidator` |
+| CORS | `McpHttpServer`, `A2AHttpServer` | The allowed origin is echoed (never `*`) with `Vary: Origin` and an explicit `Access-Control-Allow-Headers` list that includes `Authorization` | `EnableCors`, `CorsHeaders` |
+| Loopback-only clients for loopback binds | `McpHttpServer`, `McpWebsocketsServer`, `A2AHttpServer` | On when the host name is `localhost`, `127.x.x.x`, or `::1`: a request from any other address gets 403. On Windows, `HttpListener` serves a `localhost` prefix on every interface and routes by the spoofable `Host` header, so this check is what keeps it local | Bind to `+`/`*` or a specific address, or set `RestrictToLoopbackClients = false` |
+| JSON bodies on `POST /mcp` | `McpHttpServer` | Anything but `Content-Type: application/json` gets 415 | None needed; Streamable HTTP requires JSON |
+| Initialize-only sessions, principal binding | `McpHttpServer` | See [Sessions](#sessions) | `RequireInitializedSessions = false` for older ping-first clients |
+| Strict LSP framing | `JsonRpcServer`, `McpTcpServer`, `JsonRpcClient`, `McpTcpClient` | Only `Content-Length` and `Content-Type` header lines (1024 bytes at most) are accepted, so an HTTP request from a browser `fetch()` is dropped before anything runs | None; Voltaic and LSP-style clients send only those headers |
+
+```csharp
+McpHttpServer server = new McpHttpServer("localhost", 8080);
+
+// Allow a browser app served from another origin (loopback origins are already allowed)
+server.OriginPolicy.AllowedOrigins.Add("https://tools.example.com");
+
+// Serve other machines: bind to all interfaces (requires a URL ACL or admin rights on Windows)
+McpHttpServer lanServer = new McpHttpServer("+", 8080);
+```
+
+The TCP and stdio transports stay unauthenticated by design; strict framing is what stops browsers from talking to them.
+
+### Sessions
+
+On the handshake-era Streamable HTTP path, session IDs are always generated by the server:
+
+- A successful `initialize` (on `/mcp` or `/rpc`) creates the session, raises `ClientConnected`, and returns `MCP-Session-Id`. A rejected `initialize` creates nothing and returns no header.
+- `POST /mcp` without `MCP-Session-Id` gets 400 (`-32600`), except `initialize` and `ping`. A sessionless `ping` is answered without creating a session, so it still works as a connectivity check.
+- `POST /rpc` without a session runs on a temporary connection and returns no session header, so plain request/response callers (scripts, `curl`) keep working without leaving sessions behind.
+- An `MCP-Session-Id` the server did not issue, has expired, or was terminated gets 404 (`-32001`) on every endpoint; it is never adopted. The client should send `initialize` again.
+- With an `AuthenticationHandler`, a session belongs to the principal that created it. Another principal presenting that ID gets 404.
+- Every request on a session counts as activity, so `SessionTimeoutSeconds` expires only idle sessions.
+- The `?session=` query parameter is accepted only on GET streams (`/events`, `GET /mcp`), for browser `EventSource` clients that cannot set headers.
+
+Clients built on Voltaic 2.0.0 or earlier open their session with `ping` instead of `initialize`. To serve them during a transition, set `server.RequireInitializedSessions = false`: any successful sessionless request is then issued a new session. Unknown IDs are still rejected and failed requests still create nothing. The stateless `2026-07-28` path never uses sessions.
 
 ## Authentication
 
@@ -1000,11 +1070,32 @@ server.AuthenticationHandler = async (HttpListenerRequest request) =>
 await server.StartAsync();
 ```
 
-The following requests bypass authentication so infrastructure can validate connectivity:
+The following requests bypass authentication so infrastructure can validate connectivity. Origin validation and the loopback check still apply to them:
 
 - **Health check** (`GET /`) - returns `{"status":"Ok"}` for load balancer probes.
-- **Ping** (`ping` JSON-RPC method via any RPC endpoint) - returns `"pong"` for application-layer connectivity checks.
-- **CORS preflight** (`OPTIONS` requests) - returns `204` with CORS headers.
+- **Ping** (the MCP `ping` request via any RPC endpoint) - returns `{}` for application-layer connectivity checks. The handler still runs, so an authenticated ping carries its caller (and can use that caller's session); a ping that fails authentication is answered anyway, without a caller. The bypass covers only the protocol `ping`; a tool named `ping` is invoked through `tools/call` and is authenticated like any other tool.
+- **CORS preflight** (`OPTIONS` requests) - returns `204` with CORS headers for an allowed origin.
+
+To shape the rejection, add headers to the failed result. `AuthenticationResult.BearerChallenge()` builds the RFC 6750 challenge MCP clients use to discover your authorization server:
+
+```csharp
+server.AuthenticationHandler = request =>
+{
+    if (request.Headers["Authorization"] != "Bearer " + expectedToken)
+    {
+        // 401 with WWW-Authenticate: Bearer resource_metadata="...", error="invalid_token"
+        return Task.FromResult(AuthenticationResult.BearerChallenge(
+            "https://api.example.com/.well-known/oauth-protected-resource", "invalid_token"));
+    }
+
+    return Task.FromResult(new AuthenticationResult { IsAuthenticated = true, Principal = "user" });
+};
+
+// Any other header works too, for example Retry-After on a throttled rejection:
+// result.Headers["Retry-After"] = "30";
+```
+
+`McpHttpServer`, `McpWebsocketsServer`, and `A2AHttpServer` write `AuthenticationResult.Headers` on every rejection.
 
 Setting an `AuthenticationHandler` never changes protocol behavior. Once a request is authenticated (or bypasses authentication, like `ping`), it runs through exactly the same MCP pipeline as on a server without a handler: version resolution, stateless `2026-07-28` routing, the batching rules, session tracking, and the `resultType`/cache fields on stateless results. Before v1.1.0, authenticated requests took a separate path that skipped most of these, and stateless clients such as Claude Code could not list tools on an authenticated server.
 
@@ -1028,13 +1119,29 @@ client.SetRequestHeader("Authorization", "Bearer " + token);
 await client.ConnectStreamableAsync("http://localhost:8080");
 ```
 
-This pairs with the server-side `AuthenticationHandler` above: the client sends the credential and the handler validates it. Because the `ping` handshake bypasses server authentication, the header first takes effect on the client's first non-ping call.
+This pairs with the server-side `AuthenticationHandler` above: the client sends the credential and the handler validates it. The header is present on the `initialize` handshake, so the session the server creates belongs to the authenticated principal.
+
+### WebSocket authentication
+
+`McpWebsocketsServer.AuthenticationHandler` takes the same delegate as `McpHttpServer` and runs on the upgrade request, after the origin and loopback checks. A failure refuses the upgrade with the result's status code, headers, and message. On success, the caller is stored in `ClientConnection.Caller` (visible to `ClientConnected` subscribers) and is the ambient `RpcCallContext.Current` for every request on that socket. On the client, `McpWebsocketsClient.SetRequestHeader` sends credentials on the upgrade request.
+
+```csharp
+McpWebsocketsServer server = new McpWebsocketsServer("localhost", 8080);
+server.AuthenticationHandler = request => Task.FromResult(
+    request.Headers["Authorization"] == "Bearer " + expectedToken
+        ? new AuthenticationResult { IsAuthenticated = true, Principal = "user" }
+        : AuthenticationResult.BearerChallenge());
+
+McpWebsocketsClient client = new McpWebsocketsClient();
+client.SetRequestHeader("Authorization", "Bearer " + expectedToken);
+await client.ConnectAsync("ws://localhost:8080/mcp");
+```
 
 ### Authorizing inside a handler
 
 `AuthenticationHandler` decides whether a request is allowed in; to make per-caller authorization decisions *inside* a tool or method handler (scope reads to a tenant, gate writes by role, and so on) the handler needs the caller's identity. Voltaic carries it there for you.
 
-After a successful `AuthenticationResult`, `McpHttpServer` publishes the caller's `Principal` and `Claims` as an ambient, request-scoped `Voltaic.Core.RpcCallContext`. Because it flows on the request's async call chain, any handler can read `RpcCallContext.Current` without changing its signature. `Current` is `null` when no `AuthenticationHandler` is configured, on transports that do not authenticate, and for requests that bypass authentication (such as `ping`).
+After a successful `AuthenticationResult`, `McpHttpServer` (per request) and `McpWebsocketsServer` (per socket) publish the caller's `Principal` and `Claims` as an ambient `Voltaic.Core.RpcCallContext`. Because it flows on the request's async call chain, any handler can read `RpcCallContext.Current` without changing its signature. `Current` is `null` when no `AuthenticationHandler` is configured, on transports that do not authenticate (TCP and stdio), and for a `ping` that failed authentication.
 
 ```csharp
 using Voltaic.Core;
@@ -1078,6 +1185,43 @@ public async Task ExecuteAsync(A2ARequestContext context, A2AAgentEventQueue eve
     // ... scope the agent's work to the authenticated caller ...
 }
 ```
+
+---
+
+## Upgrading to v2.1.0
+
+v2.1.0 changes defaults for security. Most applications need no code changes; check this list if browsers, remote machines, or older clients call your server.
+
+| Symptom after upgrading | Cause | Fix |
+|---|---|---|
+| A browser app on another origin gets 403 | `Origin` validation | `server.OriginPolicy.AllowedOrigins.Add("https://your.app")` |
+| Another machine gets 403 from a server bound to `localhost` | Loopback-only clients | Bind to `+`/`*` or a specific address, or set `RestrictToLoopbackClients = false` |
+| A client gets 400 "Missing MCP-Session-Id" on `/mcp` | Sessions come only from `initialize` | Send `initialize` first (Voltaic 2.1.0 clients do); for Voltaic 2.0.0 clients set `RequireInitializedSessions = false` |
+| A client gets 404 for a session ID it chose or that expired | Unknown IDs are no longer adopted | Re-initialize and use the server-issued ID |
+| A sessionless `/rpc` caller no longer receives `MCP-Session-Id` | Sessionless `/rpc` requests run without a session | Send `initialize` to `/rpc` when you need a session (for example for `/events`) |
+| A `text/plain` POST to `/mcp` gets 415 | Streamable HTTP requires JSON | Send `Content-Type: application/json` |
+| A TCP client is disconnected | Strict LSP framing | Send only `Content-Length` and `Content-Type` header lines |
+| A browser expects `Access-Control-Allow-Origin: *` | CORS echoes the allowed origin | Allow the origin in `OriginPolicy` |
+
+`McpHttpClient.ConnectAsync` and `ConnectStreamableAsync` now perform the `initialize` handshake instead of a `ping`, so upgrade clients alongside servers that keep the default `RequireInitializedSessions = true`.
+
+## Upgrading from v1.x
+
+v2.0.0 changes what an MCP server publishes by default and tightens tool invocation. Most applications need one or two edits:
+
+| v1.x | v2.0.0 |
+|---|---|
+| `includeDefaultMethods` constructor parameter, default `true`, controls protocol methods and demo tools together | MCP servers: `includeDiagnosticTools`, default `false`, controls only `echo` and `getTime`; protocol methods are always registered. `JsonRpcServer`: `includeDiagnosticMethods`, default `false` |
+| Demo tools `ping`, `echo`, `getTime`, `getSessions`/`getClients` published in `tools/list` | Nothing is published unless you register it; `getSessions`/`getClients` removed |
+| `ping` returns `"pong"` | `ping` returns `{}` (with `resultType` under `2026-07-28`) |
+| Every tool is also a bare JSON-RPC method | Tools are invoked only through `tools/call` |
+| No way to remove a tool | `UnregisterTool(name)` on every MCP server |
+| `additionalProperties` ignored | `additionalProperties` and `patternProperties` enforced |
+| `RegisterBuiltInMethods()` (protected virtual) | `RegisterProtocolMethods()` and `RegisterDiagnosticTools()`; `JsonRpcServer.RegisterDiagnosticMethods()` |
+
+Clients: use the new `PingAsync()` on `McpHttpClient`, `McpClient`, and `McpWebsocketsClient` instead of `CallAsync<string>("ping")`. It accepts both `{}` and a v1.x server's `"pong"`. A v1.x `McpHttpClient` cannot connect to a v2.0.0 server, because its connection probe expects `"pong"`; upgrade clients and servers together.
+
+[MIGRATE_V1_TO_V2.md](MIGRATE_V1_TO_V2.md) lists every change with before-and-after code.
 
 ---
 
@@ -1133,7 +1277,7 @@ Check out the `src/Test.*` projects for working examples:
 - **Sample.A2AServer**: A2A Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended-card sample
 - **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
 - **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
-- **Test.Shared**: Shared Touchstone descriptors and the central 409-case API/protocol matrix
+- **Test.Shared**: Shared Touchstone descriptors and the central 493-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -1209,7 +1353,7 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 409 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 493 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json
@@ -1233,7 +1377,7 @@ dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.
 
 Public types are grouped by protocol namespace:
 
-- `Voltaic.Core`: `JsonRpcServer`, `JsonRpcClient`, JSON-RPC request/response/error models, TCP framing, connection models, and shared authentication/error helpers.
+- `Voltaic.Core`: `JsonRpcServer`, `JsonRpcClient`, JSON-RPC request/response/error models, TCP framing, connection models, shared authentication/error helpers, and the `OriginPolicy` and `LoopbackAddresses` access helpers.
 - `Voltaic.Mcp`: MCP stdio, HTTP, TCP, and WebSocket clients/servers plus MCP tools, resources, prompts, completions, capabilities, and utility models.
 - `Voltaic.A2A`: A2A Agent Cards, task/message/artifact models, `A2AClient`, `A2AHttpJsonClient`, `A2ACardResolver`, `A2AHttpServer`, task storage, event queue, updater, and protocol errors.
 

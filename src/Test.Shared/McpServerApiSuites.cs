@@ -18,10 +18,10 @@ namespace Test.Shared
                 {
                     Case(suiteId, "DefaultProtocolVersionAcrossServers", "MCP servers default to the target protocol version", ct =>
                     {
-                        using McpServer stdio = new McpServer(includeDefaultMethods: false);
-                        using McpHttpServer http = new McpHttpServer("localhost", 0, includeDefaultMethods: false);
-                        using McpTcpServer tcp = new McpTcpServer(IPAddress.Loopback, 0, includeDefaultMethods: false);
-                        using McpWebsocketsServer websocket = new McpWebsocketsServer("localhost", 0, includeDefaultMethods: false);
+                        using McpServer stdio = new McpServer(includeDiagnosticTools: false);
+                        using McpHttpServer http = new McpHttpServer("localhost", 0, includeDiagnosticTools: false);
+                        using McpTcpServer tcp = new McpTcpServer(IPAddress.Loopback, 0, includeDiagnosticTools: false);
+                        using McpWebsocketsServer websocket = new McpWebsocketsServer("localhost", 0, includeDiagnosticTools: false);
 
                         TestAssert.Equal(McpProtocol.LatestProtocolVersion, stdio.ProtocolVersion);
                         TestAssert.Equal(McpProtocol.LatestProtocolVersion, http.ProtocolVersion);
@@ -42,7 +42,7 @@ namespace Test.Shared
 
                     Case(suiteId, "ToolRegistrationValidation", "RegisterTool overloads validate required metadata", ct =>
                     {
-                        using McpServer server = new McpServer(includeDefaultMethods: false);
+                        using McpServer server = new McpServer(includeDiagnosticTools: false);
 
                         TestAssert.Throws<ArgumentNullException>(
                             () => server.RegisterTool(null!, "description", new { type = "object" }, _ => "ok"),
@@ -61,7 +61,7 @@ namespace Test.Shared
 
                     Case(suiteId, "ResourceAndPromptRegistrationValidation", "Resource and prompt APIs validate required data", ct =>
                     {
-                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDefaultMethods: false);
+                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDiagnosticTools: false);
 
                         TestAssert.Throws<ArgumentNullException>(
                             () => server.RegisterResource(null!, "name", "text/plain", () => new McpReadResourceResult()),
@@ -86,7 +86,7 @@ namespace Test.Shared
 
                     Case(suiteId, "FullToolDefinitionRegistration", "Full tool definitions preserve metadata and direct method compatibility", ct =>
                     {
-                        using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 0, includeDefaultMethods: false);
+                        using McpWebsocketsServer server = new McpWebsocketsServer("localhost", 0, includeDiagnosticTools: false);
                         ToolDefinition definition = new ToolDefinition
                         {
                             Name = "inspect",

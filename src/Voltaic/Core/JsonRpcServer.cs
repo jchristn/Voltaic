@@ -94,8 +94,13 @@ namespace Voltaic.Core
         /// </summary>
         /// <param name="ip">IP address to listen on.</param>
         /// <param name="port">The port number to listen on.</param>
-        /// <param name="includeDefaultMethods">True to include default methods such as echo, ping, getTime, add, and getClients.</param>
-        public JsonRpcServer(IPAddress ip, int port, bool includeDefaultMethods = true)
+        /// <param name="includeDiagnosticMethods">
+        /// True to register the diagnostic methods <c>ping</c>, <c>echo</c>, <c>getTime</c>, and <c>add</c>.
+        /// Default is false, so the server exposes only the methods the application registers.
+        /// </param>
+        /// <exception cref="ArgumentNullException">Thrown when ip is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
+        public JsonRpcServer(IPAddress ip, int port, bool includeDiagnosticMethods = false)
         {
             if (ip == null) throw new ArgumentNullException(nameof(ip));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
@@ -105,7 +110,7 @@ namespace Voltaic.Core
             _Clients = new ConcurrentDictionary<string, ClientConnection>();
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
 
-            if (includeDefaultMethods) RegisterBuiltInMethods();
+            if (includeDiagnosticMethods) RegisterDiagnosticMethods();
         }
 
         /// <summary>
@@ -317,13 +322,12 @@ namespace Voltaic.Core
         }
 
         /// <summary>
-        /// Registers the built-in RPC methods: ping, echo, getTime, add, and getClients.
-        /// This method is virtual to allow derived classes to customize the set of built-in methods.
+        /// Registers the diagnostic RPC methods: <c>ping</c>, <c>echo</c>, <c>getTime</c>, and <c>add</c>.
+        /// Called by the constructor only when <c>includeDiagnosticMethods</c> is true. This method is virtual
+        /// to allow derived classes to customize the diagnostic set.
         /// </summary>
-        protected virtual void RegisterBuiltInMethods()
+        protected virtual void RegisterDiagnosticMethods()
         {
-            // Register built-in RPC _Methods
-
             RegisterMethod("echo", (args) =>
             {
                 RpcEchoArguments? echo = args?.Deserialize<RpcEchoArguments>();
@@ -335,7 +339,6 @@ namespace Voltaic.Core
                 RpcAddArguments? add = args?.Deserialize<RpcAddArguments>();
                 return add == null ? 0d : add.A + add.B;
             });
-            RegisterMethod("getClients", (_) => GetConnectedClients());
             RegisterMethod("ping", (_) => "pong");
         }
 

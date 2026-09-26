@@ -4,10 +4,12 @@ namespace Voltaic.Mcp
     using System.Collections.Generic;
     using System.Text;
     using System.Text.Json;
+    using System.Text.RegularExpressions;
 
     /// <summary>
     /// A DOM-free, best-effort JSON Schema validator covering the subset Voltaic enforces
-    /// (<c>type</c>, <c>required</c>, and nested object <c>properties</c>). It parses values with the
+    /// (<c>type</c>, <c>required</c>, nested object <c>properties</c>, <c>patternProperties</c>, and
+    /// <c>additionalProperties</c>). It parses values with the
     /// streaming <see cref="Utf8JsonReader"/> rather than any System.Text.Json DOM type.
     /// </summary>
     internal static class McpSchemaValidator
@@ -104,6 +106,69 @@ namespace Voltaic.Mcp
                         ValidateNode(property.Value, memberValue, $"{context}.{property.Key}");
                     }
                 }
+            }
+
+            if (expectedType == "object" && value.Kind == McpJsonValueKind.Object && value.Members != null)
+            {
+                ValidateUndeclaredMembers(schema, value.Members, context);
+            }
+        }
+
+        private static void ValidateUndeclaredMembers(McpJsonSchema schema, Dictionary<string, JsonValueInfo> members, string context)
+        {
+            bool hasPatterns = schema.PatternProperties != null && schema.PatternProperties.Count > 0;
+            if (schema.AdditionalProperties == null && !hasPatterns)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<string, JsonValueInfo> member in members)
+            {
+                bool matchedPattern = false;
+                if (hasPatterns)
+                {
+                    foreach (KeyValuePair<string, McpJsonSchema> pattern in schema.PatternProperties!)
+                    {
+                        if (PatternMatches(pattern.Key, member.Key))
+                        {
+                            matchedPattern = true;
+                            ValidateNode(pattern.Value, member.Value, $"{context}.{member.Key}");
+                        }
+                    }
+                }
+
+                bool declared = schema.Properties != null && schema.Properties.ContainsKey(member.Key);
+                if (declared || matchedPattern || schema.AdditionalProperties == null)
+                {
+                    continue;
+                }
+
+                if (!schema.AdditionalProperties.Allowed)
+                {
+                    throw McpProtocolException.ValidationError($"{context} has unexpected property '{member.Key}'; the schema does not allow additional properties.");
+                }
+
+                if (schema.AdditionalProperties.Schema != null)
+                {
+                    ValidateNode(schema.AdditionalProperties.Schema, member.Value, $"{context}.{member.Key}");
+                }
+            }
+        }
+
+        private static bool PatternMatches(string pattern, string name)
+        {
+            try
+            {
+                return Regex.IsMatch(name, pattern, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+            }
+            catch (ArgumentException)
+            {
+                // An invalid pattern cannot be evaluated; treat it as matching so a schema error never rejects valid input.
+                return true;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return true;
             }
         }
 

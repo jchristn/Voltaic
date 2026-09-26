@@ -135,6 +135,23 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Sends the MCP <c>ping</c> request and completes when the server answers with any successful result.
+        /// Voltaic 2.x servers and other specification-conformant servers answer with an empty object
+        /// (<c>{}</c>); Voltaic 1.x servers answered with the string <c>"pong"</c>. Both are accepted, so use
+        /// this method rather than <c>CallAsync&lt;string&gt;("ping")</c> to check connectivity.
+        /// </summary>
+        /// <param name="timeoutMs">The timeout in milliseconds to wait for a response. Default is 30000.</param>
+        /// <param name="token">Cancellation token for the operation.</param>
+        /// <returns>A task that completes when the server has answered the ping.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the client is not connected.</exception>
+        /// <exception cref="Exception">Thrown when the server answers the ping with a JSON-RPC error.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled or times out.</exception>
+        public async Task PingAsync(int timeoutMs = 30000, CancellationToken token = default)
+        {
+            await CallAsync<object?>("ping", null, timeoutMs, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Asynchronously invokes a remote method and returns the result as the specified type.
         /// </summary>
         /// <typeparam name="T">The type to deserialize the result into.</typeparam>

@@ -66,14 +66,14 @@ namespace Test.Shared
                         TestAssert.Null(list.SessionId, "A rejected stateless request carries no session id.");
                     }),
 
-                    Case(suiteId, "RpcPathWithoutVersionHeaderUnchanged", "A plain JSON-RPC request to the JSON-RPC path keeps its session and gets no stateless fields", async ct =>
+                    Case(suiteId, "RpcPathWithoutVersionHeaderUnchanged", "A plain JSON-RPC request to the JSON-RPC path gets handshake results, no stateless fields, and no session", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, RegisterSurface, ct).ConfigureAwait(false);
 
                         RpcResult list = await McpHttpTestRequests.SendAsync(
                             fixture, McpHttpTestRequests.BuildBody("tools/list", 1, null), new Dictionary<string, string>(), false, ct, "/rpc/").ConfigureAwait(false);
                         TestAssert.Equal(HttpStatusCode.OK, list.StatusCode, $"tools/list should succeed. Body: {list.Body}");
-                        TestAssert.NotNull(list.SessionId, "The JSON-RPC path still issues a session id.");
+                        TestAssert.True(list.SessionId == null, "A sessionless JSON-RPC request is not issued a session.");
                         TestAssert.False(list.Result.Has("resultType"), "Handshake-era results carry no resultType.");
                         TestAssert.True(list.Result.Get("tools").EnumerateArray().Any(tool => tool.Get("name").String() == "echo-tool"), "tools/list returns the registered tools.");
                     }),
@@ -320,6 +320,10 @@ namespace Test.Shared
             TestAssert.Equal(0L, tools.Result.Get("ttlMs").Long(), "tools/list carries a numeric ttlMs.");
             TestAssert.Equal("private", tools.Result.Get("cacheScope").String(), "tools/list carries a valid cacheScope.");
             TestAssert.True(tools.Result.Get("tools").EnumerateArray().Any(tool => tool.Get("name").String() == "whoami"), "tools/list returns the registered tools.");
+            TestAssert.Equal(
+                "echo-tool,whoami",
+                String.Join(",", tools.Result.Get("tools").EnumerateArray().Select(tool => tool.Get("name").String()).OrderBy(name => name, StringComparer.Ordinal)),
+                "tools/list returns exactly the tools the application registered, with no Voltaic diagnostic tools.");
 
             // 3. tools/call
             RpcResult call = await McpHttpTestRequests.SendStatelessAsync(

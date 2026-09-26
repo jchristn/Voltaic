@@ -27,14 +27,16 @@ namespace Test.Shared
                         TestAssert.True(body.Contains("\"status\":\"Ok\""), "Health check should return status JSON.");
                     }),
 
-                    Case(suiteId, "CorsPreflight", "OPTIONS requests return CORS preflight headers", async ct =>
+                    Case(suiteId, "CorsPreflight", "OPTIONS from an allowed origin returns CORS preflight headers that echo the origin", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
                         using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Options, $"{fixture.BaseUrl}/mcp/");
+                        request.Headers.Add("Origin", "http://localhost:6274");
                         using HttpResponseMessage response = await fixture.Client.SendAsync(request, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-                        TestAssert.True(response.Headers.TryGetValues("Access-Control-Allow-Origin", out _), "CORS origin header should be present.");
+                        TestAssert.True(response.Headers.TryGetValues("Access-Control-Allow-Origin", out IEnumerable<string>? origins), "CORS origin header should be present.");
+                        TestAssert.Equal("http://localhost:6274", origins!.First(), "The allowed origin is echoed, never *.");
                     }),
 
                     Case(suiteId, "CorsCanBeDisabled", "CORS headers can be disabled", async ct =>
@@ -47,23 +49,22 @@ namespace Test.Shared
                         TestAssert.False(response.Headers.TryGetValues("Access-Control-Allow-Origin", out _), "CORS origin header should be omitted.");
                     }),
 
-                    Case(suiteId, "PostCreatesSession", "POST /mcp creates a session and returns Mcp-Session-Id", async ct =>
+                    Case(suiteId, "PostCreatesSession", "A successful initialize on POST /mcp creates a session and returns Mcp-Session-Id", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
-                        RpcResult response = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.False(String.IsNullOrEmpty(response.SessionId), "Session ID should be returned.");
-                        TestAssert.True(fixture.Server.GetActiveSessions().Contains(response.SessionId!), "Server should track created session.");
+                        TestAssert.False(String.IsNullOrEmpty(sessionId), "Session ID should be returned.");
+                        TestAssert.True(fixture.Server.GetActiveSessions().Contains(sessionId!), "Server should track created session.");
                     }),
 
                     Case(suiteId, "ExistingSessionIsReused", "POST /mcp reuses the supplied session id", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
-                        RpcResult first = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
-                        RpcResult second = await fixture.PostMcpAsync("ping", null, 2, first.SessionId, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
+                        RpcResult second = await fixture.PostMcpAsync("ping", null, 2, sessionId, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(first.SessionId, second.SessionId);
+                        TestAssert.Equal(sessionId, second.SessionId);
                         TestAssert.Equal(1, fixture.Server.GetActiveSessions().Count);
                     }),
 
@@ -82,14 +83,14 @@ namespace Test.Shared
                     Case(suiteId, "DeleteRemovesSession", "DELETE /mcp terminates an existing session", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
-                        RpcResult first = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
 
                         using HttpRequestMessage delete = new HttpRequestMessage(HttpMethod.Delete, $"{fixture.BaseUrl}/mcp/");
-                        delete.Headers.Add(McpProtocol.SessionIdHeader, first.SessionId);
+                        delete.Headers.Add(McpProtocol.SessionIdHeader, sessionId);
                         using HttpResponseMessage deleteResponse = await fixture.Client.SendAsync(delete, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, deleteResponse.StatusCode);
-                        TestAssert.False(fixture.Server.GetActiveSessions().Contains(first.SessionId!), "Session should be removed.");
+                        TestAssert.False(fixture.Server.GetActiveSessions().Contains(sessionId!), "Session should be removed.");
                     }),
 
                     Case(suiteId, "UnsupportedVerb", "Unsupported /mcp verbs return 405", async ct =>
@@ -122,7 +123,8 @@ namespace Test.Shared
                     Case(suiteId, "NotificationAcceptedNoBody", "POST /mcp notifications return 202 with no JSON body", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
-                        using HttpRequestMessage request = CreateJsonRpcPost($"{fixture.BaseUrl}/mcp/", "notifications/initialized", null, null, null);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
+                        using HttpRequestMessage request = CreateJsonRpcPost($"{fixture.BaseUrl}/mcp/", "notifications/initialized", null, null, sessionId);
                         using HttpResponseMessage response = await fixture.Client.SendAsync(request, ct).ConfigureAwait(false);
                         string body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
@@ -133,26 +135,27 @@ namespace Test.Shared
                     Case(suiteId, "TerminatedSessionReturnsNotFound", "Requests with terminated sessions return 404", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
-                        RpcResult first = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
 
                         using HttpRequestMessage delete = new HttpRequestMessage(HttpMethod.Delete, $"{fixture.BaseUrl}/mcp/");
-                        delete.Headers.Add(McpProtocol.SessionIdHeader, first.SessionId);
+                        delete.Headers.Add(McpProtocol.SessionIdHeader, sessionId);
                         using HttpResponseMessage deleteResponse = await fixture.Client.SendAsync(delete, ct).ConfigureAwait(false);
                         TestAssert.Equal(HttpStatusCode.OK, deleteResponse.StatusCode);
 
-                        using HttpRequestMessage request = CreateJsonRpcPost($"{fixture.BaseUrl}/mcp/", "ping", null, 2, first.SessionId);
+                        using HttpRequestMessage request = CreateJsonRpcPost($"{fixture.BaseUrl}/mcp/", "ping", null, 2, sessionId);
                         using HttpResponseMessage response = await fixture.Client.SendAsync(request, ct).ConfigureAwait(false);
                         TestAssert.Equal(HttpStatusCode.NotFound, response.StatusCode);
                     }),
 
-                    Case(suiteId, "LegacyRpcEndpoint", "Legacy /rpc endpoint remains compatible", async ct =>
+                    Case(suiteId, "LegacyRpcEndpoint", "Legacy /rpc endpoint serves sessionless requests without creating sessions", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
                         RpcResult response = await fixture.PostRpcAsync("ping", null, 1, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.Equal("pong", response.Result.String());
-                        TestAssert.False(String.IsNullOrEmpty(response.SessionId), "Legacy endpoint should still create sessions.");
+                        TestAssert.True(response.Result.IsObject && response.Result.Length == 0, "Protocol ping must return an empty object.");
+                        TestAssert.True(String.IsNullOrEmpty(response.SessionId), "A sessionless request must not be issued a session.");
+                        TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "A sessionless request must not register a session.");
                     }),
 
                     Case(suiteId, "LegacyEventsMissingSession", "Legacy /events endpoint rejects missing sessions", async ct =>
@@ -194,7 +197,7 @@ namespace Test.Shared
                         RpcResult response = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.Equal("pong", response.Result.String());
+                        TestAssert.True(response.Result.IsObject && response.Result.Length == 0, "Protocol ping must return an empty object.");
                     }),
 
                     Case(suiteId, "PingBypassesAuthFailure", "Ping bypasses authentication for connectivity checks", async ct =>
@@ -212,13 +215,14 @@ namespace Test.Shared
                         RpcResult response = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.Equal("pong", response.Result.String());
+                        TestAssert.True(response.Result.IsObject && response.Result.Length == 0, "Protocol ping must return an empty object.");
                     }),
 
                     Case(suiteId, "RawSseReceivesQueuedNotification", "GET /mcp streams queued notifications over SSE", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
-                        RpcResult session = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
+                        RpcResult session = await fixture.PostMcpAsync("ping", null, 1, sessionId, ct).ConfigureAwait(false);
 
                         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                         timeout.CancelAfter(TimeSpan.FromSeconds(5));
@@ -481,7 +485,7 @@ namespace Test.Shared
 
                     Case(suiteId, "InvalidResourceTemplateRegistration", "invalid resource template syntax fails at registration", ct =>
                     {
-                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDefaultMethods: false);
+                        using McpHttpServer server = new McpHttpServer("localhost", 0, includeDiagnosticTools: false);
                         TestAssert.Throws<ArgumentException>(
                             () => server.RegisterResourceTemplate("voltaic://docs/{}", "bad", "text/plain", uri => new McpReadResourceResult()),
                             "Empty template variable names should fail.");
@@ -622,12 +626,11 @@ namespace Test.Shared
                         using McpHttpClient client = new McpHttpClient();
 
                         bool connected = await client.ConnectStreamableAsync(fixture.BaseUrl, token: ct).ConfigureAwait(false);
-                        string pong = await client.CallAsync<string>("ping", token: ct).ConfigureAwait(false);
+                        await client.PingAsync(token: ct).ConfigureAwait(false);
 
                         TestAssert.True(connected, "Client should connect.");
                         TestAssert.True(client.IsConnected, "Client should report connected.");
                         TestAssert.False(String.IsNullOrEmpty(client.SessionId), "Client should capture session ID.");
-                        TestAssert.Equal("pong", pong);
                     }),
 
                     Case(suiteId, "ConnectLegacyAndCallPing", "McpHttpClient connects to legacy /rpc and calls ping", async ct =>
@@ -636,10 +639,9 @@ namespace Test.Shared
                         using McpHttpClient client = new McpHttpClient();
 
                         bool connected = await client.ConnectAsync(fixture.BaseUrl, token: ct).ConfigureAwait(false);
-                        string pong = await client.CallAsync<string>("ping", token: ct).ConfigureAwait(false);
+                        await client.PingAsync(token: ct).ConfigureAwait(false);
 
                         TestAssert.True(connected, "Client should connect.");
-                        TestAssert.Equal("pong", pong);
                     }),
 
                     Case(suiteId, "ResponseEvents", "McpHttpClient raises request and response events", async ct =>
@@ -656,9 +658,9 @@ namespace Test.Shared
 
                         RequestSentEventArgs sentArgs = await WaitForTaskAsync(sent.Task, ct).ConfigureAwait(false);
                         ResponseReceivedEventArgs receivedArgs = await WaitForTaskAsync(received.Task, ct).ConfigureAwait(false);
-                        TestAssert.Equal("ping", sentArgs.Method);
-                        TestAssert.Equal("ping", receivedArgs.Method);
-                        TestAssert.True(receivedArgs.IsSuccess, "Ping should be successful.");
+                        TestAssert.Equal("initialize", sentArgs.Method);
+                        TestAssert.Equal("initialize", receivedArgs.Method);
+                        TestAssert.True(receivedArgs.IsSuccess, "The initialize handshake should be successful.");
                     }),
 
                     Case(suiteId, "RawCallAndNotify", "McpHttpClient supports raw CallAsync and NotifyAsync", async ct =>
@@ -673,7 +675,7 @@ namespace Test.Shared
                         await client.NotifyAsync("notifications/initialized", token: ct).ConfigureAwait(false);
 
                         JsonProbe result = JsonProbe.From(response.Result!);
-                        TestAssert.Equal("pong", result.String());
+                        TestAssert.True(result.IsObject && result.Length == 0, "Protocol ping must return an empty object.");
                     }),
 
                     Case(suiteId, "SseNotificationEvent", "McpHttpClient receives Streamable HTTP SSE notifications", async ct =>

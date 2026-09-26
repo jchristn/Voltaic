@@ -26,7 +26,7 @@ namespace Test.JsonRpcServer
             Console.WriteLine("=== JSON-RPC 2.0 Server ===");
             Console.WriteLine($"Starting server on port {port}...");
 
-            JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, port);
+            JsonRpcServer server = new JsonRpcServer(IPAddress.Loopback, port, includeDiagnosticMethods: true);
 
             // Subscribe to log events
             server.Log += (sender, message) => Console.WriteLine(message);
@@ -168,7 +168,6 @@ namespace Test.JsonRpcServer
                         Console.WriteLine("  - add(a, b)         : Adds two numbers");
                         Console.WriteLine("  - multiply(x, y)    : Multiplies two numbers");
                         Console.WriteLine("  - greet(name)       : Returns a greeting");
-                        Console.WriteLine("  - getClients()      : Returns list of connected clients");
                         Console.WriteLine("  - ping()            : Returns 'pong'");
                         break;
 

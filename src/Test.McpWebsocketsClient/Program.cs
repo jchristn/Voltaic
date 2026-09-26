@@ -171,13 +171,14 @@ namespace Test.McpWebsocketsClient
                             Console.WriteLine("\nExample commands:");
                             Console.WriteLine("  connect                             - Connect to localhost on default port");
                             Console.WriteLine("  connect ws://192.168.1.100:8080/mcp - Connect to specific URL");
-                            Console.WriteLine("  call ping                           - Simple call without parameters");
-                            Console.WriteLine("  call echo {\"message\":\"Hello\"}     - Call with parameters");
+                            Console.WriteLine("  call ping                           - Protocol ping (returns {})");
+                            Console.WriteLine("  call tools/call {\"name\":\"echo\",\"arguments\":{\"message\":\"Hello\"}}");
+                            Console.WriteLine("                                      - Call the echo diagnostic tool");
                             Console.WriteLine("  call add {\"a\":5,\"b\":3}            - Call add method");
                             Console.WriteLine("  call multiply {\"x\":4,\"y\":7}       - Call multiply method");
                             Console.WriteLine("  call greet {\"name\":\"Alice\"}       - Call greet method");
-                            Console.WriteLine("  call getTime                        - Get server time");
-                            Console.WriteLine("  call getClients                     - Get list of connected clients");
+                            Console.WriteLine("  call tools/call {\"name\":\"getTime\",\"arguments\":{}}");
+                            Console.WriteLine("                                      - Get server time");
                             Console.WriteLine("  notify log {\"message\":\"Test\"}     - Send notification");
                             break;
 

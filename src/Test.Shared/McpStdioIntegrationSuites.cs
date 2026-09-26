@@ -34,13 +34,13 @@ namespace Test.Shared
                         };
 
                         await LaunchTestServerAsync(client, ct).ConfigureAwait(false);
-                        string pong = await client.CallAsync<string>("ping", timeoutMs: 15000, token: ct).ConfigureAwait(false);
+                        JsonProbe ping = JsonProbe.From(await client.CallAsync<object?>("ping", timeoutMs: 15000, token: ct).ConfigureAwait(false));
 
                         ClientConnectedEventArgs connectedArgs = await WaitForTaskAsync(connected.Task, ct).ConfigureAwait(false);
                         string log = await WaitForTaskAsync(serverLog.Task, ct).ConfigureAwait(false);
 
                         TestAssert.True(client.IsConnected, "Stdio client should report connected after launch.");
-                        TestAssert.Equal("pong", pong);
+                        TestAssert.True(ping.IsObject && ping.Length == 0, "Protocol ping must return an empty object.");
                         TestAssert.Equal(ClientConnectionTypeEnum.Stdio, connectedArgs.ConnectionType);
                         TestAssert.True(connectedArgs.Endpoint.Contains("dotnet", StringComparison.OrdinalIgnoreCase), "Endpoint should include launched executable.");
                         TestAssert.True(log.Contains("[SERVER STDERR]", StringComparison.Ordinal), "Server diagnostics should be captured from stderr.");
@@ -51,19 +51,19 @@ namespace Test.Shared
                         TestAssert.False(client.IsConnected, "Stdio client should be disconnected after shutdown.");
                     }),
 
-                    Case(suiteId, "CallsRegisteredMethodsWithParameters", "McpClient calls stdio methods with parameters and typed results", async ct =>
+                    Case(suiteId, "CallsRegisteredMethodsWithParameters", "McpClient calls stdio tools through tools/call and registered methods with parameters", async ct =>
                     {
                         using McpClient client = new McpClient();
                         await LaunchTestServerAsync(client, ct).ConfigureAwait(false);
 
-                        string echo = await client.CallAsync<string>("echo", new { message = "test message" }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
-                        double add = await client.CallAsync<double>("add", new { a = 5.0, b = 3.0 }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
-                        double multiply = await client.CallAsync<double>("multiply", new { x = 7.0, y = 6.0 }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
+                        JsonProbe echo = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "echo", arguments = new { message = "test message" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe add = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "add", arguments = new { a = 5.0, b = 3.0 } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe multiply = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "multiply", arguments = new { x = 7.0, y = 6.0 } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         string lookup = await client.CallAsync<string>("asyncLookup", new { key = "alpha" }, timeoutMs: 15000, token: ct).ConfigureAwait(false);
 
-                        TestAssert.Equal("test message", echo);
-                        TestAssert.Equal(8.0, add);
-                        TestAssert.Equal(42.0, multiply);
+                        TestAssert.Equal("test message", echo.Get("content")[0].Get("text").String());
+                        TestAssert.Equal("8", add.Get("content")[0].Get("text").String());
+                        TestAssert.Equal("42", multiply.Get("content")[0].Get("text").String());
                         TestAssert.Equal("value-for-alpha", lookup);
 
                         client.Shutdown();
@@ -87,7 +87,7 @@ namespace Test.Shared
 
                         JsonProbe initialize = JsonProbe.From(await client.CallAsync<object?>("initialize", new { protocolVersion = McpProtocol.LatestProtocolVersion }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe tools = JsonProbe.From(await client.CallAsync<object?>("tools/list", new { }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
-                        JsonProbe toolCall = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "ping", arguments = new { } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
+                        JsonProbe toolCall = JsonProbe.From(await client.CallAsync<object?>("tools/call", new { name = "echo", arguments = new { message = "hello stdio" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe staticResource = JsonProbe.From(await client.CallAsync<object?>("resources/read", new { uri = "voltaic://stdio/static" }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe dynamicResource = JsonProbe.From(await client.CallAsync<object?>("resources/read", new { uri = "voltaic://stdio/dynamic" }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
                         JsonProbe prompt = JsonProbe.From(await client.CallAsync<object?>("prompts/get", new { name = "stdio-prompt", arguments = new { topic = "Voltaic" } }, timeoutMs: 15000, token: ct).ConfigureAwait(false));
@@ -102,13 +102,14 @@ namespace Test.Shared
                             .EnumerateArray()
                             .Select(tool => tool.Get("name").String() ?? String.Empty)
                             .ToArray();
-                        TestAssert.True(toolNames.Contains("ping"), "tools/list should include built-in ping.");
-                        TestAssert.True(toolNames.Contains("echo"), "tools/list should include built-in echo.");
+                        TestAssert.False(toolNames.Contains("ping"), "tools/list must not include a ping tool; ping is a protocol method.");
+                        TestAssert.True(toolNames.Contains("echo"), "tools/list should include the diagnostic echo tool the test host enables.");
+                        TestAssert.True(toolNames.Contains("getTime"), "tools/list should include the diagnostic getTime tool the test host enables.");
                         TestAssert.True(toolNames.Contains("add"), "tools/list should include test-server add.");
                         TestAssert.True(toolNames.Contains("multiply"), "tools/list should include test-server multiply.");
 
                         TestAssert.Equal("text", toolCall.Get("content")[0].Get("type").String());
-                        TestAssert.True(toolCall.Get("content")[0].Get("text").String()?.Contains("pong", StringComparison.Ordinal) == true, "tools/call ping should return pong content.");
+                        TestAssert.Equal("hello stdio", toolCall.Get("content")[0].Get("text").String());
                         TestAssert.Equal("stdio static", staticResource.Get("contents")[0].Get("text").String());
                         TestAssert.Equal("dynamic:voltaic://stdio/dynamic", dynamicResource.Get("contents")[0].Get("text").String());
                         TestAssert.Equal("Stdio Voltaic", prompt.Get("messages")[0].Get("content").Get("text").String());
@@ -141,14 +142,13 @@ namespace Test.Shared
                         await client.NotifyAsync("notifications/initialized", token: ct).ConfigureAwait(false);
                         await client.NotifyAsync("ping", token: ct).ConfigureAwait(false);
                         await Task.Delay(200, ct).ConfigureAwait(false);
-                        string pong = await client.CallAsync<string>("ping", timeoutMs: 15000, token: ct).ConfigureAwait(false);
+                        await client.PingAsync(15000, ct).ConfigureAwait(false);
 
                         RequestSentEventArgs notificationArgs = await WaitForTaskAsync(initializedSent.Task, ct).ConfigureAwait(false);
                         ResponseReceivedEventArgs responseArgs = await WaitForTaskAsync(pingResponse.Task, ct).ConfigureAwait(false);
 
                         TestAssert.True(notificationArgs.IsNotification, "initialized should be sent as a notification.");
                         TestAssert.Null(notificationArgs.RequestId, "Notification should not carry a request id.");
-                        TestAssert.Equal("pong", pong);
                         TestAssert.True(responseArgs.IsSuccess, "Ping response event should represent success.");
 
                         client.Shutdown();

@@ -114,7 +114,7 @@ namespace Test.Shared
                         TestAssert.True(capture.ContextWasNull, "RpcCallContext.Current should be null when no AuthenticationHandler is configured.");
                     }),
 
-                    Case(suiteId, "PingBypassEstablishesNoContext", "The pre-auth ping bypass never runs authentication, so no caller context is established", async ct =>
+                    Case(suiteId, "PingBypassEstablishesNoContext", "A ping that fails authentication is still answered, without a caller context or session", async ct =>
                     {
                         AuthProbe probe = new AuthProbe();
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(
@@ -124,14 +124,29 @@ namespace Test.Shared
                                 server.AuthenticationHandler = request =>
                                 {
                                     probe.Invoked = true;
-                                    return Task.FromResult(new AuthenticationResult { IsAuthenticated = true, Principal = "should-not-apply" });
+                                    return Task.FromResult(new AuthenticationResult { IsAuthenticated = false, StatusCode = 401, ErrorMessage = "denied" });
                                 };
                             }).ConfigureAwait(false);
 
                         RpcResult response = await fixture.PostMcpAsync("ping", new { }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.False(probe.Invoked, "The ping handshake must bypass authentication, so no caller context is established for it.");
+                        TestAssert.True(probe.Invoked, "The handler runs for ping so an authenticated ping can carry its caller.");
+                        TestAssert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode, "A ping that fails authentication is still answered.");
                         TestAssert.False(response.Root.Has("error"), "ping should succeed.");
+                        TestAssert.True(response.SessionId == null, "A sessionless ping never creates a session.");
+                    }),
+
+                    Case(suiteId, "AuthenticatedPingCanUseOwnSession", "An authenticated ping carries its caller, so it can use the session that caller opened", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(
+                            ct,
+                            configure: server => server.AuthenticationHandler = AuthAs("alice", new Dictionary<string, string>())).ConfigureAwait(false);
+
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
+                        RpcResult ping = await fixture.PostMcpAsync("ping", new { }, 2, sessionId, ct).ConfigureAwait(false);
+
+                        TestAssert.False(String.IsNullOrEmpty(sessionId), "An authenticated initialize opens a session.");
+                        TestAssert.Equal(System.Net.HttpStatusCode.OK, ping.StatusCode, $"An authenticated ping on the caller's own session succeeds. Body: {ping.Body}");
                     }),
 
                     Case(suiteId, "ConcurrentCallersAreIsolated", "Concurrent authenticated callers each observe only their own context", async ct =>
@@ -171,10 +186,30 @@ namespace Test.Shared
 
         private static async Task<string> CallEchoPrincipalAsync(HttpMcpTestServerFixture fixture, string principal, CancellationToken token)
         {
+            // Each caller opens its own session, because sessions are bound to the principal that created them.
+            object initializeParams = new
+            {
+                protocolVersion = McpProtocol.LatestProtocolVersion,
+                capabilities = new { },
+                clientInfo = new { name = principal, version = "1.0.0" }
+            };
+
+            string? sessionId;
+            using (HttpResponseMessage initialize = await PostAsPrincipalAsync(fixture, principal, "initialize", initializeParams, null, token).ConfigureAwait(false))
+            {
+                sessionId = initialize.Headers.TryGetValues(McpProtocol.SessionIdHeader, out IEnumerable<string>? values) ? values.FirstOrDefault() : null;
+            }
+
+            using HttpResponseMessage response = await PostAsPrincipalAsync(fixture, principal, "tools/call", new { name = "echo-principal", arguments = new { } }, sessionId, token).ConfigureAwait(false);
+            return await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+        }
+
+        private static async Task<HttpResponseMessage> PostAsPrincipalAsync(HttpMcpTestServerFixture fixture, string principal, string method, object parameters, string? sessionId, CancellationToken token)
+        {
             JsonRpcRequest request = new JsonRpcRequest
             {
-                Method = "tools/call",
-                Params = new { name = "echo-principal", arguments = new { } },
+                Method = method,
+                Params = parameters,
                 Id = 1
             };
 
@@ -185,9 +220,14 @@ namespace Test.Shared
             message.Headers.Accept.ParseAdd("application/json");
             message.Headers.Accept.ParseAdd("text/event-stream");
             message.Headers.Add("Authorization", principal);
+            if (sessionId != null)
+            {
+                message.Headers.Add(McpProtocol.SessionIdHeader, sessionId);
+            }
 
-            using HttpResponseMessage response = await fixture.SendRawAsync(message, token).ConfigureAwait(false);
-            return await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            HttpResponseMessage response = await fixture.Client.SendAsync(message, token).ConfigureAwait(false);
+            await response.Content.LoadIntoBufferAsync().ConfigureAwait(false);
+            return response;
         }
 
         private static Func<System.Net.HttpListenerRequest, Task<AuthenticationResult>> AuthAs(string principal, Dictionary<string, string> claims)
