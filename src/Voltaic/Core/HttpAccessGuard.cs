@@ -2,6 +2,7 @@ namespace Voltaic.Core
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Net;
     using System.Text;
     using System.Threading;
@@ -53,7 +54,9 @@ namespace Voltaic.Core
         /// Writes CORS headers for an allowed request. Nothing is written when CORS is disabled or the request
         /// carries no Origin (non-browser clients need no CORS grant). The allowed origin is echoed, never
         /// <c>*</c>, together with <c>Vary: Origin</c>; any <c>Access-Control-Allow-Origin</c> entry in
-        /// <paramref name="corsHeaders"/> is ignored.
+        /// <paramref name="corsHeaders"/> is ignored. When the request is a preflight that lists
+        /// <c>Access-Control-Request-Headers</c>, those header names (valid tokens only) are allowed in place of
+        /// the configured <c>Access-Control-Allow-Headers</c>.
         /// </summary>
         internal static void ApplyCorsHeaders(HttpListenerContext context, bool enableCors, Dictionary<string, string>? corsHeaders)
         {
@@ -63,15 +66,57 @@ namespace Voltaic.Core
             if (String.IsNullOrEmpty(origin)) return;
 
             context.Response.AddHeader("Access-Control-Allow-Origin", origin);
-            context.Response.AddHeader("Vary", "Origin");
+
+            // A preflight names the headers the page wants to send. The origin is already allowed, so those
+            // names are allowed too; this lets custom credential headers (X-API-Key), Mcp-Param-* headers, and
+            // tracing headers through without listing them in advance.
+            string? requestedHeaders = SanitizeHeaderList(context.Request.Headers["Access-Control-Request-Headers"]);
+            context.Response.AddHeader("Vary", requestedHeaders != null ? "Origin, Access-Control-Request-Headers" : "Origin");
+            if (requestedHeaders != null)
+            {
+                context.Response.AddHeader("Access-Control-Allow-Headers", requestedHeaders);
+            }
 
             if (corsHeaders == null) return;
             foreach (KeyValuePair<string, string> kvp in corsHeaders)
             {
                 if (StringComparer.OrdinalIgnoreCase.Equals(kvp.Key, "Access-Control-Allow-Origin")) continue;
                 if (StringComparer.OrdinalIgnoreCase.Equals(kvp.Key, "Vary")) continue;
+                if (requestedHeaders != null && StringComparer.OrdinalIgnoreCase.Equals(kvp.Key, "Access-Control-Allow-Headers")) continue;
                 context.Response.AddHeader(kvp.Key, kvp.Value);
             }
+        }
+
+        /// <summary>
+        /// Returns a comma-separated list of the header names in an Access-Control-Request-Headers value, keeping
+        /// only valid HTTP field-name tokens, or null when none remain.
+        /// </summary>
+        internal static string? SanitizeHeaderList(string? value)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return null;
+
+            List<string> names = new List<string>();
+            foreach (string part in value!.Split(','))
+            {
+                string name = part.Trim();
+                if (name.Length == 0 || name.Length > 128) continue;
+
+                bool valid = true;
+                foreach (char character in name)
+                {
+                    bool tchar = (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')
+                        || "!#$%&'*+-.^_`|~".IndexOf(character) >= 0;
+                    if (!tchar)
+                    {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                if (valid && !names.Contains(name, StringComparer.OrdinalIgnoreCase)) names.Add(name);
+            }
+
+            return names.Count == 0 ? null : String.Join(", ", names);
         }
 
         /// <summary>

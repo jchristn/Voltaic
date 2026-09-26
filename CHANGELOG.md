@@ -1,5 +1,85 @@
 # Changelog
 
+## v2.1.4
+Closes MCP specification deviations found by a full review of Voltaic against the five published revisions. Verified end to end with the MCP Inspector CLI 2.8.0, the official Python MCP SDK 2.2.0 (as a client of Voltaic over HTTP and stdio in automatic, legacy, and 2026-07-28 modes, and as a server for Voltaic's clients), Claude Code 2.1.281 (HTTP, authenticated HTTP, stdio), and the official A2A Python SDK 1.1.5.
+
+### Clients answer server requests
+- **Every client now answers requests the server sends it.** `McpClient`, `McpWebsocketsClient`, `McpTcpClient`, `JsonRpcClient`, and `McpHttpClient` treated a server request (a message with `method` and `id`) as a stray response and dropped it, so a server that pinged its clients (the specification requires the receiver to answer `ping` promptly) never got an answer. MCP clients now answer `ping` with `{}`; other methods are answered by handlers registered with the new `RegisterRequestHandler`/`UnregisterRequestHandler`, and anything else with `-32601`. A handler's `McpProtocolException` is sent as its error, and other exceptions as `-32603` without details. `McpHttpClient` POSTs each answer on the session, declares the `roots`, `sampling`, and `elicitation` capabilities in `initialize` when handlers for them are registered, and ignores stream requests in stateless 2026-07-28 mode, where they are forbidden. Writes are now serialized on every stream transport.
+
+### Server fixes
+- **Tool handler exceptions are tool execution errors.** A handler that throws now produces a result with `isError: true` instead of JSON-RPC `-32603`, as the specification prescribes for API and business-logic failures, so the model can react. Tool outputs must be sanitized, so the text is generic by default and the exception goes to `Log` (the `-32603` error used to carry the message in `data`). New `McpToolException` sends its message to the model as written, and new `IncludeToolExceptionMessages` (on every MCP server) shows every message. `McpProtocolException` still produces a protocol error, and cancellation still propagates. An output-schema violation is now `-32603` (a server fault) instead of `-32602`.
+- **`ping` follows the session and authentication rules.** A handshake-era `ping` on `/mcp` without `MCP-Session-Id` now gets 400 like every request other than `initialize`, and `ping` no longer skips the `AuthenticationHandler` (the MCP authorization specification requires 401 for a missing or invalid token on every request). Use `GET /` as an unauthenticated health check.
+- **`RequireInitializedSessions` is obsolete.** It always reads `true` and setting it has no effect; sessions come only from a successful `initialize`.
+- **`AuthenticationHandler` may read the request body**; the body is buffered before the handler runs.
+- **Resumable GET streams.** `GET /mcp` now starts with a priming event (an event ID, `retry`, and empty `data`) as MCP 2025-11-25 recommends, every message carries an event ID (`{streamId}-{n}`), and a client that reconnects with `Last-Event-ID` receives the messages it missed on that stream, never another stream's. New `SseReplayBufferSize` (default 100) and `SseRetryIntervalMs` (default 1000). A resumed stream takes over from the abandoned connection, which previously kept consuming the session's messages until a write failed; a message that connection had already taken is handed to the new one. Streams send `X-Accel-Buffering: no`.
+- **`x-mcp-header` (2026-07-28).** `RegisterTool` rejects annotations the specification forbids, and a stateless `tools/call` whose `Mcp-Param-{Name}` headers are missing, extra, malformed, or different from the arguments gets 400 `-32020` before the tool runs. Base64 sentinel values are decoded strictly (for `Mcp-Name` too), integers are compared numerically and must be within the JavaScript safe range, an argument of the wrong type is left to input validation, and nullable primitive types (`["string","null"]`) may be annotated. New constants `McpProtocol.ParamHeaderPrefix` and `McpProtocol.HeaderAnnotationKeyword`.
+
+### McpHttpClient
+- Parses SSE per the event stream rules (optional space after `data:`, `id`, `retry`, comments, priming events). It reopens a closed GET stream with `Last-Event-ID` after the server's `retry` (or `SseReconnectDelayMs`), stops on HTTP 4xx or after `SseMaxReconnectAttempts` failures, and resumes a POST response stream that ends before its response. New `AutoReconnectSse`, `SseReconnectDelayMs`, `SseMaxReconnectAttempts`. `StopSse` now also stops a stream that is waiting to reconnect.
+- Sends `MCP-Protocol-Version` on every request after `initialize`, also when the server issues no session, and declares the capabilities of registered handlers in the `clientCapabilities` of stateless requests.
+- In stateless mode it removes tool definitions with invalid `x-mcp-header` annotations from `tools/list` results (logging a warning), mirrors annotated arguments into `Mcp-Param-{Name}` headers, and on `-32020` lists the tools again and retries once. `Mcp-Name` is taken from `params.name`/`params.uri` when no name is passed, and values with leading or trailing whitespace are Base64-encoded as required.
+
+### Tests
+- New suites `McpClients.ServerRequests` (9), `McpHttp.SseResumability` (4), and `Mcp.HeaderParameters` (7), and new `Mcp.SpecConformance` and `McpHttp.Advanced` cases; tests for the changed session, `ping`, and tool-error behavior were rewritten (572 in total).
+- The README "Specification conformance" section now lists the known gaps that remain. `Test.McpServer` gained a `--probe-client` mode that sends requests to the client.
+
+## v2.1.3
+Closes the remaining MCP gaps and aligns A2A with the v1.0 wire format. Every MCP transport now serves `2026-07-28`, tool handlers can ask the user for input, `McpHttpClient` reads SSE responses, and A2A push configs and HTTP+JSON errors match the specification. Verified end to end with the MCP Inspector CLI 2.8.0, the official Python MCP SDK 2.2.0 (automatic, legacy, and 2026-07-28 modes over HTTP and stdio, including a Multi Round-Trip elicitation), Claude Code 2.1.281 (HTTP, authenticated HTTP, stdio), and the official A2A Python SDK 1.1.5 as a client of Voltaic (JSON-RPC, HTTP+JSON, gRPC; 36 checks) and as a server for Voltaic's clients (JSON-RPC, HTTP+JSON; 11 checks).
+
+### MCP
+- **`2026-07-28` on stdio, TCP, and WebSocket.** These servers served only the handshake-era revisions. A request whose `params._meta["io.modelcontextprotocol/protocolVersion"]` names `2026-07-28` is now served statelessly: `server/discover` is registered, results carry `resultType` and, where cacheable, `ttlMs`/`cacheScope`, and an unknown `_meta` version gets `-32022` with the supported list. Requests without that field and `initialize` are unchanged, so one server serves both eras. The official Python SDK's stdio `auto` mode, which probes with `server/discover`, now negotiates `2026-07-28`.
+- **Multi Round-Trip Requests reach tool handlers.** New `McpToolCallContext` (ambient, like `RpcCallContext`) gives a handler the client's `InputResponses`, the echoed `RequestState`, `IsRetry`, and `CanRequestInput`. Before, a handler returning `McpInputRequiredResult` could never see the answers, so every retry asked again. Works on every transport.
+- **Input requests never reach handshake-era clients.** A handler that returns `McpInputRequiredResult` to a handshake-era caller now produces a tool result with `isError: true` explaining that the tool needs `2026-07-28`; the client previously received a result it could not parse.
+- **`McpHttpClient` reads SSE responses to POST.** The Streamable HTTP specification lets servers answer a POST with `text/event-stream` and requires clients to accept it; `McpHttpClient` failed against such servers (for example the official Python SDK). It now reads the stream as it arrives, raises notifications through `NotificationReceived`, and completes with the response whose `id` matches.
+
+### A2A
+- **Push notification configs use the flat v1.0 shape.** `TaskPushNotificationConfig` and `CreateTaskPushNotificationConfigRequest` are written with `url`, `token`, and `authentication` at the top level (plus `id`, `taskId`, and `tenant`), as A2A v1.0 defines; they were nested under `pushNotificationConfig`/`config`, which the official SDKs rejected. Get and delete requests name the configuration with `id` instead of `configId`. The older shapes are still read.
+- **`ListTaskPushNotificationConfigs`.** `A2AProtocol.ListTaskPushNotificationConfig` is now the v1.0 method name (plural). Servers accept both names (`A2AProtocol.ListTaskPushNotificationConfigLegacy`).
+- **HTTP+JSON errors are `google.rpc.Status`.** Errors carry `code`, `status`, `message`, and an `ErrorInfo` detail whose `reason` names the A2A error (for example `TASK_NOT_FOUND`, domain `a2a-protocol.org`). `A2AHttpJsonClient` maps the reason back to `A2AErrorCode`, so a missing task from the official SDK server is `TaskNotFound` rather than a generic error; it still reads the body that Voltaic 2.1.2 and earlier sent.
+- **`A2AGrpcServer` push settings.** `PushNotificationUrlValidator`, `PushNotificationTimeoutMs`, and `PushNotificationMaxAttempts` are now exposed, as on `A2AHttpServer`; before, a gRPC server could not allow a webhook host or change delivery settings.
+- **`localhost` gRPC connects without a two-second delay.** Watson binds one address, so a server on `localhost` listened on `127.0.0.1` only, and clients that try `::1` first (including `HttpClient`) waited about two seconds on Windows for every new connection. A `localhost` host name now also listens on `::1`, and `*`/`+` also on `::`; the IPv6 listener is best effort and is logged when it cannot bind.
+- **`A2AGrpcServer.Stop` releases the port.** Stopping cancelled the start token before stopping Watson; Watson's accept loop then marked itself stopped, its `Stop` threw, and the listening socket stayed bound, so a restart on the same port could fail. Watson is now stopped directly, and cancelling the `StartAsync` token calls `Stop`. `StartAsync` with an already-cancelled token throws `OperationCanceledException`.
+
+### Tests
+- New `McpStreams.Stateless` suite (stdio, TCP, WebSocket), and new `Mcp.SpecConformance` and `A2A.Hardening` cases for everything above (549 in total). The A2A suite runs in about 7 seconds instead of 60, now that gRPC cases no longer wait for the IPv6 fallback.
+
+## v2.1.2
+Fixes the remaining deviations from the MCP and A2A specifications, relaxes checks that were stricter than the specifications where that costs no safety, completes A2A push notifications, and hardens `A2AGrpcServer`. Every public type and member is now documented, and missing documentation fails the build. Verified end to end with the MCP Inspector CLI 2.8.0, the official Python MCP SDK 2.2.0 (automatic, legacy, and 2026-07-28 modes over HTTP; stdio), and Claude Code 2.1.281 (HTTP, authenticated HTTP, stdio).
+
+### MCP fixes
+- **Invalid tool arguments are tool execution errors.** A `tools/call` whose arguments fail the input schema now returns a result with `isError: true` and a message naming the problem, as the 2025-11-25 and 2026-07-28 specifications require, so the model can correct itself. Before, it was a JSON-RPC `-32602` protocol error. The handler still never runs. Unknown tools and malformed requests remain protocol errors. Found by testing with the official Python SDK.
+- **`initialize` with an unknown version negotiates.** The specification requires a server to answer with a version it supports; Voltaic answered `-32602`. It now answers with `MaximumHandshakeProtocolVersion`, on every transport.
+
+### MCP relaxations (no loss of safety)
+- A missing `Accept` header counts as `*/*`, and media ranges such as `application/*` match.
+- `POST /mcp` without `Content-Type` is accepted when there is no `Origin` header (a non-browser client). Browser requests without it still get 415.
+- On `2026-07-28`, notification POSTs no longer require `MCP-Protocol-Version` or `Mcp-Method`; the revision defines no header rules for notifications. Headers that are present must still match.
+- CORS preflights from allowed origins get back the header names they request (valid tokens only), so custom headers such as `X-API-Key`, `Mcp-Param-*`, and tracing headers work. `WWW-Authenticate` is added to `Access-Control-Expose-Headers` (`McpHttpServer` and `A2AHttpServer`) so browser clients can read OAuth challenges.
+
+### A2A fixes
+- **Push notifications are delivered.** `A2AHttpServer` (and `A2AGrpcServer`, which shares its engine) now POSTs every task event, as a `StreamResponse` with `Content-Type: application/a2a+json`, to each webhook registered for the task, with `Authorization: {scheme} {credentials}` and `X-A2A-Notification-Token`. Deliveries are ordered per webhook, time out after `PushNotificationTimeoutMs` (default 10 s), and are retried with exponential backoff up to `PushNotificationMaxAttempts` (default 3). A config in `SendMessageConfiguration` is registered before the handler runs. Before, configs were stored but nothing was ever sent.
+- **Webhook SSRF protection** (A2A security guidance): webhook URLs must be `http`/`https` without user information and must not target `localhost` or loopback, private, link-local, carrier-grade NAT, or multicast addresses. The check is repeated at connect time against the resolved addresses, which defeats DNS rebinding; redirects are not followed and no proxy is used. `PushNotificationUrlValidator` replaces the policy.
+- Push config operations on a task that does not exist return `TaskNotFound`, as the specification lists; a missing configuration returns `TaskNotFound` naming the configuration (it named the task before). A missing URL or task ID is `InvalidParams`.
+- JSON-RPC `DeleteTaskPushNotificationConfig` swallowed every error; errors now reach the caller.
+- `SendMessageConfiguration.PushNotificationConfig` is serialized as `taskPushNotificationConfig`, the A2A v1.0 name; the older `pushNotificationConfig` is still read.
+- JSON-RPC errors are returned with HTTP 200 and the JSON-RPC error body (the JSON-RPC-over-HTTP convention); they were 400/404, which made Voltaic's own `A2AClient` throw `HttpRequestException` instead of `A2AProtocolException`. `A2AClient` now reads a JSON-RPC error body whatever the status. HTTP+JSON errors follow the A2A mapping (404, 500 for internal errors, 400).
+- Internal errors (exceptions other than `A2AProtocolException`) are reported to clients as a generic "Internal error" on the JSON-RPC, HTTP+JSON, and gRPC bindings; the details go to the `Log` event. Before, the exception message was sent to the caller.
+
+### A2A gRPC server hardening
+- **Security:** `GET /extendedAgentCard` required no authentication on `A2AGrpcServer`, handing the authenticated extended card to anyone. Only the public card is now exempt, as on `A2AHttpServer`.
+- `OriginPolicy` and `RestrictToLoopbackClients` (default on for loopback host names), as on the other HTTP servers.
+- `AuthenticationResult.Headers` (for example `WWW-Authenticate`) are written on authentication failures.
+- Protobuf parse errors map to `INVALID_ARGUMENT` and cancellations to `CANCELLED` instead of `INTERNAL`.
+
+### Lifecycle and robustness
+- `A2AHttpServer` and `A2AGrpcServer` can be started again after `Stop()`; `Stop()` waits for the accept loop; starting a disposed server throws `ObjectDisposedException`.
+- `InMemoryA2ATaskStore.SaveTaskAsync` throws `ArgumentNullException` for a null task (it threw `NullReferenceException`), and `ListTasksAsync(null)` lists everything.
+
+### Added
+- `A2AHttpServer.PushNotificationUrlValidator`, `PushNotificationTimeoutMs`, `PushNotificationMaxAttempts`; `A2AGrpcServer.OriginPolicy`, `RestrictToLoopbackClients`; `A2AProtocol.NotificationTokenHeader`.
+- XML documentation for every public A2A type and member (409 members had none), and `CS1591` (missing documentation) is now a build error for the library.
+- Touchstone cases for all of the above: the `A2A.Hardening` suite (13 cases) and 6 more `Mcp.SpecConformance` cases (521 in total).
+
 ## v2.1.1
 A specification-conformance patch, found by reviewing Voltaic against the published MCP `2025-11-25` and `2026-07-28` specifications.
 

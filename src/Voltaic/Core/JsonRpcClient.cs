@@ -11,6 +11,10 @@ namespace Voltaic.Core
 
     /// <summary>
     /// Provides a TCP-based JSON-RPC 2.0 client implementation for making remote procedure calls.
+    /// Requests the server sends to the client (messages with both <c>method</c> and <c>id</c>) are always
+    /// answered, as JSON-RPC 2.0 requires: by a handler registered with <see cref="RegisterRequestHandler"/>, or
+    /// with <c>-32601</c> (method not found). Messages are written one at a time, so concurrent calls and
+    /// responses never interleave on the stream.
     /// </summary>
     public class JsonRpcClient : IDisposable
     {
@@ -88,6 +92,8 @@ namespace Voltaic.Core
         private string _DefaultContentType = "application/json; charset=utf-8";
         private string? _Endpoint;
         private DateTime _ConnectedUtc;
+        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher();
+        private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="JsonRpcClient"/> class.
@@ -239,6 +245,36 @@ namespace Voltaic.Core
         }
 
         /// <summary>
+        /// Registers the handler for requests the server sends to this client with the given method name,
+        /// replacing any previous handler for that method. The handler receives the request parameters (null
+        /// when the request has none) and a token that is cancelled when the client disconnects; its return value
+        /// is sent as the result (null is sent as an empty object). A handler that throws an exception implementing
+        /// <see cref="IJsonRpcErrorProvider"/> (such as <c>McpProtocolException</c>) sends that error; any other
+        /// exception sends <c>-32603</c> without its message. Requests for methods without a handler are answered
+        /// with <c>-32601</c>. Handlers run concurrently with each other and with the receive loop. Thread-safe.
+        /// </summary>
+        /// <param name="method">The method name, compared case-sensitively. Must not be null, empty, or whitespace.</param>
+        /// <param name="handler">The handler. Must not be null.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null, empty, or whitespace, or <paramref name="handler"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="method"/> is <c>ping</c> on an MCP client, which answers <c>ping</c> itself.</exception>
+        public void RegisterRequestHandler(string method, Func<RpcParameters?, CancellationToken, Task<object?>> handler)
+        {
+            _RequestDispatcher.Register(method, handler);
+        }
+
+        /// <summary>
+        /// Removes the handler registered with <see cref="RegisterRequestHandler"/> for a method. Later requests for
+        /// that method are answered with <c>-32601</c>. Thread-safe.
+        /// </summary>
+        /// <param name="method">The method name. Must not be null, empty, or whitespace.</param>
+        /// <returns>True when a handler was removed; false when none was registered.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null, empty, or whitespace.</exception>
+        public bool UnregisterRequestHandler(string method)
+        {
+            return _RequestDispatcher.Unregister(method);
+        }
+
+        /// <summary>
         /// Disconnects from the server and cancels all pending requests.
         /// </summary>
         public void Disconnect()
@@ -285,6 +321,7 @@ namespace Voltaic.Core
                     _TokenSource?.Dispose();
                     _Stream?.Dispose();
                     _TcpClient?.Dispose();
+                    _SendLock.Dispose();
                 }
             }
         }
@@ -349,15 +386,47 @@ namespace Voltaic.Core
             }
         }
 
+        // Makes an MCP client answer ping itself (MCP requires every party to answer ping) and reserves the name.
+        private protected void AnswerPingRequests()
+        {
+            _RequestDispatcher.AnswersPing = true;
+        }
+
         private async Task SendRequestAsync(JsonRpcRequest request, CancellationToken token = default)
+        {
+            await SendJsonAsync(JsonSerializer.Serialize(request), token).ConfigureAwait(false);
+        }
+
+        private async Task SendJsonAsync(string json, CancellationToken token)
         {
             if (_Stream == null)
                 throw new InvalidOperationException("Stream is not initialized");
 
-            string json = JsonSerializer.Serialize(request);
-            await MessageFraming.WriteMessageAsync(_Stream, json, _DefaultContentType, token).ConfigureAwait(false);
+            await _SendLock.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await MessageFraming.WriteMessageAsync(_Stream, json, _DefaultContentType, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _SendLock.Release();
+            }
 
             LogMessage($"Sent: {json}");
+        }
+
+        private async Task AnswerServerRequestAsync(JsonRpcRequest request)
+        {
+            CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
+            try
+            {
+                JsonRpcResponse response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                await SendJsonAsync(JsonSerializer.Serialize(response), token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Could not answer server request {request.Method}: {ex.Message}");
+            }
         }
 
         private void ProcessResponse(string responseString)
@@ -365,6 +434,14 @@ namespace Voltaic.Core
             try
             {
                 LogMessage($"Received: {responseString}");
+
+                // A request from the server (method and id) must be answered, never mistaken for a response.
+                JsonRpcRequest? serverRequest = ClientRequestDispatcher.ParseRequest(responseString);
+                if (serverRequest != null)
+                {
+                    _ = Task.Run(() => AnswerServerRequestAsync(serverRequest));
+                    return;
+                }
 
                 // Try to parse as response first
                 JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString);

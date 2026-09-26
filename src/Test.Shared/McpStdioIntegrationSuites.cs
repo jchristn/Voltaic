@@ -182,9 +182,16 @@ namespace Test.Shared
                 });
         }
 
-        private static async Task LaunchTestServerAsync(McpClient client, CancellationToken token)
+        internal static async Task LaunchTestServerAsync(McpClient client, CancellationToken token, params string[] serverArguments)
         {
-            bool launched = await client.LaunchServerAsync("dotnet", TestServerArguments(), token).ConfigureAwait(false);
+            List<string> arguments = new List<string>(TestServerArguments());
+            if (serverArguments.Length > 0)
+            {
+                if (arguments.Count > 0 && arguments[0] == "run") arguments.Add("--");
+                arguments.AddRange(serverArguments);
+            }
+
+            bool launched = await client.LaunchServerAsync("dotnet", arguments.ToArray(), token).ConfigureAwait(false);
             if (!launched)
             {
                 throw new InvalidOperationException("Failed to launch the Test.McpServer subprocess.");

@@ -452,6 +452,24 @@ namespace Voltaic.Core
                 pendingRequest = new ServerPendingRequest(request.Id, client, request);
                 RaiseRequestReceived(pendingRequest);
 
+                // Derived servers can inspect the raw request before dispatch (for example to select a protocol
+                // era) and reject it with a protocol error.
+                object? requestContext;
+                try
+                {
+                    requestContext = PrepareRequest(requestString, request);
+                }
+                catch (Exception prepareError) when (prepareError is IJsonRpcErrorProvider)
+                {
+                    if (request.Id != null)
+                    {
+                        JsonRpcResponse rejection = new JsonRpcResponse { Id = request.Id, Error = ((IJsonRpcErrorProvider)prepareError).ToJsonRpcError() };
+                        await SendResponseAsync(client, pendingRequest, rejection, token).ConfigureAwait(false);
+                    }
+
+                    return;
+                }
+
                 JsonRpcResponse response;
 
                 if (_Methods.ContainsKey(request.Method))
@@ -497,7 +515,7 @@ namespace Voltaic.Core
                 // Only send response if request has an id (not a notification)
                 if (request.Id != null)
                 {
-                    await SendResponseAsync(client, pendingRequest, response, token).ConfigureAwait(false);
+                    await SendResponseAsync(client, pendingRequest, response, token, requestContext).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -512,11 +530,23 @@ namespace Voltaic.Core
             }
         }
 
-        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default)
+        // Called for every well-formed request before dispatch. The returned value is passed to SerializeResponse for that request's response. Throw an exception that implements IJsonRpcErrorProvider to reject the request with that error.
+        private protected virtual object? PrepareRequest(string requestJson, JsonRpcRequest request)
+        {
+            return null;
+        }
+
+        // Serializes a response. requestContext is the value PrepareRequest returned for the request, or null.
+        private protected virtual string SerializeResponse(JsonRpcResponse response, object? requestContext)
+        {
+            return JsonSerializer.Serialize(response);
+        }
+
+        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default, object? requestContext = null)
         {
             try
             {
-                string json = JsonSerializer.Serialize(response);
+                string json = SerializeResponse(response, requestContext);
                 if (client.Stream != null)
                 {
                     await MessageFraming.WriteMessageAsync(client.Stream, json, _DefaultContentType, token).ConfigureAwait(false);
@@ -625,6 +655,12 @@ namespace Voltaic.Core
                     }
                 }
             }
+        }
+
+        // Lets derived servers write to the Log event.
+        private protected void WriteLog(string message)
+        {
+            LogMessage(message);
         }
 
         private void LogMessage(string message)

@@ -38,6 +38,10 @@ namespace Voltaic.Mcp
 
         public bool EnforceInitializationOrdering { get; set; }
 
+        public bool IncludeToolExceptionMessages { get; set; }
+
+        public Action<string>? ErrorLog { get; set; }
+
         public string? ServerInstructions { get; set; }
 
         public long? ListCacheTtlMs { get; set; }
@@ -71,14 +75,12 @@ namespace Voltaic.Mcp
             McpInitializeParams? initialize = args?.Deserialize<McpInitializeParams>();
             if (initialize != null && !String.IsNullOrEmpty(initialize.ProtocolVersion))
             {
-                try
-                {
-                    clientProtocolVersion = McpProtocol.NegotiateHandshakeVersion(initialize.ProtocolVersion, MaximumHandshakeProtocolVersion);
-                }
-                catch (ArgumentException)
-                {
-                    throw McpProtocolException.UnsupportedVersion(initialize.ProtocolVersion!);
-                }
+                // The specification requires a server that does not support the requested version to answer
+                // with another version it supports (the client disconnects if it cannot use it), so an unknown
+                // version, such as one newer than this server knows, negotiates to the cap instead of failing.
+                clientProtocolVersion = McpProtocol.IsSupportedVersion(initialize.ProtocolVersion!)
+                    ? McpProtocol.NegotiateHandshakeVersion(initialize.ProtocolVersion, MaximumHandshakeProtocolVersion)
+                    : MaximumHandshakeProtocolVersion;
             }
 
             State = McpSessionLifecycleState.Initializing;
@@ -140,6 +142,17 @@ namespace Voltaic.Mcp
             {
                 return _Tools.RemoveAll(tool => StringComparer.Ordinal.Equals(tool.Definition.Name, name)) > 0;
             }
+        }
+
+        public List<McpHeaderParameter>? GetToolHeaderParameters(string name)
+        {
+            ToolRegistration? tool;
+            lock (_Lock)
+            {
+                tool = _Tools.FirstOrDefault(existing => StringComparer.Ordinal.Equals(existing.Definition.Name, name));
+            }
+
+            return tool == null ? null : McpHeaderParameters.Extract(tool.Definition.InputSchema);
         }
 
         public ToolDefinition RegisterTool(ToolDefinition definition, Func<RpcParameters?, CancellationToken, Task<object>> handler)
@@ -269,8 +282,58 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams($"Tool '{toolName}' was not found.");
             }
 
-            McpSchemaValidator.Validate(tool.Definition.InputSchema, toolArguments?.RawJson, $"Tool '{toolName}' arguments");
-            object result = await tool.Handler(toolArguments, token).ConfigureAwait(false);
+            // Input validation failures are tool execution errors, not protocol errors: the MCP specification
+            // (2025-11-25 and later) reports them as a result with isError true so the model can read the message
+            // and retry with corrected arguments. The handler is not run.
+            try
+            {
+                McpSchemaValidator.Validate(tool.Definition.InputSchema, toolArguments?.RawJson, $"Tool '{toolName}' arguments");
+            }
+            catch (McpProtocolException validationError)
+            {
+                McpToolCallResult invalid = McpToolCallResult.FromText(validationError.Message);
+                invalid.IsError = true;
+                return invalid;
+            }
+
+            // Make the MRTR retry state (inputResponses, requestState) available to the handler.
+            object result;
+            string? statelessVersion = McpRequestProtocol.StatelessVersion;
+            using (McpToolCallContext.Push(new McpToolCallContext(toolName, call.InputResponses, call.RequestState, statelessVersion != null)))
+            {
+                try
+                {
+                    result = await tool.Handler(toolArguments, token).ConfigureAwait(false);
+                }
+                catch (McpProtocolException)
+                {
+                    // A handler that throws a protocol exception asks for a JSON-RPC error explicitly.
+                    throw;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception handlerError)
+                {
+                    // API failures and business-logic errors are tool execution errors (MCP 2025-06-18 and later):
+                    // a result with isError true carries the message to the model so it can react, instead of a
+                    // JSON-RPC protocol error the client may not show to the model.
+                    McpToolCallResult failed = McpToolCallResult.FromText(FormatToolError(toolName, handlerError, IncludeToolExceptionMessages, ErrorLog));
+                    failed.IsError = true;
+                    return failed;
+                }
+            }
+
+            // input_required exists only in the stateless revision. A handshake-era client would reject it as an
+            // invalid tool result, so report it as a tool execution error the model can read instead.
+            if (result is McpInputRequiredResult && statelessVersion == null)
+            {
+                McpToolCallResult unsupported = McpToolCallResult.FromText(
+                    $"Tool '{toolName}' needs additional input from the user, which requires MCP protocol version {McpProtocol.ProtocolVersion20260728} or later; this request used an earlier protocol version.");
+                unsupported.IsError = true;
+                return unsupported;
+            }
 
             // Multi Round-Trip Requests: a handler may return an input-required result to ask the
             // client for more information. It flows through unchanged rather than being wrapped as
@@ -284,7 +347,7 @@ namespace Voltaic.Mcp
             {
                 if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent != null)
                 {
-                    McpSchemaValidator.Validate(tool.Definition.OutputSchema, JsonSerializer.Serialize(toolCallResult.StructuredContent), $"Tool '{toolName}' structured output");
+                    ValidateOutput(tool.Definition.OutputSchema, toolCallResult.StructuredContent, $"Tool '{toolName}' structured output");
                 }
 
                 return toolCallResult;
@@ -292,7 +355,7 @@ namespace Voltaic.Mcp
 
             if (tool.Definition.OutputSchema != null)
             {
-                McpSchemaValidator.Validate(tool.Definition.OutputSchema, JsonSerializer.Serialize(result), $"Tool '{toolName}' output");
+                ValidateOutput(tool.Definition.OutputSchema, result, $"Tool '{toolName}' output");
                 return McpToolCallResult.FromStructured(result);
             }
 
@@ -302,6 +365,41 @@ namespace Voltaic.Mcp
             }
 
             return McpToolCallResult.FromText(JsonSerializer.Serialize(result));
+        }
+
+        // A result that violates the tool's own output schema is a server fault, reported as an internal error.
+        private static void ValidateOutput(object outputSchema, object value, string context)
+        {
+            try
+            {
+                McpSchemaValidator.Validate(outputSchema, JsonSerializer.Serialize(value), context);
+            }
+            catch (McpProtocolException invalid)
+            {
+                throw new McpProtocolException(-32603, invalid.Message);
+            }
+        }
+
+        // Tool outputs must be sanitized (MCP security considerations): only McpToolException messages, which the
+        // handler wrote for the model, are shown unless IncludeToolExceptionMessages is set. Details go to the log.
+        private static string FormatToolError(string toolName, Exception error, bool includeMessages, Action<string>? log)
+        {
+            if (log != null)
+            {
+                try
+                {
+                    log($"Tool '{toolName}' threw {error.GetType().FullName}: {error.Message}");
+                }
+                catch
+                {
+                }
+            }
+
+            if (error is McpToolException) return error.Message;
+            if (!includeMessages) return $"Tool '{toolName}' failed because of an internal error.";
+
+            string message = String.IsNullOrWhiteSpace(error.Message) ? error.GetType().Name : error.Message;
+            return $"Tool '{toolName}' failed: {message}";
         }
 
         public McpListResourcesResult ListResources(RpcParameters? args)
@@ -596,6 +694,16 @@ namespace Voltaic.Mcp
             if (String.IsNullOrWhiteSpace(definition.Name)) throw new ArgumentException("Tool definition must include a name.", nameof(definition));
             if (String.IsNullOrWhiteSpace(definition.Description)) throw new ArgumentException("Tool definition must include a description.", nameof(definition));
             if (definition.InputSchema == null) throw new ArgumentException("Tool definition must include an input schema.", nameof(definition));
+
+            // An invalid x-mcp-header annotation makes the whole definition invalid (clients must drop the tool).
+            try
+            {
+                McpHeaderParameters.Extract(definition.InputSchema);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new ArgumentException($"Tool '{definition.Name}' input schema: {ex.Message}", nameof(definition), ex);
+            }
         }
 
         private static void ValidateResource(McpResource resource)

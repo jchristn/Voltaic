@@ -25,6 +25,12 @@ namespace Voltaic.Mcp
 
         [JsonPropertyName("arguments")]
         public object? Arguments { get; set; }
+
+        [JsonPropertyName("inputResponses")]
+        public Dictionary<string, System.Text.Json.JsonElement>? InputResponses { get; set; }
+
+        [JsonPropertyName("requestState")]
+        public string? RequestState { get; set; }
     }
 
     /// <summary>

@@ -1,6 +1,5 @@
 namespace Voltaic.Mcp
 {
-    using Voltaic.Core;
     using System;
     using System.Collections.Concurrent;
     using System.Diagnostics;
@@ -8,10 +7,15 @@ namespace Voltaic.Mcp
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
+    using Voltaic.Core;
 
     /// <summary>
     /// MCP client using stdio transport for subprocess-based MCP servers.
     /// Implements Model Context Protocol stdio transport specification.
+    /// Requests the server sends to the client are always answered: <c>ping</c> with an empty result (<c>{}</c>), as
+    /// the MCP specification requires of both parties, other methods by handlers registered with
+    /// <see cref="RegisterRequestHandler"/>, and anything else with <c>-32601</c> (method not found). Messages are
+    /// written one at a time, so concurrent calls and responses never interleave on stdin.
     /// </summary>
     public class McpClient : IDisposable
     {
@@ -65,6 +69,8 @@ namespace Voltaic.Mcp
         private readonly ConcurrentDictionary<object, ClientPendingRequest> _PendingRequests;
         private string? _Endpoint;
         private DateTime _ConnectedUtc;
+        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpClient"/> class.
@@ -237,6 +243,37 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Registers the handler for requests the server sends to this client with the given method name (for example
+        /// <c>roots/list</c>, <c>sampling/createMessage</c>, or <c>elicitation/create</c>), replacing any previous
+        /// handler for that method. The handler receives the request parameters (null when the request has none) and
+        /// a token that is cancelled when the client shuts down; its return value is sent as the result (null is sent
+        /// as an empty object). A handler that throws <see cref="McpProtocolException"/> sends that error; any other
+        /// exception sends <c>-32603</c> without its message. Requests for methods without a handler are answered with
+        /// <c>-32601</c>. <c>ping</c> is always answered by the client itself. Handlers run concurrently with each
+        /// other and with the receive loop. Thread-safe.
+        /// </summary>
+        /// <param name="method">The method name, compared case-sensitively. Must not be null, empty, or whitespace, and must not be <c>ping</c>.</param>
+        /// <param name="handler">The handler. Must not be null.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null, empty, or whitespace, or <paramref name="handler"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="method"/> is <c>ping</c>.</exception>
+        public void RegisterRequestHandler(string method, Func<RpcParameters?, CancellationToken, Task<object?>> handler)
+        {
+            _RequestDispatcher.Register(method, handler);
+        }
+
+        /// <summary>
+        /// Removes the handler registered with <see cref="RegisterRequestHandler"/> for a method. Later requests for
+        /// that method are answered with <c>-32601</c>. Thread-safe.
+        /// </summary>
+        /// <param name="method">The method name. Must not be null, empty, or whitespace.</param>
+        /// <returns>True when a handler was removed; false when none was registered.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null, empty, or whitespace.</exception>
+        public bool UnregisterRequestHandler(string method)
+        {
+            return _RequestDispatcher.Unregister(method);
+        }
+
+        /// <summary>
         /// Shuts down the MCP server gracefully by closing stdin.
         /// </summary>
         public void Shutdown()
@@ -299,20 +336,47 @@ namespace Voltaic.Mcp
                     _StdoutReader?.Dispose();
                     _StderrReader?.Dispose();
                     _ServerProcess?.Dispose();
+                    _SendLock.Dispose();
                 }
             }
         }
 
         private async Task SendRequestAsync(JsonRpcRequest request, CancellationToken token = default)
         {
+            await SendJsonAsync(JsonSerializer.Serialize(request), token).ConfigureAwait(false);
+        }
+
+        private async Task SendJsonAsync(string json, CancellationToken token)
+        {
             if (_StdinWriter == null)
                 throw new InvalidOperationException("stdin is not initialized");
 
-            string json = JsonSerializer.Serialize(request);
-            await _StdinWriter.WriteLineAsync(json).ConfigureAwait(false);
-            await _StdinWriter.FlushAsync().ConfigureAwait(false);
+            await _SendLock.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await _StdinWriter.WriteLineAsync(json).ConfigureAwait(false);
+                await _StdinWriter.FlushAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                _SendLock.Release();
+            }
 
             LogMessage($"Sent: {json}");
+        }
+
+        private async Task AnswerServerRequestAsync(JsonRpcRequest request)
+        {
+            CancellationToken token = _CancellationTokenSource?.Token ?? CancellationToken.None;
+            try
+            {
+                JsonRpcResponse response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                await SendJsonAsync(JsonSerializer.Serialize(response), token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Could not answer server request {request.Method}: {ex.Message}");
+            }
         }
 
         private async Task ReceiveLoop(CancellationToken token)
@@ -367,6 +431,14 @@ namespace Voltaic.Mcp
             try
             {
                 LogMessage($"Received: {responseString}");
+
+                // A request from the server (method and id) must be answered, never mistaken for a response.
+                JsonRpcRequest? serverRequest = ClientRequestDispatcher.ParseRequest(responseString);
+                if (serverRequest != null)
+                {
+                    _ = Task.Run(() => AnswerServerRequestAsync(serverRequest));
+                    return;
+                }
 
                 JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString);
                 if (response != null && response.Id != null)

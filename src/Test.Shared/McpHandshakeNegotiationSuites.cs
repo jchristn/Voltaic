@@ -205,13 +205,17 @@ namespace Test.Shared
                         return Task.CompletedTask;
                     }),
 
-                    Case(suiteId, "InitializeUnknownVersionStillRejected", "initialize with an unknown version is still rejected with invalid params", async ct =>
+                    Case(suiteId, "InitializeUnknownVersionNegotiatesCap", "initialize with an unknown (past or future) version answers with MaximumHandshakeProtocolVersion, as the spec requires", async ct =>
                     {
                         foreach (bool withAuth in new[] { false, true })
                         {
-                            await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(withAuth, null, ct).ConfigureAwait(false);
-                            RpcResult response = await McpHttpTestRequests.InitializeAsync(fixture, "1900-01-01", withAuth ? McpHttpTestRequests.ValidToken : null, ct).ConfigureAwait(false);
-                            TestAssert.Equal(-32602, response.Error.Get("code").Int(), $"An unknown version maps to invalid params (auth={withAuth}).");
+                            foreach (string requested in new[] { "1900-01-01", "2099-01-01", "not-a-date" })
+                            {
+                                await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(withAuth, server => server.MaximumHandshakeProtocolVersion = McpProtocol.ProtocolVersion20250618, ct).ConfigureAwait(false);
+                                RpcResult response = await McpHttpTestRequests.InitializeAsync(fixture, requested, withAuth ? McpHttpTestRequests.ValidToken : null, ct).ConfigureAwait(false);
+                                TestAssert.Equal(McpProtocol.ProtocolVersion20250618, response.Result.Get("protocolVersion").String(), $"'{requested}' negotiates the cap (auth={withAuth}).");
+                                TestAssert.False(String.IsNullOrEmpty(response.SessionId), "The negotiated initialize opens a session.");
+                            }
                         }
                     }),
 

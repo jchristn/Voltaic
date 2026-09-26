@@ -114,7 +114,7 @@ namespace Test.Shared
                         TestAssert.True(capture.ContextWasNull, "RpcCallContext.Current should be null when no AuthenticationHandler is configured.");
                     }),
 
-                    Case(suiteId, "PingBypassEstablishesNoContext", "A ping that fails authentication is still answered, without a caller context or session", async ct =>
+                    Case(suiteId, "PingBypassEstablishesNoContext", "A ping that fails authentication is rejected with the handler's status and creates no session", async ct =>
                     {
                         AuthProbe probe = new AuthProbe();
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(
@@ -128,12 +128,12 @@ namespace Test.Shared
                                 };
                             }).ConfigureAwait(false);
 
-                        RpcResult response = await fixture.PostMcpAsync("ping", new { }, 1, null, ct).ConfigureAwait(false);
+                        RpcResult response = await fixture.PostJsonRpcAsync("/mcp/", "ping", new { }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.True(probe.Invoked, "The handler runs for ping so an authenticated ping can carry its caller.");
-                        TestAssert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode, "A ping that fails authentication is still answered.");
-                        TestAssert.False(response.Root.Has("error"), "ping should succeed.");
-                        TestAssert.True(response.SessionId == null, "A sessionless ping never creates a session.");
+                        TestAssert.True(probe.Invoked, "The handler runs for ping.");
+                        TestAssert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode, "A ping that fails authentication is rejected.");
+                        TestAssert.True(response.SessionId == null, "No session is created.");
+                        TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "No session exists.");
                     }),
 
                     Case(suiteId, "AuthenticatedPingCanUseOwnSession", "An authenticated ping carries its caller, so it can use the session that caller opened", async ct =>

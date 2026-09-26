@@ -1,19 +1,34 @@
 namespace Voltaic.Mcp
 {
-    using Voltaic.Core;
     using System;
+    using System.Collections.Concurrent;
+    using System.Collections.Generic;
     using System.IO;
     using System.Net.Http;
-    using System.Collections.Generic;
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
+    using Voltaic.Core;
 
     /// <summary>
     /// Provides an HTTP-based MCP (Model Context Protocol) client implementation.
-    /// Supports JSON-RPC 2.0 over HTTP with Server-Sent Events (SSE) for server-to-client notifications.
+    /// Supports JSON-RPC 2.0 over HTTP with Server-Sent Events (SSE) for server-to-client messages.
+    /// <para>
+    /// Requests the server sends to the client over a session (on the GET stream or on a POST response stream) are
+    /// always answered by POSTing the JSON-RPC response back to the endpoint: <c>ping</c> with an empty result
+    /// (<c>{}</c>), as the MCP specification requires of both parties, other methods by handlers registered with
+    /// <see cref="RegisterRequestHandler"/>, and anything else with <c>-32601</c> (method not found). The stateless
+    /// 2026-07-28 revision forbids server requests on streams (servers use Multi Round-Trip Requests instead), so
+    /// they are logged and ignored in stateless mode.
+    /// </para>
+    /// <para>
+    /// SSE streams are parsed per the event stream rules: event IDs are tracked, empty priming events are skipped,
+    /// and a stream the server closes is reopened (when <see cref="AutoReconnectSse"/> is true) with
+    /// <c>Last-Event-ID</c> after the server's <c>retry</c> interval or <see cref="SseReconnectDelayMs"/>. A POST
+    /// response stream that ends before its response is resumed the same way with a GET request.
+    /// </para>
     /// </summary>
     public class McpHttpClient : IDisposable
     {
@@ -88,12 +103,52 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets whether SSE streams the server closes, or that fail after opening, are reopened with
+        /// <c>Last-Event-ID</c>, as the MCP Streamable HTTP transport (2025-03-26 to 2025-11-25) expects clients to do.
+        /// Default is true. When false, the GET stream ends when the server closes it and an interrupted POST response
+        /// stream is not resumed.
+        /// </summary>
+        public bool AutoReconnectSse { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets the delay in milliseconds before reopening an SSE stream when the server has not sent a
+        /// <c>retry</c> value. A server-supplied <c>retry</c> value always takes precedence. Default is 1000.
+        /// Minimum is 0; maximum is 600000.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 600000.</exception>
+        public int SseReconnectDelayMs
+        {
+            get => _SseReconnectDelayMs;
+            set
+            {
+                if (value < 0 || value > 600000) throw new ArgumentOutOfRangeException(nameof(value), "SSE reconnect delay must be between 0 and 600000 ms.");
+                _SseReconnectDelayMs = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets how many consecutive failed attempts to open an SSE stream are made before giving up. A
+        /// successful connection resets the count. An HTTP 4xx answer (for example 404 for an expired session or 405
+        /// for a server without a GET stream) stops reconnecting immediately. Default is 5. Minimum is 0.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set below 0.</exception>
+        public int SseMaxReconnectAttempts
+        {
+            get => _SseMaxReconnectAttempts;
+            set
+            {
+                if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), "SSE reconnect attempts must be 0 or more.");
+                _SseMaxReconnectAttempts = value;
+            }
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
 
         /// <summary>
-        /// Occurs when a notification (request without an ID) is received from the server via SSE.
+        /// Occurs when a notification (a message with a method and no ID) is received from the server via SSE.
         /// </summary>
         public event EventHandler<JsonRpcRequest>? NotificationReceived;
 
@@ -133,6 +188,14 @@ namespace Voltaic.Mcp
         private int _RequestTimeoutMs = 30000;
         private bool _IsDisposed = false;
         private DateTime _ConnectedUtc;
+        private int _SseReconnectDelayMs = 1000;
+        private int _SseMaxReconnectAttempts = 5;
+        private string? _SseLastEventId;
+        private int? _SseRetryMs;
+        private bool _HandshakeComplete;
+        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private CancellationTokenSource _ServerRequestTokenSource = new CancellationTokenSource();
+        private readonly ConcurrentDictionary<string, List<McpHeaderParameter>> _ToolHeaderParameters = new ConcurrentDictionary<string, List<McpHeaderParameter>>(StringComparer.Ordinal);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="McpHttpClient"/> class.
@@ -168,6 +231,41 @@ namespace Voltaic.Mcp
                 if (!String.IsNullOrEmpty(value))
                     _HttpClient.DefaultRequestHeaders.TryAddWithoutValidation(name, value);
             }
+        }
+
+        /// <summary>
+        /// Registers the handler for requests the server sends to this client with the given method name, replacing any
+        /// previous handler for that method. Registering <c>roots/list</c>, <c>sampling/createMessage</c>, or
+        /// <c>elicitation/create</c> before connecting also declares the matching client capability (<c>roots</c>,
+        /// <c>sampling</c>, <c>elicitation</c>) in <c>initialize</c>, so servers know they may send those requests. The
+        /// handler receives the request parameters (null when the request has none) and a token that is cancelled when
+        /// the client disconnects; its return value is sent as the result (null is sent as an empty object). A handler
+        /// that throws <see cref="McpProtocolException"/> sends that error; any other exception sends <c>-32603</c>
+        /// without its message. Requests for methods without a handler are answered with <c>-32601</c>. <c>ping</c> is
+        /// always answered by the client itself. Handlers run concurrently. Thread-safe.
+        /// Capabilities are negotiated when connecting (and sent with every stateless request), so register handlers
+        /// before calling <see cref="ConnectStreamableAsync"/> or <see cref="ConnectAsync"/>; a handler registered
+        /// later still answers requests, but a conforming server will not send them.
+        /// </summary>
+        /// <param name="method">The method name, compared case-sensitively. Must not be null, empty, or whitespace, and must not be <c>ping</c>.</param>
+        /// <param name="handler">The handler. Must not be null.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null, empty, or whitespace, or <paramref name="handler"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="method"/> is <c>ping</c>.</exception>
+        public void RegisterRequestHandler(string method, Func<RpcParameters?, CancellationToken, Task<object?>> handler)
+        {
+            _RequestDispatcher.Register(method, handler);
+        }
+
+        /// <summary>
+        /// Removes the handler registered with <see cref="RegisterRequestHandler"/> for a method. Later requests for
+        /// that method are answered with <c>-32601</c>. Thread-safe.
+        /// </summary>
+        /// <param name="method">The method name. Must not be null, empty, or whitespace.</param>
+        /// <returns>True when a handler was removed; false when none was registered.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null, empty, or whitespace.</exception>
+        public bool UnregisterRequestHandler(string method)
+        {
+            return _RequestDispatcher.Unregister(method);
         }
 
         /// <summary>
@@ -265,6 +363,8 @@ namespace Voltaic.Mcp
             {
                 StopSse();
 
+                _SseLastEventId = null;
+                _SseRetryMs = null;
                 _SseTokenSource = new CancellationTokenSource();
                 _SseTask = Task.Run(() => SseLoop(_SseTokenSource.Token));
 
@@ -286,12 +386,14 @@ namespace Voltaic.Mcp
         /// </summary>
         public void StopSse()
         {
-            if (_IsSseConnected)
+            CancellationTokenSource? source = _SseTokenSource;
+            if (source != null && !source.IsCancellationRequested)
             {
-                _IsSseConnected = false;
-                _SseTokenSource?.Cancel();
+                source.Cancel();
                 LogMessage("SSE connection stopped");
             }
+
+            _IsSseConnected = false;
         }
 
         /// <summary>
@@ -331,16 +433,21 @@ namespace Voltaic.Mcp
                 HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
                 httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
 
+                // After initialize, every request carries the negotiated version, with or without a session.
                 if (!String.IsNullOrEmpty(SessionId))
                 {
                     httpRequest.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
+                }
+
+                if (!String.IsNullOrEmpty(SessionId) || _HandshakeComplete)
+                {
                     httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
                 }
 
                 httpRequest.Headers.Accept.ParseAdd("application/json");
                 httpRequest.Headers.Accept.ParseAdd("text/event-stream");
 
-                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
+                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
                 httpResponse.EnsureSuccessStatusCode();
 
                 // Extract session ID from response
@@ -354,7 +461,7 @@ namespace Voltaic.Mcp
                     }
                 }
 
-                string responseJson = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
                 LogMessage($"Received response: {responseJson}");
 
                 JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
@@ -444,11 +551,11 @@ namespace Voltaic.Mcp
                 cts.CancelAfter(timeoutMs);
 
                 using HttpRequestMessage httpRequest = CreatePostRequest(requestJson);
-                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
+                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
                 httpResponse.EnsureSuccessStatusCode();
                 CaptureSessionId(httpResponse);
 
-                string responseJson = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
                 LogMessage($"Received response: {responseJson}");
 
                 JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
@@ -544,18 +651,43 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Sends a single stateless (2026-07-28) JSON-RPC request. The client injects the required
         /// <c>_meta</c> (protocol version, client info, client capabilities) into the params and sets
-        /// the <c>MCP-Protocol-Version</c>, <c>Mcp-Method</c>, and (when supplied) <c>Mcp-Name</c>
-        /// routing headers. The raw response is returned, including error responses.
+        /// the <c>MCP-Protocol-Version</c>, <c>Mcp-Method</c>, and <c>Mcp-Name</c> routing headers. <c>Mcp-Name</c>
+        /// is <paramref name="name"/> when supplied, otherwise <c>params.name</c> or <c>params.uri</c> for
+        /// <c>tools/call</c>, <c>prompts/get</c>, and <c>resources/read</c>; values that are not plain header-safe
+        /// ASCII are sent in the <c>=?base64?...?=</c> form.
+        /// <para>
+        /// Tool parameters that a tool definition annotates with <c>x-mcp-header</c> are mirrored into
+        /// <c>Mcp-Param-{Name}</c> headers on <c>tools/call</c>, using the definitions from the most recent
+        /// <c>tools/list</c>. Tool definitions whose annotations are invalid are removed from <c>tools/list</c> results,
+        /// and a warning naming the tool and the reason is written to <see cref="Log"/>. When a <c>tools/call</c> is
+        /// rejected with <c>HeaderMismatch</c> (<c>-32020</c>), the client lists the tools again and retries once.
+        /// </para>
+        /// The raw response is returned, including error responses.
         /// </summary>
         /// <param name="method">The JSON-RPC method. Must not be null or empty.</param>
         /// <param name="parameters">The request parameters as a field map, or null.</param>
-        /// <param name="name">The routing name for the <c>Mcp-Name</c> header (the tool name or resource URI), or null.</param>
+        /// <param name="name">The routing name for the <c>Mcp-Name</c> header (the tool name or resource URI), or null to take it from the parameters.</param>
         /// <param name="token">Cancellation token for the operation.</param>
         /// <returns>The JSON-RPC response.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="method"/> is null or empty.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the client has not been initialized.</exception>
         public async Task<JsonRpcResponse> SendStatelessAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token = default)
         {
             if (String.IsNullOrEmpty(method)) throw new ArgumentNullException(nameof(method));
+
+            JsonRpcResponse response = await SendStatelessCoreAsync(method, parameters, name, token).ConfigureAwait(false);
+            if (StringComparer.Ordinal.Equals(method, "tools/call") && response.Error != null && response.Error.Code == -32020)
+            {
+                LogMessage($"tools/call was rejected with HeaderMismatch ({response.Error.Message}); refreshing tool definitions and retrying once");
+                await RefreshToolDefinitionsAsync(token).ConfigureAwait(false);
+                response = await SendStatelessCoreAsync(method, parameters, name, token).ConfigureAwait(false);
+            }
+
+            return response;
+        }
+
+        private async Task<JsonRpcResponse> SendStatelessCoreAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, CancellationToken token)
+        {
             if (_HttpClient == null || String.IsNullOrEmpty(_RpcUrl))
                 throw new InvalidOperationException("Client not initialized. Call ConnectStatelessAsync first.");
 
@@ -582,13 +714,19 @@ namespace Voltaic.Mcp
                 httpRequest.Headers.Accept.ParseAdd("text/event-stream");
                 httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
                 httpRequest.Headers.Add(McpProtocol.MethodHeader, method);
-                if (!String.IsNullOrEmpty(name))
+                string? routingName = name ?? GetRoutingName(method, parameters);
+                if (!String.IsNullOrEmpty(routingName))
                 {
-                    httpRequest.Headers.Add(McpProtocol.NameHeader, EncodeMcpNameHeader(name!));
+                    httpRequest.Headers.TryAddWithoutValidation(McpProtocol.NameHeader, McpHeaderParameters.Encode(routingName!));
                 }
 
-                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
-                string responseJson = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (StringComparer.Ordinal.Equals(method, "tools/call") && !String.IsNullOrEmpty(routingName))
+                {
+                    AddParamHeaders(httpRequest, routingName!, parameters);
+                }
+
+                HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+                string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
                 LogMessage($"Received stateless response ({(int)httpResponse.StatusCode}): {responseJson}");
 
                 if (String.IsNullOrEmpty(responseJson))
@@ -600,6 +738,11 @@ namespace Voltaic.Mcp
                 if (response == null)
                 {
                     throw new McpProtocolException(-32603, "Invalid stateless response from server.");
+                }
+
+                if (StringComparer.Ordinal.Equals(method, "tools/list") && response.Error == null)
+                {
+                    response.Result = FilterToolDefinitions(response.Result);
                 }
 
                 RaiseResponseReceived(new ResponseReceivedEventArgs(request, response, sentUtc));
@@ -738,6 +881,11 @@ namespace Voltaic.Mcp
         /// </summary>
         public void Disconnect()
         {
+            CancellationTokenSource previousRequests = Interlocked.Exchange(ref _ServerRequestTokenSource, new CancellationTokenSource());
+            previousRequests.Cancel();
+            previousRequests.Dispose();
+
+            _HandshakeComplete = false;
             if (!String.IsNullOrEmpty(SessionId))
             {
                 StopSse();
@@ -770,6 +918,7 @@ namespace Voltaic.Mcp
                 {
                     Disconnect();
                     _SseTokenSource?.Dispose();
+                    _ServerRequestTokenSource.Dispose();
                     _HttpClient?.Dispose();
                 }
             }
@@ -777,66 +926,92 @@ namespace Voltaic.Mcp
 
         private async Task SseLoop(CancellationToken token)
         {
+            int consecutiveFailures = 0;
             try
             {
-                if (String.IsNullOrEmpty(_EventsUrl) || String.IsNullOrEmpty(SessionId))
+                while (!token.IsCancellationRequested)
                 {
-                    LogMessage("Cannot start SSE: missing URL or session ID");
-                    return;
-                }
-
-                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, _EventsUrl);
-                request.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
-                request.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
-                request.Headers.Add("Accept", "text/event-stream");
-
-                HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-
-                _IsSseConnected = true;
-
-                using (Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
-                {
-                    string? line;
-                    StringBuilder dataBuilder = new StringBuilder();
-
-                    while (!token.IsCancellationRequested && (line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
+                    if (String.IsNullOrEmpty(_EventsUrl) || String.IsNullOrEmpty(SessionId))
                     {
-                        if (line.StartsWith("data: "))
-                        {
-                            dataBuilder.Append(line.Substring(6));
-                        }
-                        else if (String.IsNullOrEmpty(line) && dataBuilder.Length > 0)
-                        {
-                            // End of message
-                            string data = dataBuilder.ToString();
-                            dataBuilder.Clear();
-
-                            ProcessNotification(data);
-                        }
+                        LogMessage("Cannot start SSE: missing URL or session ID");
+                        return;
                     }
+
+                    bool opened = false;
+                    try
+                    {
+                        using HttpRequestMessage request = CreateStreamRequest(_SseLastEventId);
+                        using HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                        int status = (int)response.StatusCode;
+                        if (status >= 400 && status < 500)
+                        {
+                            // 404 (session gone), 405 (no GET stream), or another client error: retrying cannot help.
+                            LogMessage($"SSE stream rejected with HTTP {status}; not reconnecting");
+                            return;
+                        }
+
+                        response.EnsureSuccessStatusCode();
+                        opened = true;
+                        consecutiveFailures = 0;
+                        _IsSseConnected = true;
+
+                        using (Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
+                        using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                        {
+                            SseEventReader events = new SseEventReader(reader, _SseLastEventId);
+                            try
+                            {
+                                SseEvent? sseEvent;
+                                while ((sseEvent = await events.ReadEventAsync(token).ConfigureAwait(false)) != null)
+                                {
+                                    _SseLastEventId = events.LastEventId;
+                                    HandleStreamMessage(sseEvent.Data);
+                                }
+                            }
+                            finally
+                            {
+                                _SseLastEventId = events.LastEventId;
+                                if (events.RetryMs.HasValue) _SseRetryMs = events.RetryMs;
+                            }
+                        }
+
+                        LogMessage("SSE stream closed by the server");
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogMessage($"SSE error: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _IsSseConnected = false;
+                    }
+
+                    if (!AutoReconnectSse) return;
+                    if (!opened && ++consecutiveFailures > _SseMaxReconnectAttempts)
+                    {
+                        LogMessage($"SSE reconnection abandoned after {consecutiveFailures - 1} attempts");
+                        return;
+                    }
+
+                    await Task.Delay(_SseRetryMs ?? _SseReconnectDelayMs, token).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
-                if (!token.IsCancellationRequested)
-                {
-                    LogMessage($"SSE error: {ex.Message}");
-                }
-            }
-            finally
-            {
-                _IsSseConnected = false;
             }
         }
 
         private async Task PerformHandshakeAsync(CancellationToken token)
         {
+            _HandshakeComplete = false;
             Dictionary<string, object?> parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 { "protocolVersion", _ProtocolVersion },
-                { "capabilities", new Dictionary<string, object?>(StringComparer.Ordinal) },
+                { "capabilities", BuildClientCapabilities() },
                 { "clientInfo", new Dictionary<string, object?>(StringComparer.Ordinal) { { "name", _ClientName }, { "version", _ClientVersion } } }
             };
 
@@ -859,7 +1034,18 @@ namespace Voltaic.Mcp
                 _ProtocolVersion = negotiatedVersion!;
             }
 
+            _HandshakeComplete = true;
             await NotifyAsync("notifications/initialized", null, _RequestTimeoutMs, token).ConfigureAwait(false);
+        }
+
+        // Declares the client capabilities whose requests have handlers, so servers know they may send them.
+        private Dictionary<string, object?> BuildClientCapabilities()
+        {
+            Dictionary<string, object?> capabilities = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (_RequestDispatcher.HasHandler("roots/list")) capabilities["roots"] = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (_RequestDispatcher.HasHandler("sampling/createMessage")) capabilities["sampling"] = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (_RequestDispatcher.HasHandler("elicitation/create")) capabilities["elicitation"] = new Dictionary<string, object?>(StringComparer.Ordinal);
+            return capabilities;
         }
 
         private Dictionary<string, object?> BuildStatelessParams(IReadOnlyDictionary<string, object?>? parameters)
@@ -883,32 +1069,102 @@ namespace Voltaic.Mcp
             {
                 { McpProtocol.MetaProtocolVersionKey, _ProtocolVersion },
                 { McpProtocol.MetaClientInfoKey, clientInfo },
-                { McpProtocol.MetaClientCapabilitiesKey, new Dictionary<string, object?>(StringComparer.Ordinal) }
+                { McpProtocol.MetaClientCapabilitiesKey, BuildClientCapabilities() }
             };
 
             result["_meta"] = meta;
             return result;
         }
 
-        private static string EncodeMcpNameHeader(string value)
+        // The Mcp-Name source for tools/call and prompts/get is params.name; for resources/read it is params.uri.
+        private static string? GetRoutingName(string method, IReadOnlyDictionary<string, object?>? parameters)
         {
-            bool safe = value.Length > 0;
-            foreach (char character in value)
+            if (parameters == null) return null;
+            string key = StringComparer.Ordinal.Equals(method, "resources/read") ? "uri" : "name";
+            if (!StringComparer.Ordinal.Equals(method, "tools/call") && !StringComparer.Ordinal.Equals(method, "prompts/get") && !StringComparer.Ordinal.Equals(method, "resources/read")) return null;
+            if (!parameters.TryGetValue(key, out object? value) || value == null) return null;
+            if (value is string text) return text;
+            JsonElement element = value is JsonElement json ? json : JsonSerializer.SerializeToElement(value);
+            return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+        }
+
+        // Mirrors the arguments of x-mcp-header parameters into Mcp-Param-{Name} headers (2026-07-28). A parameter
+        // without a value in the arguments gets no header.
+        private void AddParamHeaders(HttpRequestMessage httpRequest, string toolName, IReadOnlyDictionary<string, object?>? parameters)
+        {
+            if (!_ToolHeaderParameters.TryGetValue(toolName, out List<McpHeaderParameter>? headerParameters) || headerParameters.Count == 0) return;
+            if (parameters == null || !parameters.TryGetValue("arguments", out object? argumentObject) || argumentObject == null) return;
+
+            JsonElement arguments = argumentObject is JsonElement element ? element : JsonSerializer.SerializeToElement(argumentObject);
+            foreach (McpHeaderParameter parameter in headerParameters)
             {
-                if (character < 0x20 || character > 0x7E)
+                if (!McpHeaderParameters.TryGetValue(arguments, parameter.Path, out JsonElement value)) continue;
+                string? headerValue = McpHeaderParameters.FormatValue(value, parameter.Type);
+                if (headerValue != null) httpRequest.Headers.TryAddWithoutValidation(parameter.HeaderName, headerValue);
+            }
+        }
+
+        // Removes tool definitions with invalid x-mcp-header annotations from a tools/list result, as clients must, and
+        // records the header parameters of the valid ones for later tools/call requests.
+        private object? FilterToolDefinitions(object? result)
+        {
+            if (result == null) return null;
+
+            JsonElement root = result is JsonElement element ? element : JsonSerializer.SerializeToElement(result);
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("tools", out JsonElement tools) || tools.ValueKind != JsonValueKind.Array)
+            {
+                return result;
+            }
+
+            List<JsonElement> kept = new List<JsonElement>();
+            bool removedAny = false;
+            foreach (JsonElement tool in tools.EnumerateArray())
+            {
+                string? toolName = tool.ValueKind == JsonValueKind.Object && tool.TryGetProperty("name", out JsonElement nameElement) && nameElement.ValueKind == JsonValueKind.String
+                    ? nameElement.GetString()
+                    : null;
+                JsonElement inputSchema = tool.ValueKind == JsonValueKind.Object && tool.TryGetProperty("inputSchema", out JsonElement schemaElement) ? schemaElement : default;
+
+                List<McpHeaderParameter>? headerParameters = McpHeaderParameters.TryExtract(inputSchema, out string? error);
+                if (headerParameters == null)
                 {
-                    safe = false;
-                    break;
+                    LogMessage($"Warning: tool '{toolName}' was removed from tools/list because its x-mcp-header annotations are invalid: {error}");
+                    if (toolName != null) _ToolHeaderParameters.TryRemove(toolName, out List<McpHeaderParameter>? _);
+                    removedAny = true;
+                    continue;
                 }
+
+                if (toolName != null) _ToolHeaderParameters[toolName] = headerParameters;
+                kept.Add(tool);
             }
 
-            if (safe && !value.StartsWith("=?base64?", StringComparison.Ordinal))
+            if (!removedAny) return result;
+
+            Dictionary<string, JsonElement> rebuilt = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (JsonProperty property in root.EnumerateObject())
             {
-                return value;
+                rebuilt[property.Name] = property.NameEquals("tools") ? JsonSerializer.SerializeToElement(kept) : property.Value;
             }
 
-            string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
-            return $"=?base64?{encoded}?=";
+            return JsonSerializer.SerializeToElement(rebuilt);
+        }
+
+        // Lists every page of tools so the x-mcp-header definitions are current.
+        private async Task RefreshToolDefinitionsAsync(CancellationToken token)
+        {
+            string? cursor = null;
+            for (int page = 0; page < 100; page++)
+            {
+                Dictionary<string, object?>? parameters = cursor == null ? null : new Dictionary<string, object?>(StringComparer.Ordinal) { { "cursor", cursor } };
+                JsonRpcResponse listed = await SendStatelessCoreAsync("tools/list", parameters, null, token).ConfigureAwait(false);
+                if (listed.Error != null || listed.Result == null) return;
+
+                JsonElement result = listed.Result is JsonElement element ? element : JsonSerializer.SerializeToElement(listed.Result);
+                cursor = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("nextCursor", out JsonElement next) && next.ValueKind == JsonValueKind.String
+                    ? next.GetString()
+                    : null;
+                if (String.IsNullOrEmpty(cursor)) return;
+            }
         }
 
         private static T? DeserializeResult<T>(object? result)
@@ -939,6 +1195,200 @@ namespace Voltaic.Mcp
             return null;
         }
 
+        /// <summary>
+        /// Returns the JSON-RPC response body for a request. Streamable HTTP servers may answer a POST with either
+        /// <c>application/json</c> or an SSE stream (<c>text/event-stream</c>) that carries notifications, server
+        /// requests, and then the response; the specification requires clients to support both. For a stream, events
+        /// are read as they arrive: notifications are raised through <see cref="NotificationReceived"/>, server
+        /// requests are answered, and reading stops at the response whose id matches <paramref name="requestId"/>.
+        /// When the stream ends early after an event ID, it is resumed with GET and <c>Last-Event-ID</c> (handshake
+        /// era only). Returns an empty string when no response arrives.
+        /// </summary>
+        private async Task<string> ReadResponseBodyAsync(HttpResponseMessage httpResponse, object? requestId, CancellationToken token)
+        {
+            string? mediaType = httpResponse.Content.Headers.ContentType?.MediaType;
+            if (!StringComparer.OrdinalIgnoreCase.Equals(mediaType, "text/event-stream"))
+            {
+                return await httpResponse.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            }
+
+            string requestIdJson = JsonSerializer.Serialize(requestId);
+            string? lastEventId;
+            int? retryMs;
+            using (Stream stream = await httpResponse.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
+            using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+            {
+                SseEventReader events = new SseEventReader(reader);
+                try
+                {
+                    SseEvent? sseEvent;
+                    while ((sseEvent = await events.ReadEventAsync(token).ConfigureAwait(false)) != null)
+                    {
+                        string? response = HandleStreamedMessage(sseEvent.Data, requestIdJson);
+                        if (response != null) return response;
+                    }
+                }
+                catch (IOException ex)
+                {
+                    LogMessage($"Response stream interrupted: {ex.Message}");
+                }
+                catch (HttpRequestException ex)
+                {
+                    LogMessage($"Response stream interrupted: {ex.Message}");
+                }
+
+                lastEventId = events.LastEventId;
+                retryMs = events.RetryMs;
+            }
+
+            // Resumption exists only in the handshake era (2025-03-26 to 2025-11-25); 2026-07-28 has none.
+            if (!_Stateless && AutoReconnectSse && !String.IsNullOrEmpty(lastEventId) && !String.IsNullOrEmpty(SessionId) && !String.IsNullOrEmpty(_EventsUrl))
+            {
+                return await ResumeResponseStreamAsync(lastEventId!, retryMs, requestIdJson, token).ConfigureAwait(false);
+            }
+
+            return String.Empty;
+        }
+
+        // Reopens an interrupted POST response stream with GET and Last-Event-ID until the response arrives.
+        private async Task<string> ResumeResponseStreamAsync(string lastEventId, int? retryMs, string requestIdJson, CancellationToken token)
+        {
+            for (int attempt = 1; attempt <= Math.Max(1, _SseMaxReconnectAttempts); attempt++)
+            {
+                await Task.Delay(retryMs ?? _SseReconnectDelayMs, token).ConfigureAwait(false);
+                LogMessage($"Resuming response stream after event {lastEventId} (attempt {attempt})");
+
+                try
+                {
+                    using HttpRequestMessage request = CreateStreamRequest(lastEventId);
+                    using HttpResponseMessage response = await _HttpClient!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        LogMessage($"Response stream resumption rejected with HTTP {(int)response.StatusCode}");
+                        return String.Empty;
+                    }
+
+                    using (Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
+                    using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                    {
+                        SseEventReader events = new SseEventReader(reader, lastEventId);
+                        try
+                        {
+                            SseEvent? sseEvent;
+                            while ((sseEvent = await events.ReadEventAsync(token).ConfigureAwait(false)) != null)
+                            {
+                                string? result = HandleStreamedMessage(sseEvent.Data, requestIdJson);
+                                if (result != null) return result;
+                            }
+                        }
+                        finally
+                        {
+                            lastEventId = events.LastEventId ?? lastEventId;
+                            retryMs = events.RetryMs ?? retryMs;
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is IOException || ex is HttpRequestException)
+                {
+                    LogMessage($"Response stream resumption failed: {ex.Message}");
+                }
+            }
+
+            return String.Empty;
+        }
+
+        private string? HandleStreamedMessage(string payload, string requestIdJson)
+        {
+            if (String.IsNullOrWhiteSpace(payload)) return null;
+
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(payload))
+                {
+                    JsonElement root = document.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object) return null;
+
+                    bool hasId = root.TryGetProperty("id", out JsonElement id) && id.ValueKind != JsonValueKind.Null;
+                    bool hasMethod = root.TryGetProperty("method", out JsonElement _);
+                    if (hasMethod)
+                    {
+                        HandleStreamMessage(payload);
+                        return null;
+                    }
+
+                    if (hasId && StringComparer.Ordinal.Equals(id.GetRawText(), requestIdJson))
+                    {
+                        return payload;
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                LogMessage($"Ignoring a malformed SSE event: {payload}");
+            }
+
+            return null;
+        }
+
+        // Routes a message that arrived on an SSE stream: server requests are answered, notifications are raised.
+        // Empty events (such as a priming event that only carries an event ID) are skipped.
+        private void HandleStreamMessage(string payload)
+        {
+            if (String.IsNullOrWhiteSpace(payload)) return;
+
+            JsonRpcRequest? serverRequest = ClientRequestDispatcher.ParseRequest(payload);
+            if (serverRequest != null)
+            {
+                if (_Stateless)
+                {
+                    LogMessage($"Ignoring a server request on a stateless stream (2026-07-28 servers must use input requests instead): {payload}");
+                    return;
+                }
+
+                LogMessage($"Received server request: {payload}");
+                _ = Task.Run(() => AnswerServerRequestAsync(serverRequest));
+                return;
+            }
+
+            ProcessNotification(payload);
+        }
+
+        // Answers a server request by POSTing the JSON-RPC response to the endpoint on the same session.
+        private async Task AnswerServerRequestAsync(JsonRpcRequest request)
+        {
+            CancellationToken token = _ServerRequestTokenSource.Token;
+            try
+            {
+                JsonRpcResponse response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
+                string responseJson = JsonSerializer.Serialize(response);
+                using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    cts.CancelAfter(_RequestTimeoutMs);
+                    using HttpRequestMessage post = CreatePostRequest(responseJson);
+                    using HttpResponseMessage reply = await _HttpClient!.SendAsync(post, cts.Token).ConfigureAwait(false);
+                    LogMessage($"Answered server request {request.Method} (HTTP {(int)reply.StatusCode}): {responseJson}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Could not answer server request {request.Method}: {ex.Message}");
+            }
+        }
+
+        private HttpRequestMessage CreateStreamRequest(string? lastEventId)
+        {
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, _EventsUrl);
+            if (!String.IsNullOrEmpty(SessionId)) request.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
+            request.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
+            request.Headers.Accept.ParseAdd("text/event-stream");
+            if (!String.IsNullOrEmpty(lastEventId)) request.Headers.TryAddWithoutValidation("Last-Event-ID", lastEventId);
+            return request;
+        }
+
         private HttpRequestMessage CreatePostRequest(string requestJson)
         {
             HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
@@ -949,6 +1399,11 @@ namespace Voltaic.Mcp
             if (!String.IsNullOrEmpty(SessionId))
             {
                 httpRequest.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
+            }
+
+            // After initialize, every request carries the negotiated version, with or without a session.
+            if (!String.IsNullOrEmpty(SessionId) || _HandshakeComplete)
+            {
                 httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
             }
 

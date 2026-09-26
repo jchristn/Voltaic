@@ -93,6 +93,20 @@ namespace Voltaic.Mcp
         public const string NameHeader = "Mcp-Name";
 
         /// <summary>
+        /// Prefix of the stateless headers that mirror tool parameters annotated with <see cref="HeaderAnnotationKeyword"/>
+        /// (<c>Mcp-Param-{Name}</c>, 2026-07-28+).
+        /// </summary>
+        public const string ParamHeaderPrefix = "Mcp-Param-";
+
+        /// <summary>
+        /// The JSON Schema extension keyword that designates a tool parameter to mirror into an
+        /// <c>Mcp-Param-{Name}</c> header (2026-07-28+). Its value is the header name portion. It may annotate only
+        /// <c>string</c>, <c>integer</c>, and <c>boolean</c> properties reachable from the schema root through
+        /// <c>properties</c> keys alone, and must be a case-insensitively unique HTTP token within the schema.
+        /// </summary>
+        public const string HeaderAnnotationKeyword = "x-mcp-header";
+
+        /// <summary>
         /// The <c>_meta</c> key carrying the per-request protocol version (2026-07-28+).
         /// </summary>
         public const string MetaProtocolVersionKey = "io.modelcontextprotocol/protocolVersion";

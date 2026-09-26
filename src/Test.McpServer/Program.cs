@@ -10,6 +10,12 @@ namespace Test.McpServer
     {
         static async Task Main(string[] args)
         {
+            if (args.Length > 0 && args[0] == "--probe-client")
+            {
+                await ProbeClientAsync().ConfigureAwait(false);
+                return;
+            }
+
             Console.Error.WriteLine("=== MCP Test Server Starting ===");
             Console.Error.WriteLine("Reading from stdin, writing to stdout");
             Console.Error.WriteLine("Press Ctrl+C or close stdin to stop");
@@ -161,6 +167,38 @@ namespace Test.McpServer
             }
 
             Console.Error.WriteLine("=== MCP Test Server Stopped ===");
+        }
+    
+        // A fake stdio server for client tests: it sends requests to the client (ping, a registered method, an unknown
+        // method) and reflects every message the client sends back as a notifications/echo notification, so a test can
+        // observe the client's responses through NotificationReceived.
+        static async Task ProbeClientAsync()
+        {
+            string[] requests =
+            {
+                "{\"jsonrpc\":\"2.0\",\"id\":\"srv-ping\",\"method\":\"ping\"}",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"srv-roots\",\"method\":\"roots/list\",\"params\":{}}",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"srv-unknown\",\"method\":\"unknown/method\"}"
+            };
+
+            string? line;
+            while ((line = await Console.In.ReadLineAsync().ConfigureAwait(false)) != null)
+            {
+                if (line.Contains("\"probe/start\"", StringComparison.Ordinal))
+                {
+                    foreach (string request in requests)
+                    {
+                        await Console.Out.WriteLineAsync(request).ConfigureAwait(false);
+                    }
+
+                    await Console.Out.FlushAsync().ConfigureAwait(false);
+                    continue;
+                }
+
+                string echo = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/echo\",\"params\":" + line + "}";
+                await Console.Out.WriteLineAsync(echo).ConfigureAwait(false);
+                await Console.Out.FlushAsync().ConfigureAwait(false);
+            }
         }
     }
 }

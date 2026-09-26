@@ -110,7 +110,7 @@ An AI client (for example Claude Code) lists only the application's tools.
 
 In v1.x the `ping` request was answered by the demo `ping` tool's handler and returned the string `"pong"`. The MCP specification requires an empty result. In v2.0.0 every MCP server answers `ping` with `{}`, and under the stateless `2026-07-28` revision with `{"resultType":"complete"}`.
 
-`McpHttpServer` still lets `ping` bypass the `AuthenticationHandler`. The bypass now reaches only the protocol handler, which runs no application code.
+In v2.0.0 through v2.1.3, `McpHttpServer` let `ping` bypass the `AuthenticationHandler`. Since v2.1.4 `ping` must authenticate like every other request, as the MCP authorization specification requires; use `GET /` for unauthenticated health checks.
 
 `JsonRpcServer` (plain JSON-RPC, not MCP) still returns `"pong"` from its diagnostic `ping` method when `includeDiagnosticMethods: true`.
 

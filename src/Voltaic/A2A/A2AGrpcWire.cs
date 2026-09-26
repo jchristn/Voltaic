@@ -1,4 +1,3 @@
-#pragma warning disable CS1591
 namespace Voltaic.A2A
 {
     using System;
@@ -164,6 +163,8 @@ namespace Voltaic.A2A
                 };
             }
 
+            if (ex is InvalidProtocolBufferException) return 3;
+            if (ex is OperationCanceledException) return 1;
             return 13;
         }
 

@@ -103,10 +103,12 @@ namespace Test.Shared
                         return new List<RpcResult> { delete, after };
                     }),
 
-                    Parity(suiteId, "MissingAcceptReturns406", "A POST without the Streamable HTTP Accept header returns 406", async (fixture, auth, ct) =>
+                    Parity(suiteId, "MissingAcceptReturns406", "A POST whose Accept header excludes the Streamable HTTP types returns 406", async (fixture, auth, ct) =>
                     {
-                        RpcResult response = await McpHttpTestRequests.SendAsync(fixture, McpHttpTestRequests.BuildBody("tools/list", 1, new { }), Headers(null, null, auth), false, ct).ConfigureAwait(false);
-                        TestAssert.Equal(HttpStatusCode.NotAcceptable, response.StatusCode, "A missing Accept header is 406.");
+                        Dictionary<string, string> headers = Headers(null, null, auth);
+                        headers["Accept"] = "text/html";
+                        RpcResult response = await McpHttpTestRequests.SendAsync(fixture, McpHttpTestRequests.BuildBody("tools/list", 1, new { }), headers, false, ct).ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.NotAcceptable, response.StatusCode, "An Accept header without JSON and SSE is 406.");
                         return new List<RpcResult> { response };
                     }),
 
@@ -152,11 +154,15 @@ namespace Test.Shared
                         TestAssert.Equal(0, calls, "The tool never runs for an unauthenticated request.");
                     }),
 
-                    Case(suiteId, "PingBypassStillSkipsAuthentication", "The ping bypass still works and now runs through the shared pipeline", async ct =>
+                    Case(suiteId, "PingBypassStillSkipsAuthentication", "ping requires credentials like every other request, and an authenticated ping on the caller's session is answered", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(true, null, ct).ConfigureAwait(false);
-                        RpcResult response = await McpHttpTestRequests.SendAsync(fixture, "ping", 1, new { }, null, null, null, ct).ConfigureAwait(false);
-                        TestAssert.True(response.StatusCode != HttpStatusCode.Unauthorized, "ping must not require credentials.");
+                        RpcResult anonymous = await McpHttpTestRequests.SendAsync(fixture, "ping", 1, new { }, null, null, null, ct).ConfigureAwait(false);
+                        RpcResult initialized = await McpHttpTestRequests.InitializeAsync(fixture, null, McpHttpTestRequests.ValidToken, ct).ConfigureAwait(false);
+                        RpcResult authenticated = await McpHttpTestRequests.SendAsync(fixture, "ping", 2, new { }, initialized.SessionId, null, McpHttpTestRequests.ValidToken, ct).ConfigureAwait(false);
+
+                        TestAssert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode, "ping without credentials gets 401.");
+                        TestAssert.Equal(HttpStatusCode.OK, authenticated.StatusCode, $"An authenticated ping is answered. Body: {authenticated.Body}");
                     }),
                 });
         }

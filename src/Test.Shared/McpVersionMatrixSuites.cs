@@ -127,11 +127,13 @@ namespace Test.Shared
                     TestAssert.Equal(5, callResult.Get("structuredContent").Get("total").Int(), "tools/call should return the structured total.");
                 }),
 
-                Case(suiteId, "UnsupportedVersionNegative", $"initialize rejects an unsupported version under {version}", async ct =>
+                Case(suiteId, "UnsupportedVersionNegotiates", $"initialize with an unknown version negotiates a supported version (the server's cap) under {version}", async ct =>
                 {
                     await using HttpMcpTestServerFixture fixture = await StartAsync(ct).ConfigureAwait(false);
                     RpcResult response = await fixture.PostMcpAsync("initialize", new { protocolVersion = "1900-01-01" }, "init", null, ct).ConfigureAwait(false);
-                    TestAssert.Equal(-32602, JsonProbe.Parse(response.Body).Get("error").Get("code").Int(), "Unsupported version should be an invalid-params error.");
+                    JsonProbe root = JsonProbe.Parse(response.Body);
+                    TestAssert.False(root.Has("error"), "An unknown version is negotiated, not rejected.");
+                    TestAssert.Equal(fixture.Server.MaximumHandshakeProtocolVersion, root.Get("result").Get("protocolVersion").String(), "The server answers with its newest handshake version.");
                 }),
 
                 Case(suiteId, "UnsupportedHeaderNegative", $"an unsupported MCP-Protocol-Version header is rejected under {version}", async ct =>

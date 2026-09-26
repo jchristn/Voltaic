@@ -84,7 +84,7 @@ namespace Test.Shared
                         RpcResult valid = await fixture.PostMcpAsync("tools/call", new { name = "app-tool", arguments = new { value = "x" } }, 3, null, ct).ConfigureAwait(false);
 
                         TestAssert.Equal(-32601, bare.Error.Get("code").Int(), "A tool must not be callable as a bare JSON-RPC method.");
-                        TestAssert.Equal(-32602, invalid.Error.Get("code").Int(), "tools/call must enforce the input schema.");
+                        AssertToolInputError(invalid, "tools/call must enforce the input schema.");
                         TestAssert.Equal("app:x", valid.Result.Get("content")[0].Get("text").String());
                     }),
 
@@ -104,7 +104,7 @@ namespace Test.Shared
                         TestAssert.True(ToolNames(tools.Result).Contains("ping"), "The application ping tool is listed.");
                     }),
 
-                    Case(suiteId, "HttpApplicationPingToolGetsNoAuthBypass", "An application tool named ping does not inherit the protocol ping's authentication bypass", async ct =>
+                    Case(suiteId, "HttpApplicationPingToolGetsNoAuthBypass", "Neither the protocol ping nor an application tool named ping is served without authentication", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
                         {
@@ -112,11 +112,10 @@ namespace Test.Shared
                             server.AuthenticationHandler = _ => Task.FromResult(new AuthenticationResult { IsAuthenticated = false, StatusCode = 401, ErrorMessage = "auth required" });
                         }).ConfigureAwait(false);
 
-                        RpcResult protocolPing = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
-                        RpcResult toolPing = await fixture.PostMcpAsync("tools/call", new { name = "ping", arguments = new { } }, 2, null, ct).ConfigureAwait(false);
+                        RpcResult protocolPing = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, null, ct).ConfigureAwait(false);
+                        RpcResult toolPing = await fixture.PostJsonRpcAsync("/mcp/", "tools/call", new { name = "ping", arguments = new { } }, 2, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.OK, protocolPing.StatusCode, "Protocol ping bypasses authentication.");
-                        TestAssert.True(protocolPing.Result.IsObject && protocolPing.Result.Length == 0, "Protocol ping returns an empty object.");
+                        TestAssert.Equal(HttpStatusCode.Unauthorized, protocolPing.StatusCode, "Protocol ping must be authenticated (MCP authorization requires 401 for every request without valid credentials).");
                         TestAssert.Equal(HttpStatusCode.Unauthorized, toolPing.StatusCode, "tools/call for a tool named ping must be authenticated.");
                     }),
 
@@ -199,7 +198,7 @@ namespace Test.Shared
                         TestAssert.True(removed, "UnregisterTool returns true for a registered tool.");
                         TestAssert.False(removedAgain, "UnregisterTool returns false for an unknown tool.");
                         TestAssert.Equal("other-tool", String.Join(",", ToolNames(tools.Result)), "Only the remaining tool is listed.");
-                        TestAssert.Equal(-32602, call.Error.Get("code").Int(), "tools/call for a removed tool reports it as not found.");
+                        TestAssert.Equal(-32602, call.Error.Get("code").Int(), "tools/call for a removed tool reports it as not found (a protocol error).");
                         TestAssert.Equal("other", other.Result.Get("content")[0].Get("text").String());
                         TestAssert.Throws<ArgumentNullException>(() => fixture.Server.UnregisterTool(null!), "A null name is rejected.");
                         TestAssert.Throws<ArgumentNullException>(() => fixture.Server.UnregisterTool(String.Empty), "An empty name is rejected.");
@@ -320,8 +319,8 @@ namespace Test.Shared
                         RpcResult rejected = await CallAsync(fixture, "closed", new { dataBase64 = "AA==", data = "oops" }, ct).ConfigureAwait(false);
                         RpcResult accepted = await CallAsync(fixture, "closed", new { dataBase64 = "AA==" }, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, rejected.Error.Get("code").Int(), "An undeclared argument is rejected.");
-                        TestAssert.True(rejected.Error.Get("message").String()!.Contains("unexpected property 'data'", StringComparison.Ordinal), "The error names the undeclared property.");
+                        AssertToolInputError(rejected, "An undeclared argument is rejected.");
+                        TestAssert.True(rejected.Result.Get("content")[0].Get("text").String()!.Contains("unexpected property 'data'", StringComparison.Ordinal), "The error names the undeclared property.");
                         TestAssert.Equal("ok", accepted.Result.Get("content")[0].Get("text").String());
                     }),
 
@@ -333,7 +332,7 @@ namespace Test.Shared
                         RpcResult rejected = await CallAsync(fixture, "typed-extras", new { id = 1, label = 5 }, ct).ConfigureAwait(false);
 
                         TestAssert.Equal("ok", accepted.Result.Get("content")[0].Get("text").String());
-                        TestAssert.Equal(-32602, rejected.Error.Get("code").Int(), "An extra argument of the wrong type is rejected.");
+                        AssertToolInputError(rejected, "An extra argument of the wrong type is rejected.");
                     }),
 
                     Case(suiteId, "PatternPropertiesWithAdditionalFalse", "patternProperties names are allowed and validated when additionalProperties is false", async ct =>
@@ -345,8 +344,8 @@ namespace Test.Shared
                         RpcResult unmatched = await CallAsync(fixture, "patterned", new Dictionary<string, object> { { "trace", "abc" } }, ct).ConfigureAwait(false);
 
                         TestAssert.Equal("ok", accepted.Result.Get("content")[0].Get("text").String());
-                        TestAssert.Equal(-32602, wrongType.Error.Get("code").Int(), "A pattern-matched argument is validated against its schema.");
-                        TestAssert.Equal(-32602, unmatched.Error.Get("code").Int(), "A name matching no pattern is rejected.");
+                        AssertToolInputError(wrongType, "A pattern-matched argument is validated against its schema.");
+                        AssertToolInputError(unmatched, "A name matching no pattern is rejected.");
                     }),
 
                     Case(suiteId, "AdditionalPropertiesAbsentOrTrueAllowsExtras", "Schemas without additionalProperties, or with true, still accept extra arguments", async ct =>
@@ -368,8 +367,8 @@ namespace Test.Shared
                         RpcResult rejected = await CallAsync(fixture, "nested", new { options = new { mode = "fast", speed = 3 } }, ct).ConfigureAwait(false);
 
                         TestAssert.Equal("ok", accepted.Result.Get("content")[0].Get("text").String());
-                        TestAssert.Equal(-32602, rejected.Error.Get("code").Int(), "An undeclared nested argument is rejected.");
-                        TestAssert.True(rejected.Error.Get("message").String()!.Contains("options", StringComparison.Ordinal), "The error names the nested path.");
+                        AssertToolInputError(rejected, "An undeclared nested argument is rejected.");
+                        TestAssert.True(rejected.Result.Get("content")[0].Get("text").String()!.Contains("options", StringComparison.Ordinal), "The error names the nested path.");
                     }),
                 });
         }
@@ -469,6 +468,17 @@ namespace Test.Shared
             }
 
             TestAssert.True(false, $"{message} Expected RPC error {code}, but the call succeeded.");
+        }
+
+        /// <summary>
+        /// Asserts the MCP rule for invalid tool arguments: a tool result with isError true whose text explains the
+        /// problem (a tool execution error the model can act on), not a JSON-RPC protocol error.
+        /// </summary>
+        private static void AssertToolInputError(RpcResult response, string message)
+        {
+            TestAssert.False(response.Root.Has("error"), $"{message} Input validation is a tool execution error, not a protocol error. Body: {response.Body}");
+            TestAssert.True(response.Result.Get("isError").Bool(), $"{message} The result has isError true.");
+            TestAssert.True(response.Result.Get("content")[0].Get("text").String()!.Contains("arguments"), $"{message} The text explains the argument problem.");
         }
 
         private static TestCaseDescriptor Case(

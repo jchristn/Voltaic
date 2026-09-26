@@ -39,7 +39,7 @@ namespace Test.Shared
                         TestAssert.False(String.IsNullOrEmpty(response.SessionId), "Response should include session id.");
                     }),
 
-                    Case(suiteId, "UnsupportedVersionReturnsInvalidParams", "initialize rejects unsupported protocol versions with JSON-RPC invalid params", async ct =>
+                    Case(suiteId, "UnsupportedVersionReturnsInvalidParams", "initialize with an unknown protocol version negotiates the server's newest handshake version", async ct =>
                     {
                         await using HttpServerFixture fixture = await HttpServerFixture.StartAsync(ct).ConfigureAwait(false);
 
@@ -49,11 +49,9 @@ namespace Test.Shared
                         }, 2, null, ct).ConfigureAwait(false);
 
                         JsonProbe json = JsonProbe.Parse(response.Body);
-                        JsonProbe error = json.Get("error");
-                        TestAssert.Equal(-32602, error.Get("code").Int());
-                        TestAssert.True(error.Get("message").String()!.Contains("Unsupported MCP protocol version"), "Error should describe unsupported version.");
-                        TestAssert.True(String.IsNullOrEmpty(response.SessionId), "A rejected initialize must not issue a session.");
-                        TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "A rejected initialize must not register a session.");
+                        TestAssert.False(json.Has("error"), "An unknown version is negotiated, not rejected.");
+                        TestAssert.Equal(McpProtocol.NewestHandshakeProtocolVersion, json.Get("result").Get("protocolVersion").String());
+                        TestAssert.False(String.IsNullOrEmpty(response.SessionId), "The successful initialize issues a session.");
                     }),
 
                     Case(suiteId, "ToolsListAndCall", "tools/list and tools/call expose registered metadata and structured results", async ct =>

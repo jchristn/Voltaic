@@ -31,6 +31,21 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets whether the message of an exception thrown by a tool handler is shown to the client. A handler
+        /// exception becomes a tool result with <c>isError</c> set to true (a tool execution error the model can read).
+        /// When false (the default), the text is a generic "Tool '&lt;name&gt;' failed because of an internal error." so
+        /// internal details (connection strings, paths, host names) are not sent, as the MCP security considerations
+        /// require tool outputs to be sanitized; when true, the text is "Tool '&lt;name&gt;' failed: &lt;message&gt;". The
+        /// message of a <see cref="McpToolException"/> is always shown, and the exception type and message are always
+        /// written to the <c>Log</c> event. <see cref="McpProtocolException"/> is sent as a JSON-RPC error instead.
+        /// </summary>
+        public bool IncludeToolExceptionMessages
+        {
+            get => _Endpoint.IncludeToolExceptionMessages;
+            set => _Endpoint.IncludeToolExceptionMessages = value;
+        }
+
+        /// <summary>
         /// Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
         /// handshake. A client that requests a newer revision, or a stateless-era revision such as
         /// <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
@@ -95,6 +110,7 @@ namespace Voltaic.Mcp
             : base(ip, port, false)
         {
             _Endpoint = new McpEndpoint("Voltaic.Mcp.TcpServer");
+            _Endpoint.ErrorLog = WriteLog;
 
             RegisterProtocolMethods();
             if (includeDiagnosticTools) RegisterDiagnosticTools();
@@ -511,6 +527,7 @@ namespace Voltaic.Mcp
         {
             RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
             RegisterMethod("ping", (args) => _Endpoint.Ping(args));
+            RegisterMethod("server/discover", (args) => _Endpoint.Discover(args));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
@@ -574,5 +591,17 @@ namespace Voltaic.Mcp
         {
             RegisterDiagnosticTools();
         }
-    }
+    
+        // Selects the protocol era for a request: a request whose _meta names the stateless revision (2026-07-28) is served statelessly. An unsupported _meta version is rejected with -32022.
+        private protected override object? PrepareRequest(string requestJson, JsonRpcRequest request)
+        {
+            return McpStatelessDispatcher.ResolveStatelessVersion(requestJson, request.Method);
+        }
+
+        // Adds the fields the stateless era requires (resultType, and ttlMs/cacheScope for cacheable results) to responses to stateless-era requests.
+        private protected override string SerializeResponse(JsonRpcResponse response, object? requestContext)
+        {
+            return McpStatelessDispatcher.SerializeResponse(response, requestContext as string);
+        }
+}
 }

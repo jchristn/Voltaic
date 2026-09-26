@@ -170,6 +170,21 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets whether the message of an exception thrown by a tool handler is shown to the client. A handler
+        /// exception becomes a tool result with <c>isError</c> set to true (a tool execution error the model can read).
+        /// When false (the default), the text is a generic "Tool '&lt;name&gt;' failed because of an internal error." so
+        /// internal details (connection strings, paths, host names) are not sent, as the MCP security considerations
+        /// require tool outputs to be sanitized; when true, the text is "Tool '&lt;name&gt;' failed: &lt;message&gt;". The
+        /// message of a <see cref="McpToolException"/> is always shown, and the exception type and message are always
+        /// written to the <c>Log</c> event. <see cref="McpProtocolException"/> is sent as a JSON-RPC error instead.
+        /// </summary>
+        public bool IncludeToolExceptionMessages
+        {
+            get => _Endpoint.IncludeToolExceptionMessages;
+            set => _Endpoint.IncludeToolExceptionMessages = value;
+        }
+
+        /// <summary>
         /// Gets or sets the newest protocol revision the server agrees to during an <c>initialize</c>
         /// handshake. A client that requests a newer revision, or a stateless-era revision such as
         /// <c>2026-07-28</c> (which defines no <c>initialize</c> request and no sessions), is answered with
@@ -243,6 +258,7 @@ namespace Voltaic.Mcp
             _Clients = new ConcurrentDictionary<string, ClientConnection>();
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
             _Endpoint = new McpEndpoint("Voltaic.Mcp.WebSocketsServer");
+            _Endpoint.ErrorLog = LogMessage;
 
             RegisterProtocolMethods();
             if (includeDiagnosticTools) RegisterDiagnosticTools();
@@ -866,6 +882,7 @@ namespace Voltaic.Mcp
         {
             RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
             RegisterMethod("ping", (args) => _Endpoint.Ping(args));
+            RegisterMethod("server/discover", (args) => _Endpoint.Discover(args));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
@@ -1098,6 +1115,23 @@ namespace Voltaic.Mcp
                 pendingRequest = new ServerPendingRequest(request.Id, client, request);
                 RaiseRequestReceived(pendingRequest);
 
+                // A request whose _meta names the stateless revision (2026-07-28) is served statelessly; an
+                // unsupported _meta version is rejected with -32022 before dispatch.
+                string? statelessVersion;
+                try
+                {
+                    statelessVersion = McpStatelessDispatcher.ResolveStatelessVersion(requestString, request.Method);
+                }
+                catch (McpProtocolException versionError)
+                {
+                    if (request.Id != null)
+                    {
+                        await SendResponseAsync(client, pendingRequest, McpStatelessDispatcher.ErrorResponse(request.Id, versionError), token).ConfigureAwait(false);
+                    }
+
+                    return;
+                }
+
                 JsonRpcResponse response;
 
                 if (_Methods.ContainsKey(request.Method))
@@ -1143,7 +1177,7 @@ namespace Voltaic.Mcp
                 // Only send response if request has an id (not a notification)
                 if (request.Id != null)
                 {
-                    await SendResponseAsync(client, pendingRequest, response, token).ConfigureAwait(false);
+                    await SendResponseAsync(client, pendingRequest, response, token, statelessVersion).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -1158,11 +1192,11 @@ namespace Voltaic.Mcp
             }
         }
 
-        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default)
+        private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default, string? statelessVersion = null)
         {
             try
             {
-                string json = JsonSerializer.Serialize(response);
+                string json = McpStatelessDispatcher.SerializeResponse(response, statelessVersion);
                 await SendToClientAsync(client, json, token).ConfigureAwait(false);
                 LogMessage($"Sent to {client.SessionId}: {json}");
 

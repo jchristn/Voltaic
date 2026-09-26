@@ -1,7 +1,10 @@
 namespace Test.Shared
 {
+    using System.Diagnostics;
     using System.Net;
     using System.Net.Http;
+    using System.Net.NetworkInformation;
+    using System.Net.Sockets;
     using System.Text;
     using System.Text.Json;
     using Touchstone.Core;
@@ -111,10 +114,11 @@ namespace Test.Shared
                     {
                         await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct).ConfigureAwait(false);
                         using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+                        string taskPush = (await client.SendMessageAsync(CreateMessageRequest("push-crud"), ct).ConfigureAwait(false)).Task!.Id;
 
                         TaskPushNotificationConfig created = await client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-push",
+                            TaskId = taskPush,
                             ConfigId = "webhook",
                             Config = new PushNotificationConfig
                             {
@@ -126,25 +130,25 @@ namespace Test.Shared
                         TestAssert.Equal("webhook", created.Id);
                         TaskPushNotificationConfig fetched = await client.GetTaskPushNotificationConfigAsync(new GetTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-push",
+                            TaskId = taskPush,
                             ConfigId = "webhook"
                         }, ct).ConfigureAwait(false);
                         TestAssert.Equal("https://example.com/webhook", fetched.PushNotificationConfig.Url);
 
                         ListTaskPushNotificationConfigResponse list = await client.ListTaskPushNotificationConfigAsync(new ListTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-push"
+                            TaskId = taskPush
                         }, ct).ConfigureAwait(false);
                         TestAssert.Equal(1, list.Configs.Count);
 
                         await client.DeleteTaskPushNotificationConfigAsync(new DeleteTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-push",
+                            TaskId = taskPush,
                             ConfigId = "webhook"
                         }, ct).ConfigureAwait(false);
                         ListTaskPushNotificationConfigResponse afterDelete = await client.ListTaskPushNotificationConfigAsync(new ListTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-push"
+                            TaskId = taskPush
                         }, ct).ConfigureAwait(false);
                         TestAssert.Equal(0, afterDelete.Configs.Count);
                     }),
@@ -185,7 +189,7 @@ namespace Test.Shared
 
                         TaskPushNotificationConfig created = await client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-rest-client",
+                            TaskId = response.Task.Id,
                             Config = new PushNotificationConfig
                             {
                                 Id = "rest-client",
@@ -196,20 +200,20 @@ namespace Test.Shared
 
                         TaskPushNotificationConfig fetched = await client.GetTaskPushNotificationConfigAsync(new GetTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-rest-client",
+                            TaskId = response.Task.Id,
                             ConfigId = "rest-client"
                         }, ct).ConfigureAwait(false);
                         TestAssert.Equal("https://example.com/a2a", fetched.PushNotificationConfig.Url);
 
                         ListTaskPushNotificationConfigResponse configs = await client.ListTaskPushNotificationConfigAsync(new ListTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-rest-client"
+                            TaskId = response.Task.Id
                         }, ct).ConfigureAwait(false);
                         TestAssert.Equal(1, configs.Configs.Count);
 
                         await client.DeleteTaskPushNotificationConfigAsync(new DeleteTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-rest-client",
+                            TaskId = response.Task.Id,
                             ConfigId = "rest-client"
                         }, ct).ConfigureAwait(false);
 
@@ -244,7 +248,7 @@ namespace Test.Shared
 
                         TaskPushNotificationConfig created = await client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-grpc-push",
+                            TaskId = response.Task.Id,
                             ConfigId = "grpc-webhook",
                             Config = new PushNotificationConfig
                             {
@@ -256,20 +260,20 @@ namespace Test.Shared
 
                         TaskPushNotificationConfig fetched = await client.GetTaskPushNotificationConfigAsync(new GetTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-grpc-push",
+                            TaskId = response.Task.Id,
                             ConfigId = "grpc-webhook"
                         }, ct).ConfigureAwait(false);
                         TestAssert.Equal("https://example.com/grpc", fetched.PushNotificationConfig.Url);
 
                         ListTaskPushNotificationConfigResponse configs = await client.ListTaskPushNotificationConfigAsync(new ListTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-grpc-push"
+                            TaskId = response.Task.Id
                         }, ct).ConfigureAwait(false);
                         TestAssert.Equal(1, configs.Configs.Count);
 
                         await client.DeleteTaskPushNotificationConfigAsync(new DeleteTaskPushNotificationConfigRequest
                         {
-                            TaskId = "task-grpc-push",
+                            TaskId = response.Task.Id,
                             ConfigId = "grpc-webhook"
                         }, ct).ConfigureAwait(false);
 
@@ -477,6 +481,8 @@ namespace Test.Shared
                     Case(suiteId, "OfficialRestPushConfigBodyAccepted", "Voltaic server accepts official SDK HTTP+JSON push config request bodies", async ct =>
                     {
                         await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct).ConfigureAwait(false);
+                        using A2AClient rpcClient = new A2AClient(fixture.EndpointUrl, fixture.Client);
+                        string taskId = (await rpcClient.SendMessageAsync(CreateMessageRequest("official-rest"), ct).ConfigureAwait(false)).Task!.Id;
                         PushNotificationConfig config = new PushNotificationConfig
                         {
                             Id = "official-rest",
@@ -485,7 +491,7 @@ namespace Test.Shared
                         string json = JsonSerializer.Serialize(config, A2AJson.DefaultOptions);
 
                         using HttpResponseMessage response = await fixture.Client.PostAsync(
-                            $"{fixture.BaseUrl}/tasks/task-official-rest/pushNotificationConfigs",
+                            $"{fixture.BaseUrl}/tasks/{taskId}/pushNotificationConfigs",
                             new StringContent(json, Encoding.UTF8, "application/json"),
                             ct).ConfigureAwait(false);
 
@@ -496,6 +502,514 @@ namespace Test.Shared
                         TestAssert.Equal("https://example.com/official", created.PushNotificationConfig.Url);
                     }),
                 });
+        }
+
+        /// <summary>
+        /// Push notification delivery, push configuration errors, gRPC server hardening, restartable servers, and
+        /// task store null handling (v2.1.2).
+        /// </summary>
+        public static TestSuiteDescriptor Hardening()
+        {
+            const string suiteId = "A2A.Hardening";
+
+            return new TestSuiteDescriptor(
+                suiteId,
+                "A2A Push Delivery and Server Hardening",
+                new List<TestCaseDescriptor>
+                {
+                    Case(suiteId, "PushDeliveryCarriesStreamResponsesAndCredentials", "A webhook registered through SendMessage receives every task event as a StreamResponse with Authorization, the notification token, and application/a2a+json", async ct =>
+                    {
+                        using WebhookReceiver receiver = new WebhookReceiver();
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, null, server => server.PushNotificationUrlValidator = uri => uri.IsLoopback).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+
+                        SendMessageRequest request = CreateMessageRequest("push me");
+                        request.Configuration = new SendMessageConfiguration
+                        {
+                            PushNotificationConfig = new PushNotificationConfig
+                            {
+                                Url = receiver.Url,
+                                Token = "notify-token",
+                                Authentication = new AuthenticationInfo { Scheme = "Bearer", Credentials = "webhook-secret" }
+                            }
+                        };
+                        SendMessageResponse response = await client.SendMessageAsync(request, ct).ConfigureAwait(false);
+
+                        TestAssert.True(await receiver.WaitForAsync(3, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false), $"The webhook receives the task's events (got {receiver.Requests.Count}).");
+                        await Task.Delay(300, ct).ConfigureAwait(false);
+                        ReceivedWebhook[] received = receiver.Requests.ToArray();
+                        foreach (ReceivedWebhook item in received)
+                        {
+                            TestAssert.Equal("POST", item.Method);
+                            TestAssert.Equal("/hook", item.Path);
+                            TestAssert.Equal("Bearer webhook-secret", item.Headers["Authorization"], "Authorization is {scheme} {credentials}.");
+                            TestAssert.Equal("notify-token", item.Headers[A2AProtocol.NotificationTokenHeader], "The token header is sent.");
+                            TestAssert.True(item.Headers["Content-Type"].StartsWith("application/a2a+json", StringComparison.Ordinal), "The payload is application/a2a+json.");
+                        }
+
+                        List<StreamResponse> events = received.Select(item => JsonSerializer.Deserialize<StreamResponse>(item.Body, A2AJson.DefaultOptions)!).ToList();
+                        TestAssert.True(events.All(item => (item.StatusUpdate?.TaskId ?? item.ArtifactUpdate?.TaskId ?? item.Task?.Id) == response.Task!.Id), "Every payload is for the task.");
+                        TestAssert.True(events.Any(item => item.StatusUpdate?.Status.State == TaskState.Completed), "The completion is delivered.");
+                        TestAssert.True(events.Any(item => item.ArtifactUpdate != null), "Artifact updates are delivered.");
+                        int completedIndex = events.FindIndex(item => item.StatusUpdate?.Status.State == TaskState.Completed);
+                        int workingIndex = events.FindIndex(item => item.StatusUpdate?.Status.State == TaskState.Working);
+                        TestAssert.True(workingIndex >= 0 && workingIndex < completedIndex, "Events are delivered in order.");
+                    }),
+
+                    Case(suiteId, "PushConfigUsesSpecFieldName", "SendMessageConfiguration writes taskPushNotificationConfig, reads both names, and a spec-named config sent over JSON-RPC is delivered to", async ct =>
+                    {
+                        using WebhookReceiver receiver = new WebhookReceiver();
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, null, server => server.PushNotificationUrlValidator = uri => uri.IsLoopback).ConfigureAwait(false);
+
+                        string written = JsonSerializer.Serialize(new SendMessageConfiguration { PushNotificationConfig = new PushNotificationConfig { Url = "https://example.com/hook" } }, A2AJson.DefaultOptions);
+                        SendMessageConfiguration? legacy = JsonSerializer.Deserialize<SendMessageConfiguration>("{\"pushNotificationConfig\":{\"url\":\"https://example.com/old\"}}", A2AJson.DefaultOptions);
+                        TestAssert.True(written.Contains("\"taskPushNotificationConfig\""), $"The spec name is written: {written}");
+                        TestAssert.False(written.Contains("\"pushNotificationConfig\""), "The older name is not written.");
+                        TestAssert.Equal("https://example.com/old", legacy!.PushNotificationConfig!.Url, "The older name is still read.");
+
+                        string body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" + A2AProtocol.SendMessage + "\",\"params\":{\"message\":{\"messageId\":\"m-spec\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"spec\"}]},"
+                            + "\"configuration\":{\"taskPushNotificationConfig\":{\"url\":\"" + receiver.Url + "\"}}}}";
+                        using HttpResponseMessage response = await fixture.Client.PostAsync(fixture.EndpointUrl, new StringContent(body, Encoding.UTF8, "application/json"), ct).ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
+                        TestAssert.True(await receiver.WaitForAsync(1, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false), "A spec-named config is registered and delivered to.");
+                    }),
+
+                    Case(suiteId, "PushDeliveryRetriesAndStopsAfterDelete", "A failed delivery is retried until it succeeds, and a deleted configuration receives nothing further", async ct =>
+                    {
+                        using WebhookReceiver receiver = new WebhookReceiver();
+                        receiver.EnqueueStatus(500);
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, new StepAgent(), server =>
+                        {
+                            server.PushNotificationUrlValidator = uri => uri.IsLoopback;
+                            server.PushNotificationMaxAttempts = 3;
+                        }).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+
+                        string taskId = (await client.SendMessageAsync(CreateMessageRequest("first"), ct).ConfigureAwait(false)).Task!.Id;
+                        await client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest { TaskId = taskId, ConfigId = "retry", Config = new PushNotificationConfig { Url = receiver.Url } }, ct).ConfigureAwait(false);
+
+                        await client.SendMessageAsync(ContinueTask(taskId, "second"), ct).ConfigureAwait(false);
+                        TestAssert.True(await receiver.WaitForAsync(2, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false), "The failed delivery is retried.");
+                        ReceivedWebhook[] attempts = receiver.Requests.ToArray();
+                        TestAssert.Equal(500, attempts[0].AnsweredStatus, "The first attempt failed.");
+                        TestAssert.Equal(attempts[0].Body, attempts[1].Body, "The retry carries the same event.");
+
+                        await client.DeleteTaskPushNotificationConfigAsync(new DeleteTaskPushNotificationConfigRequest { TaskId = taskId, ConfigId = "retry" }, ct).ConfigureAwait(false);
+                        int before = receiver.Requests.Count;
+                        await client.SendMessageAsync(ContinueTask(taskId, "third"), ct).ConfigureAwait(false);
+                        await Task.Delay(1500, ct).ConfigureAwait(false);
+                        TestAssert.Equal(before, receiver.Requests.Count, "Nothing is delivered after the configuration is deleted.");
+                    }),
+
+                    Case(suiteId, "DefaultWebhookPolicyRejectsLocalTargets", "Without a validator, loopback, private, link-local, non-http, and credential-bearing webhook URLs are rejected with InvalidParams", async ct =>
+                    {
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+                        string taskId = (await client.SendMessageAsync(CreateMessageRequest("policy"), ct).ConfigureAwait(false)).Task!.Id;
+
+                        foreach (string url in new[] { "http://127.0.0.1:9/hook", "http://localhost/hook", "http://api.localhost/hook", "http://10.1.2.3/hook", "http://172.16.0.1/hook", "http://192.168.1.1/hook", "http://169.254.169.254/latest", "http://[::1]/hook", "http://[fd00::1]/hook", "http://0.0.0.0/hook", "ftp://example.com/hook", "https://user:pw@example.com/hook", "not a url" })
+                        {
+                            A2AProtocolException? error = await CaptureAsync(() => client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest { TaskId = taskId, Config = new PushNotificationConfig { Url = url } }, ct)).ConfigureAwait(false);
+                            TestAssert.Equal(A2AErrorCode.InvalidParams, error?.ErrorCode, $"'{url}' is rejected.");
+                        }
+
+                        TaskPushNotificationConfig allowed = await client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest { TaskId = taskId, Config = new PushNotificationConfig { Url = "https://example.com/hook" } }, ct).ConfigureAwait(false);
+                        TestAssert.Equal("https://example.com/hook", allowed.PushNotificationConfig.Url, "A public URL is accepted.");
+
+                        SendMessageRequest local = CreateMessageRequest("local");
+                        local.Configuration = new SendMessageConfiguration { PushNotificationConfig = new PushNotificationConfig { Url = "http://127.0.0.1/hook" } };
+                        A2AProtocolException? sendError = await CaptureAsync(() => client.SendMessageAsync(local, ct)).ConfigureAwait(false);
+                        TestAssert.Equal(A2AErrorCode.InvalidParams, sendError?.ErrorCode, "SendMessage rejects a local webhook too.");
+                    }),
+
+                    Case(suiteId, "PushConfigErrorsFollowSpec", "Push config operations on a missing task return TaskNotFound, a missing config names the config, and delete is idempotent", async ct =>
+                    {
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+                        string taskId = (await client.SendMessageAsync(CreateMessageRequest("errors"), ct).ConfigureAwait(false)).Task!.Id;
+
+                        A2AProtocolException? create = await CaptureAsync(() => client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest { TaskId = "no-such-task", Config = new PushNotificationConfig { Url = "https://example.com/hook" } }, ct)).ConfigureAwait(false);
+                        A2AProtocolException? list = await CaptureAsync(() => client.ListTaskPushNotificationConfigAsync(new ListTaskPushNotificationConfigRequest { TaskId = "no-such-task" }, ct)).ConfigureAwait(false);
+                        A2AProtocolException? delete = await CaptureAsync(async () => { await client.DeleteTaskPushNotificationConfigAsync(new DeleteTaskPushNotificationConfigRequest { TaskId = "no-such-task", ConfigId = "x" }, ct).ConfigureAwait(false); return true; }).ConfigureAwait(false);
+                        A2AProtocolException? get = await CaptureAsync(() => client.GetTaskPushNotificationConfigAsync(new GetTaskPushNotificationConfigRequest { TaskId = taskId, ConfigId = "missing-config" }, ct)).ConfigureAwait(false);
+
+                        TestAssert.Equal(A2AErrorCode.TaskNotFound, create?.ErrorCode, "Create on a missing task is TaskNotFound.");
+                        TestAssert.Equal(A2AErrorCode.TaskNotFound, list?.ErrorCode, "List on a missing task is TaskNotFound.");
+                        TestAssert.Equal(A2AErrorCode.TaskNotFound, delete?.ErrorCode, "Delete on a missing task is TaskNotFound.");
+                        TestAssert.Equal(A2AErrorCode.TaskNotFound, get?.ErrorCode, "A missing config is the spec's not-found error.");
+                        TestAssert.True(get!.Message.Contains("missing-config"), $"The error names the missing configuration: {get.Message}");
+
+                        await client.DeleteTaskPushNotificationConfigAsync(new DeleteTaskPushNotificationConfigRequest { TaskId = taskId, ConfigId = "never-created" }, ct).ConfigureAwait(false);
+                    }),
+
+                    Case(suiteId, "PushConfigRequiresCapability", "A push config in SendMessage is rejected with PushNotificationNotSupported when the Agent Card does not advertise push notifications", async ct =>
+                    {
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, null, server => server.AgentCard.Capabilities.PushNotifications = false).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+                        SendMessageRequest request = CreateMessageRequest("no push");
+                        request.Configuration = new SendMessageConfiguration { PushNotificationConfig = new PushNotificationConfig { Url = "https://example.com/hook" } };
+
+                        A2AProtocolException? error = await CaptureAsync(() => client.SendMessageAsync(request, ct)).ConfigureAwait(false);
+                        TestAssert.Equal(A2AErrorCode.PushNotificationNotSupported, error?.ErrorCode);
+                    }),
+
+                    Case(suiteId, "PushSettingsValidateRanges", "PushNotificationTimeoutMs and PushNotificationMaxAttempts reject out-of-range values", ct =>
+                    {
+                        using A2AHttpServer server = new A2AHttpServer("localhost", 1, CreateCard("http://localhost/a2a"));
+                        TestAssert.Equal(10000, server.PushNotificationTimeoutMs, "The default timeout is 10 seconds.");
+                        TestAssert.Equal(3, server.PushNotificationMaxAttempts, "The default is three attempts.");
+                        TestAssert.Throws<ArgumentOutOfRangeException>(() => server.PushNotificationTimeoutMs = 999, "Below the minimum timeout.");
+                        TestAssert.Throws<ArgumentOutOfRangeException>(() => server.PushNotificationTimeoutMs = 300001, "Above the maximum timeout.");
+                        TestAssert.Throws<ArgumentOutOfRangeException>(() => server.PushNotificationMaxAttempts = 0, "Below the minimum attempts.");
+                        TestAssert.Throws<ArgumentOutOfRangeException>(() => server.PushNotificationMaxAttempts = 11, "Above the maximum attempts.");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "HttpServerRestartsAfterStop", "A2AHttpServer can be started again after Stop, and a disposed server cannot be started", async ct =>
+                    {
+                        int port = TestPorts.GetFreePort();
+                        A2AHttpServer server = new A2AHttpServer("localhost", port, CreateCard($"http://localhost:{port}/a2a"), new EchoAgent());
+                        using HttpClient http = new HttpClient();
+
+                        await server.StartAsync(ct).ConfigureAwait(false);
+                        using (HttpResponseMessage first = await http.GetAsync($"http://localhost:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false))
+                            TestAssert.Equal(HttpStatusCode.OK, first.StatusCode, "The first start serves requests.");
+                        server.Stop();
+                        await server.StartAsync(ct).ConfigureAwait(false);
+                        using (HttpResponseMessage second = await http.GetAsync($"http://localhost:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false))
+                            TestAssert.Equal(HttpStatusCode.OK, second.StatusCode, "The restarted server serves requests.");
+                        await TestAssert.ThrowsAsync<InvalidOperationException>(() => server.StartAsync(ct), "Starting a running server fails.").ConfigureAwait(false);
+                        server.Dispose();
+                        await TestAssert.ThrowsAsync<ObjectDisposedException>(() => server.StartAsync(ct), "A disposed server cannot start.").ConfigureAwait(false);
+                    }),
+
+                    Case(suiteId, "GrpcServerRestartsAfterStop", "A2AGrpcServer can be started again after Stop", async ct =>
+                    {
+                        int port = TestPorts.GetFreePort();
+                        A2AGrpcServer server = new A2AGrpcServer("localhost", port, CreateCard($"http://localhost:{port}"), new EchoAgent());
+                        using HttpClient http = new HttpClient();
+
+                        await server.StartAsync(ct).ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.OK, await GetStatusWithRetryAsync(http, $"http://localhost:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false), "The first start serves requests.");
+                        server.Stop();
+                        await server.StartAsync(ct).ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.OK, await GetStatusWithRetryAsync(http, $"http://localhost:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false), "The restarted server serves requests.");
+                        server.Dispose();
+                        await TestAssert.ThrowsAsync<ObjectDisposedException>(() => server.StartAsync(ct), "A disposed server cannot start.").ConfigureAwait(false);
+                    }),
+
+                    Case(suiteId, "GrpcLocalhostListensOnBothLoopbackAddresses", "A2AGrpcServer bound to localhost listens on 127.0.0.1 and ::1, so clients that try ::1 first connect without a fallback delay; an explicit 127.0.0.1 binds IPv4 only", async ct =>
+                    {
+                        using HttpClient http = new HttpClient();
+                        int port = TestPorts.GetFreePort();
+                        using A2AGrpcServer server = new A2AGrpcServer("localhost", port, CreateCard($"http://localhost:{port}"), new EchoAgent());
+                        await server.StartAsync(ct).ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.OK, await GetStatusWithRetryAsync(http, $"http://127.0.0.1:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false), "IPv4 loopback is served.");
+
+                        if (Socket.OSSupportsIPv6)
+                        {
+                            TestAssert.True(ListenerAddresses(port).Contains(IPAddress.IPv6Loopback), "An IPv6 loopback listener is started.");
+                            Stopwatch watch = Stopwatch.StartNew();
+                            using HttpResponseMessage viaIpv6 = await http.GetAsync($"http://[::1]:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false);
+                            using HttpClient fresh = new HttpClient();
+                            using HttpResponseMessage viaName = await fresh.GetAsync($"http://localhost:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false);
+                            TestAssert.Equal(HttpStatusCode.OK, viaIpv6.StatusCode, "IPv6 loopback is served.");
+                            TestAssert.Equal(HttpStatusCode.OK, viaName.StatusCode, "localhost is served.");
+                            TestAssert.True(watch.ElapsedMilliseconds < 1500, $"No refused-IPv6 fallback delay ({watch.ElapsedMilliseconds} ms).");
+                        }
+
+                        int ipv4Port = TestPorts.GetFreePort();
+                        using A2AGrpcServer ipv4Only = new A2AGrpcServer("127.0.0.1", ipv4Port, CreateCard($"http://127.0.0.1:{ipv4Port}"), new EchoAgent());
+                        await ipv4Only.StartAsync(ct).ConfigureAwait(false);
+                        List<IPAddress> ipv4Addresses = ListenerAddresses(ipv4Port);
+                        TestAssert.True(ipv4Addresses.Contains(IPAddress.Loopback) && !ipv4Addresses.Contains(IPAddress.IPv6Loopback), "An explicit IPv4 address gets no IPv6 listener.");
+                    }),
+
+                    Case(suiteId, "GrpcStopReleasesEveryListener", "A2AGrpcServer.Stop, including a stop right after start and a cancelled start token, closes every listening socket so the port can be reused", async ct =>
+                    {
+                        int port = TestPorts.GetFreePort();
+                        using A2AGrpcServer server = new A2AGrpcServer("localhost", port, CreateCard($"http://localhost:{port}"), new EchoAgent());
+                        for (int i = 0; i < 3; i++)
+                        {
+                            await server.StartAsync(ct).ConfigureAwait(false);
+                            server.Stop();
+                            TestAssert.Equal(0, ListenerAddresses(port).Count, $"Stop immediately after start releases the port (iteration {i}).");
+                        }
+
+                        using (CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                        {
+                            await server.StartAsync(cancel.Token).ConfigureAwait(false);
+                            TestAssert.True(ListenerAddresses(port).Count > 0, "The server listens.");
+                            cancel.Cancel();
+                            TestAssert.Equal(0, ListenerAddresses(port).Count, "Cancelling the start token stops the server and releases the port.");
+                        }
+
+                        using (CancellationTokenSource cancelled = new CancellationTokenSource())
+                        {
+                            cancelled.Cancel();
+                            await TestAssert.ThrowsAsync<OperationCanceledException>(() => server.StartAsync(cancelled.Token), "An already-cancelled token does not start the server.").ConfigureAwait(false);
+                        }
+
+                        await server.StartAsync(ct).ConfigureAwait(false);
+                        using HttpClient http = new HttpClient();
+                        TestAssert.Equal(HttpStatusCode.OK, await GetStatusWithRetryAsync(http, $"http://localhost:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false), "The server restarts on the same port.");
+                        server.Stop();
+                    }),
+
+                    Case(suiteId, "GrpcLocalhostStartsWhenIpv6PortIsTaken", "When ::1 is unavailable on the port, A2AGrpcServer still starts on 127.0.0.1 and logs that the IPv6 listener was skipped", async ct =>
+                    {
+                        if (!Socket.OSSupportsIPv6) return;
+
+                        int port = TestPorts.GetFreePort();
+                        TcpListener blocker = new TcpListener(IPAddress.IPv6Loopback, port);
+                        blocker.Start();
+                        try
+                        {
+                            List<string> logs = new List<string>();
+                            using A2AGrpcServer server = new A2AGrpcServer("localhost", port, CreateCard($"http://localhost:{port}"), new EchoAgent());
+                            server.Log += (sender, message) =>
+                            {
+                                lock (logs) logs.Add(message);
+                            };
+                            await server.StartAsync(ct).ConfigureAwait(false);
+
+                            using HttpClient http = new HttpClient();
+                            TestAssert.Equal(HttpStatusCode.OK, await GetStatusWithRetryAsync(http, $"http://127.0.0.1:{port}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false), "IPv4 still serves.");
+                            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+                            while (DateTime.UtcNow < deadline && !Snapshot(logs).Any(message => message.Contains("IPv6 listener"))) await Task.Delay(20, ct).ConfigureAwait(false);
+                            TestAssert.True(Snapshot(logs).Any(message => message.Contains("IPv6 listener")), "The skipped IPv6 listener is logged.");
+                            server.Stop();
+                            TestAssert.True(ListenerAddresses(port).All(address => address.Equals(IPAddress.IPv6Loopback)), "Only the unrelated IPv6 listener remains after Stop.");
+                        }
+                        finally
+                        {
+                            blocker.Stop();
+                        }
+                    }),
+
+                    Case(suiteId, "GrpcExtendedCardRequiresAuthentication", "On A2AGrpcServer only the public card skips authentication; the extended card GET needs credentials and a failure carries WWW-Authenticate", async ct =>
+                    {
+                        await using A2AGrpcTestFixture fixture = await A2AGrpcTestFixture.StartAsync(ct, null, false, server =>
+                        {
+                            server.AuthenticationHandler = context => Task.FromResult(context.Request.RetrieveHeaderValue("Authorization") == "Bearer ok"
+                                ? new AuthenticationResult { IsAuthenticated = true, Principal = "ok" }
+                                : AuthenticationResult.BearerChallenge(null, "invalid_token", null, "denied"));
+                        }).ConfigureAwait(false);
+                        using HttpClient http = new HttpClient();
+
+                        using HttpResponseMessage publicCard = await http.GetAsync($"{fixture.BaseUrl}{A2AProtocol.AgentCardPath}", ct).ConfigureAwait(false);
+                        using HttpResponseMessage anonymous = await http.GetAsync($"{fixture.BaseUrl}{A2AProtocol.ExtendedAgentCardPath}", ct).ConfigureAwait(false);
+                        using HttpRequestMessage authorized = new HttpRequestMessage(HttpMethod.Get, $"{fixture.BaseUrl}{A2AProtocol.ExtendedAgentCardPath}");
+                        authorized.Headers.TryAddWithoutValidation("Authorization", "Bearer ok");
+                        using HttpResponseMessage withCredentials = await http.SendAsync(authorized, ct).ConfigureAwait(false);
+
+                        TestAssert.Equal(HttpStatusCode.OK, publicCard.StatusCode, "The public card needs no credentials.");
+                        TestAssert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode, "The extended card needs credentials.");
+                        TestAssert.Equal("Bearer error=\"invalid_token\"", anonymous.Headers.WwwAuthenticate.ToString(), "The failure carries the result's headers.");
+                        TestAssert.Equal(HttpStatusCode.OK, withCredentials.StatusCode, "Authenticated callers get the extended card.");
+                    }),
+
+                    Case(suiteId, "GrpcServerValidatesOrigin", "A2AGrpcServer rejects a disallowed Origin with 403, allows loopback origins, and defaults to loopback-only clients for localhost", async ct =>
+                    {
+                        await using A2AGrpcTestFixture fixture = await A2AGrpcTestFixture.StartAsync(ct).ConfigureAwait(false);
+                        using HttpClient http = new HttpClient();
+
+                        using HttpRequestMessage evil = new HttpRequestMessage(HttpMethod.Get, $"{fixture.BaseUrl}{A2AProtocol.AgentCardPath}");
+                        evil.Headers.TryAddWithoutValidation("Origin", "https://evil.example");
+                        using HttpResponseMessage evilResponse = await http.SendAsync(evil, ct).ConfigureAwait(false);
+                        using HttpRequestMessage local = new HttpRequestMessage(HttpMethod.Get, $"{fixture.BaseUrl}{A2AProtocol.AgentCardPath}");
+                        local.Headers.TryAddWithoutValidation("Origin", "http://localhost:3000");
+                        using HttpResponseMessage localResponse = await http.SendAsync(local, ct).ConfigureAwait(false);
+
+                        TestAssert.Equal(HttpStatusCode.Forbidden, evilResponse.StatusCode);
+                        TestAssert.Equal(HttpStatusCode.OK, localResponse.StatusCode);
+                        using A2AGrpcServer loopbackDefault = new A2AGrpcServer("localhost", 1, CreateCard("http://localhost"));
+                        using A2AGrpcServer allInterfaces = new A2AGrpcServer("*", 1, CreateCard("http://localhost"));
+                        TestAssert.True(loopbackDefault.RestrictToLoopbackClients && !allInterfaces.RestrictToLoopbackClients, "The loopback default follows the host name.");
+                    }),
+
+                    Case(suiteId, "GrpcHidesInternalErrorDetails", "A handler exception reaches a gRPC client as a generic error without its message", async ct =>
+                    {
+                        await using A2AGrpcTestFixture fixture = await A2AGrpcTestFixture.StartAsync(ct, new ThrowingAgent()).ConfigureAwait(false);
+                        using A2AGrpcClient client = new A2AGrpcClient(fixture.BaseUrl, fixture.Client);
+
+                        A2AProtocolException? error = await CaptureAsync(() => client.SendMessageAsync(CreateMessageRequest("boom"), ct)).ConfigureAwait(false);
+                        TestAssert.NotNull(error, "The failure surfaces as a protocol exception.");
+                        TestAssert.False(error!.Message.Contains("db-password"), $"Internal details are not sent: {error.Message}");
+                        TestAssert.True(error.Message.Contains("Internal error"), $"The client sees a generic message: {error.Message}");
+
+                        A2AProtocolException? notFound = await CaptureAsync(() => client.GetTaskAsync(new GetTaskRequest { Id = "missing-task" }, ct)).ConfigureAwait(false);
+                        TestAssert.True(notFound!.Message.Contains("missing-task"), "Protocol errors keep their own message.");
+                    }),
+
+                    Case(suiteId, "JsonRpcAndRestHideInternalErrorDetails", "A handler exception reaches JSON-RPC (HTTP 200) and HTTP+JSON (HTTP 500) callers as a generic internal error without its message", async ct =>
+                    {
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct, new ThrowingAgent()).ConfigureAwait(false);
+                        using A2AClient rpcClient = new A2AClient(fixture.EndpointUrl, fixture.Client);
+                        using A2AHttpJsonClient restClient = new A2AHttpJsonClient(fixture.BaseUrl, fixture.Client);
+
+                        A2AProtocolException? rpcError = await CaptureAsync(() => rpcClient.SendMessageAsync(CreateMessageRequest("boom"), ct)).ConfigureAwait(false);
+                        A2AProtocolException? restError = await CaptureAsync(() => restClient.SendMessageAsync(CreateMessageRequest("boom"), ct)).ConfigureAwait(false);
+
+                        string rpcBody = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"" + A2AProtocol.SendMessage + "\",\"params\":{\"message\":{\"messageId\":\"m\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"boom\"}]}}}";
+                        using HttpResponseMessage rawRpc = await fixture.Client.PostAsync(fixture.EndpointUrl, new StringContent(rpcBody, Encoding.UTF8, "application/json"), ct).ConfigureAwait(false);
+                        string rawRpcBody = await rawRpc.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        using HttpResponseMessage rawRest = await fixture.Client.PostAsync($"{fixture.BaseUrl}/message:send", new StringContent("{\"message\":{\"messageId\":\"m2\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"boom\"}]}}", Encoding.UTF8, "application/json"), ct).ConfigureAwait(false);
+                        string rawRestBody = await rawRest.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+                        TestAssert.Equal(A2AErrorCode.InternalError, rpcError?.ErrorCode, "JSON-RPC callers get InternalError.");
+                        TestAssert.Equal(A2AErrorCode.InternalError, restError?.ErrorCode, "HTTP+JSON callers get InternalError.");
+                        TestAssert.Equal(System.Net.HttpStatusCode.OK, rawRpc.StatusCode, "JSON-RPC errors use HTTP 200.");
+                        TestAssert.Equal(System.Net.HttpStatusCode.InternalServerError, rawRest.StatusCode, "HTTP+JSON internal errors use HTTP 500.");
+                        foreach (string body in new[] { rawRpcBody, rawRestBody, rpcError!.Message, restError!.Message })
+                        {
+                            TestAssert.False(body.Contains("db-password") || body.Contains("hunter2"), $"Internal details are not sent: {body}");
+                        }
+                    }),
+
+                    Case(suiteId, "PushConfigJsonMatchesV1AndReadsLegacy", "Push config JSON is the flat A2A v1.0 shape on output, and both flat and legacy nested shapes are read", ct =>
+                    {
+                        TaskPushNotificationConfig config = new TaskPushNotificationConfig
+                        {
+                            Id = "c1", TaskId = "t1",
+                            PushNotificationConfig = new PushNotificationConfig { Url = "https://example.com/hook", Token = "tok", Authentication = new AuthenticationInfo { Scheme = "Bearer", Credentials = "x" } }
+                        };
+                        string written = JsonSerializer.Serialize(config, A2AJson.DefaultOptions);
+                        JsonProbe flat = JsonProbe.Parse(written);
+                        TestAssert.Equal("https://example.com/hook", flat.Get("url").String(), $"url is top-level: {written}");
+                        TestAssert.Equal("c1", flat.Get("id").String());
+                        TestAssert.Equal("t1", flat.Get("taskId").String());
+                        TestAssert.Equal("Bearer", flat.Get("authentication").Get("scheme").String());
+                        TestAssert.False(flat.Has("pushNotificationConfig"), "No nested object is written.");
+
+                        TaskPushNotificationConfig? legacy = JsonSerializer.Deserialize<TaskPushNotificationConfig>("{\"id\":\"c2\",\"taskId\":\"t2\",\"pushNotificationConfig\":{\"url\":\"https://old.example/hook\",\"token\":\"t\"}}", A2AJson.DefaultOptions);
+                        TestAssert.Equal("https://old.example/hook", legacy!.PushNotificationConfig.Url, "The legacy nested shape is read.");
+                        TaskPushNotificationConfig? roundTrip = JsonSerializer.Deserialize<TaskPushNotificationConfig>(written, A2AJson.DefaultOptions);
+                        TestAssert.Equal("x", roundTrip!.PushNotificationConfig.Authentication!.Credentials, "The flat shape round-trips.");
+
+                        CreateTaskPushNotificationConfigRequest? createFlat = JsonSerializer.Deserialize<CreateTaskPushNotificationConfigRequest>("{\"taskId\":\"t\",\"id\":\"c\",\"url\":\"https://a/h\"}", A2AJson.DefaultOptions);
+                        CreateTaskPushNotificationConfigRequest? createLegacy = JsonSerializer.Deserialize<CreateTaskPushNotificationConfigRequest>("{\"taskId\":\"t\",\"configId\":\"c\",\"config\":{\"url\":\"https://a/h\"}}", A2AJson.DefaultOptions);
+                        TestAssert.True(createFlat!.ConfigId == "c" && createFlat.Config.Url == "https://a/h" && createLegacy!.ConfigId == "c" && createLegacy.Config.Url == "https://a/h", "Create requests read both shapes.");
+                        TestAssert.True(JsonSerializer.Serialize(new CreateTaskPushNotificationConfigRequest { TaskId = "t", ConfigId = "c", Config = new PushNotificationConfig { Url = "https://a/h" } }, A2AJson.DefaultOptions).Contains("\"url\":\"https://a/h\""), "Create requests are written flat.");
+
+                        GetTaskPushNotificationConfigRequest? getNew = JsonSerializer.Deserialize<GetTaskPushNotificationConfigRequest>("{\"taskId\":\"t\",\"id\":\"c\"}", A2AJson.DefaultOptions);
+                        DeleteTaskPushNotificationConfigRequest? deleteOld = JsonSerializer.Deserialize<DeleteTaskPushNotificationConfigRequest>("{\"taskId\":\"t\",\"configId\":\"c\"}", A2AJson.DefaultOptions);
+                        string getWritten = JsonSerializer.Serialize(new GetTaskPushNotificationConfigRequest { TaskId = "t", ConfigId = "c" }, A2AJson.DefaultOptions);
+                        TestAssert.True(getNew!.ConfigId == "c" && deleteOld!.ConfigId == "c", "id and the legacy configId are both read.");
+                        TestAssert.True(getWritten.Contains("\"id\":\"c\"") && !getWritten.Contains("configId"), $"id is written: {getWritten}");
+                        return Task.CompletedTask;
+                    }),
+
+                    Case(suiteId, "ListPushConfigsAcceptsBothMethodNames", "JSON-RPC accepts ListTaskPushNotificationConfigs (v1.0) and the legacy singular name; A2AClient sends the v1.0 name", async ct =>
+                    {
+                        await using A2ATestFixture fixture = await A2ATestFixture.StartAsync(ct).ConfigureAwait(false);
+                        using A2AClient client = new A2AClient(fixture.EndpointUrl, fixture.Client);
+                        string taskId = (await client.SendMessageAsync(CreateMessageRequest("names"), ct).ConfigureAwait(false)).Task!.Id;
+                        await client.CreateTaskPushNotificationConfigAsync(new CreateTaskPushNotificationConfigRequest { TaskId = taskId, ConfigId = "c", Config = new PushNotificationConfig { Url = "https://example.com/hook" } }, ct).ConfigureAwait(false);
+
+                        foreach (string method in new[] { "ListTaskPushNotificationConfigs", "ListTaskPushNotificationConfig" })
+                        {
+                            string body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" + method + "\",\"params\":{\"taskId\":\"" + taskId + "\"}}";
+                            using HttpResponseMessage response = await fixture.Client.PostAsync(fixture.EndpointUrl, new StringContent(body, Encoding.UTF8, "application/json"), ct).ConfigureAwait(false);
+                            JsonProbe root = JsonProbe.Parse(await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+                            TestAssert.Equal(1, root.Get("result").Get("configs").Length, $"{method} lists the config.");
+                        }
+
+                        TestAssert.Equal("ListTaskPushNotificationConfigs", A2AProtocol.ListTaskPushNotificationConfig, "The client constant is the v1.0 name.");
+                        TestAssert.Equal(1, (await client.ListTaskPushNotificationConfigAsync(new ListTaskPushNotificationConfigRequest { TaskId = taskId }, ct).ConfigureAwait(false)).Configs.Count, "A2AClient lists through the v1.0 name.");
+                    }),
+
+                    Case(suiteId, "GrpcServerDeliversPushWithItsSettings", "A2AGrpcServer exposes the push settings and delivers push notifications for gRPC-created tasks", async ct =>
+                    {
+                        using WebhookReceiver receiver = new WebhookReceiver();
+                        await using A2AGrpcTestFixture fixture = await A2AGrpcTestFixture.StartAsync(ct, null, false, server =>
+                        {
+                            server.PushNotificationUrlValidator = uri => uri.IsLoopback;
+                            server.PushNotificationTimeoutMs = 5000;
+                            server.PushNotificationMaxAttempts = 2;
+                        }).ConfigureAwait(false);
+                        using A2AGrpcClient client = new A2AGrpcClient(fixture.BaseUrl, fixture.Client);
+
+                        SendMessageRequest request = CreateMessageRequest("grpc push");
+                        request.Configuration = new SendMessageConfiguration { PushNotificationConfig = new PushNotificationConfig { Url = receiver.Url, Token = "g" } };
+                        await client.SendMessageAsync(request, ct).ConfigureAwait(false);
+
+                        TestAssert.True(await receiver.WaitForAsync(1, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false), "The gRPC-created task's events reach the webhook.");
+                        TestAssert.Equal("g", receiver.Requests.First().Headers[A2AProtocol.NotificationTokenHeader]);
+                        using A2AGrpcServer settings = new A2AGrpcServer("localhost", 1, CreateCard("http://localhost"));
+                        TestAssert.Equal(10000, settings.PushNotificationTimeoutMs, "The default timeout passes through.");
+                        TestAssert.Throws<ArgumentOutOfRangeException>(() => settings.PushNotificationMaxAttempts = 0, "Ranges are validated.");
+                    }),
+
+                    Case(suiteId, "TaskStoreHandlesNulls", "InMemoryA2ATaskStore rejects a null task with ArgumentNullException and treats a null list request as empty", async ct =>
+                    {
+                        InMemoryA2ATaskStore store = new InMemoryA2ATaskStore();
+                        await TestAssert.ThrowsAsync<ArgumentNullException>(() => store.SaveTaskAsync("t", null!, ct), "A null task is rejected.").ConfigureAwait(false);
+                        await TestAssert.ThrowsAsync<ArgumentNullException>(() => store.SaveTaskAsync(null!, new AgentTask(), ct), "A null ID is rejected.").ConfigureAwait(false);
+                        await store.SaveTaskAsync("t", new AgentTask { Id = "t" }, ct).ConfigureAwait(false);
+                        ListTasksResponse all = await store.ListTasksAsync(null!, ct).ConfigureAwait(false);
+                        TestAssert.Equal(1, all.Tasks.Count, "A null request lists everything.");
+                    }),
+                });
+        }
+
+        private static SendMessageRequest ContinueTask(string taskId, string text)
+        {
+            SendMessageRequest request = CreateMessageRequest(text);
+            request.Message.TaskId = taskId;
+            return request;
+        }
+
+        private static async Task<A2AProtocolException?> CaptureAsync<T>(Func<Task<T>> action)
+        {
+            try
+            {
+                await action().ConfigureAwait(false);
+                return null;
+            }
+            catch (A2AProtocolException ex)
+            {
+                return ex;
+            }
+        }
+
+        private static async Task<HttpStatusCode> GetStatusWithRetryAsync(HttpClient http, string url, CancellationToken token)
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            while (true)
+            {
+                try
+                {
+                    using HttpResponseMessage response = await http.GetAsync(url, token).ConfigureAwait(false);
+                    return response.StatusCode;
+                }
+                catch (HttpRequestException) when (DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(50, token).ConfigureAwait(false);
+                }
+            }
+        }
+
+        private sealed class StepAgent : IA2AAgentHandler
+        {
+            public async Task ExecuteAsync(A2ARequestContext context, A2AAgentEventQueue eventQueue, CancellationToken token)
+            {
+                A2ATaskUpdater updater = new A2ATaskUpdater(eventQueue, context.TaskId, context.ContextId);
+                if (!context.IsContinuation)
+                {
+                    await updater.SubmitAsync(token: token).ConfigureAwait(false);
+                }
+
+                await updater.StartAsync(token: token).ConfigureAwait(false);
+            }
+        }
+
+        private sealed class ThrowingAgent : IA2AAgentHandler
+        {
+            public Task ExecuteAsync(A2ARequestContext context, A2AAgentEventQueue eventQueue, CancellationToken token)
+            {
+                throw new InvalidOperationException("connection string db-password=hunter2 is wrong");
+            }
         }
 
         private static TestCaseDescriptor Case(string suiteId, string caseId, string displayName, Func<CancellationToken, Task> executeAsync)
@@ -719,6 +1233,22 @@ namespace Test.Shared
                 }
 
                 throw new TimeoutException("A2A test server did not become ready.");
+            }
+        }
+
+        private static List<IPAddress> ListenerAddresses(int port)
+        {
+            return IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
+                .Where(endpoint => endpoint.Port == port)
+                .Select(endpoint => endpoint.Address)
+                .ToList();
+        }
+
+        private static List<string> Snapshot(List<string> items)
+        {
+            lock (items)
+            {
+                return new List<string>(items);
             }
         }
 

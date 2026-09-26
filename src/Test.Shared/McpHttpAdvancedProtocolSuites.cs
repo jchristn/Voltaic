@@ -102,12 +102,19 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
                     }),
 
-                    Case(suiteId, "PostRequiresAcceptHeaders", "POST /mcp requires JSON and SSE Accept values", async ct =>
+                    Case(suiteId, "PostRequiresAcceptHeaders", "POST /mcp rejects an Accept header that excludes JSON or SSE, and treats a missing Accept header as */*", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
-                        RpcResult response = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, null, ct, addMcpAcceptHeaders: false).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
+                        RpcResult missing = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, sessionId, ct, addMcpAcceptHeaders: false).ConfigureAwait(false);
+                        RpcResult wrong = await McpHttpTestRequests.SendAsync(fixture, McpHttpTestRequests.BuildBody("ping", 2, null), new Dictionary<string, string> { { "Accept", "text/html" }, { McpProtocol.SessionIdHeader, sessionId! } }, false, ct).ConfigureAwait(false);
+                        RpcResult jsonOnly = await McpHttpTestRequests.SendAsync(fixture, McpHttpTestRequests.BuildBody("ping", 3, null), new Dictionary<string, string> { { "Accept", "application/json" }, { McpProtocol.SessionIdHeader, sessionId! } }, false, ct).ConfigureAwait(false);
+                        RpcResult ranges = await McpHttpTestRequests.SendAsync(fixture, McpHttpTestRequests.BuildBody("ping", 4, null), new Dictionary<string, string> { { "Accept", "application/*, text/*" }, { McpProtocol.SessionIdHeader, sessionId! } }, false, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.NotAcceptable, response.StatusCode);
+                        TestAssert.Equal(HttpStatusCode.OK, missing.StatusCode, "A missing Accept header means any type.");
+                        TestAssert.Equal(HttpStatusCode.NotAcceptable, wrong.StatusCode, "An Accept header that excludes JSON is 406.");
+                        TestAssert.Equal(HttpStatusCode.NotAcceptable, jsonOnly.StatusCode, "An Accept header that excludes SSE is 406.");
+                        TestAssert.Equal(HttpStatusCode.OK, ranges.StatusCode, "Media ranges such as application/* match.");
                     }),
 
                     Case(suiteId, "InvalidProtocolHeader", "Invalid MCP-Protocol-Version returns 400", async ct =>
@@ -187,6 +194,23 @@ namespace Test.Shared
                         TestAssert.Equal("denied", body);
                     }),
 
+                    Case(suiteId, "AuthHandlerMayReadBody", "An AuthenticationHandler that reads the request body does not break dispatch", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
+                        {
+                            server.AuthenticationHandler = async request =>
+                            {
+                                using StreamReader reader = new StreamReader(request.InputStream);
+                                await reader.ReadToEndAsync().ConfigureAwait(false);
+                                return new AuthenticationResult { IsAuthenticated = true, Principal = "reader" };
+                            };
+                        }).ConfigureAwait(false);
+
+                        RpcResult response = await fixture.PostMcpAsync("tools/list", new { }, 1, null, ct).ConfigureAwait(false);
+                        TestAssert.Equal(HttpStatusCode.OK, response.StatusCode, $"Body: {response.Body}");
+                        TestAssert.True(response.Result.Has("tools"), "The request was dispatched with its body.");
+                    }),
+
                     Case(suiteId, "AuthSuccessAllowsRequest", "AuthenticationHandler can allow requests", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
@@ -200,22 +224,23 @@ namespace Test.Shared
                         TestAssert.True(response.Result.IsObject && response.Result.Length == 0, "Protocol ping must return an empty object.");
                     }),
 
-                    Case(suiteId, "PingBypassesAuthFailure", "Ping bypasses authentication for connectivity checks", async ct =>
+                    Case(suiteId, "PingBypassesAuthFailure", "Ping requires authentication like every other request, on /mcp and /rpc, while the health check and preflight do not", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
                         {
-                            server.AuthenticationHandler = _ => Task.FromResult(new AuthenticationResult
-                            {
-                                IsAuthenticated = false,
-                                StatusCode = 401,
-                                ErrorMessage = "auth required"
-                            });
+                            server.AuthenticationHandler = _ => Task.FromResult(AuthenticationResult.BearerChallenge(null, "invalid_token", null, "auth required"));
                         }).ConfigureAwait(false);
 
-                        RpcResult response = await fixture.PostMcpAsync("ping", null, 1, null, ct).ConfigureAwait(false);
+                        RpcResult mcp = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, null, ct).ConfigureAwait(false);
+                        RpcResult rpc = await fixture.PostJsonRpcAsync("/rpc/", "ping", null, 2, null, ct).ConfigureAwait(false);
+                        using HttpResponseMessage health = await fixture.Client.GetAsync($"{fixture.BaseUrl}/", ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.OK, response.StatusCode);
-                        TestAssert.True(response.Result.IsObject && response.Result.Length == 0, "Protocol ping must return an empty object.");
+                        TestAssert.Equal(HttpStatusCode.Unauthorized, mcp.StatusCode, "An unauthenticated ping on /mcp gets 401.");
+                        TestAssert.Equal(HttpStatusCode.Unauthorized, rpc.StatusCode, "An unauthenticated ping on /rpc gets 401.");
+                        using HttpRequestMessage raw = CreateJsonRpcPost($"{fixture.BaseUrl}/mcp/", "ping", null, 3, null);
+                        using HttpResponseMessage challenged = await fixture.Client.SendAsync(raw, ct).ConfigureAwait(false);
+                        TestAssert.True(challenged.Headers.WwwAuthenticate.Count > 0, "The challenge is sent with the 401.");
+                        TestAssert.Equal(HttpStatusCode.OK, health.StatusCode, "The health check needs no credentials.");
                     }),
 
                     Case(suiteId, "RawSseReceivesQueuedNotification", "GET /mcp streams queued notifications over SSE", async ct =>
@@ -235,8 +260,13 @@ namespace Test.Shared
 
                         using Stream stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
                         using StreamReader reader = new StreamReader(stream);
-                        string? prelude = await ReadLineAsync(reader, timeout.Token).ConfigureAwait(false);
-                        TestAssert.Equal(": connected", prelude);
+                        string? primingId = await ReadLineAsync(reader, timeout.Token).ConfigureAwait(false);
+                        string? primingRetry = await ReadLineAsync(reader, timeout.Token).ConfigureAwait(false);
+                        string? primingData = await ReadLineAsync(reader, timeout.Token).ConfigureAwait(false);
+                        TestAssert.True(primingId != null && primingId.StartsWith("id: ", StringComparison.Ordinal) && primingId.EndsWith("-0", StringComparison.Ordinal), $"The stream starts with a priming event ID: {primingId}");
+                        TestAssert.Equal("retry: 1000", primingRetry, "The priming event carries the retry interval.");
+                        TestAssert.Equal("data:", primingData, "The priming event has an empty data field.");
+                        TestAssert.Equal("no", response.Headers.GetValues("X-Accel-Buffering").Single(), "Proxy buffering is disabled.");
 
                         bool queued = fixture.Server.SendNotificationToSession(session.SessionId!, "notifications/test", new { value = 7 });
                         TestAssert.True(queued, "Notification should be queued.");
@@ -317,16 +347,17 @@ namespace Test.Shared
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "requires-input", arguments = new { } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
-                        TestAssert.True(response.Error.Get("message").String()!.Contains("missing required property"), "Error should identify schema validation.");
+                        TestAssert.False(response.Root.Has("error"), "Input validation is a tool execution error, not a protocol error.");
+                        TestAssert.True(response.Result.Get("isError").Bool(), "The result has isError true.");
+                        TestAssert.True(response.Result.Get("content")[0].Get("text").String()!.Contains("missing required property"), "The text identifies the schema violation.");
                     }),
 
-                    Case(suiteId, "ToolsCallOutputSchemaValidation", "tools/call validates structured output schema", async ct =>
+                    Case(suiteId, "ToolsCallOutputSchemaValidation", "tools/call validates structured output schema and reports a violation as an internal (server) error", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "bad-output", arguments = new { } }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32602, response.Error.Get("code").Int());
+                        TestAssert.Equal(-32603, response.Error.Get("code").Int(), "Invalid output is the server's fault, not invalid params.");
                         TestAssert.True(response.Error.Get("message").String()!.Contains("structured output"), "Error should identify output validation.");
                     }),
 
@@ -383,12 +414,14 @@ namespace Test.Shared
                         TestAssert.True(response.Error.Get("message").String()!.Contains("was not found"), "Error should mention missing tool.");
                     }),
 
-                    Case(suiteId, "ToolsCallHandlerException", "tool handler exceptions map to internal errors", async ct =>
+                    Case(suiteId, "ToolsCallHandlerException", "tool handler exceptions become tool execution errors (isError) the model can read", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, ConfigureProtocolServer).ConfigureAwait(false);
                         RpcResult response = await fixture.PostMcpAsync("tools/call", new { name = "explode-tool" }, 1, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(-32603, response.Error.Get("code").Int());
+                        TestAssert.False(response.Root.Has("error"), $"A handler exception is not a protocol error. Body: {response.Body}");
+                        TestAssert.True(response.Result.Get("isError").Bool(), "The result is flagged isError.");
+                        TestAssert.Equal("Tool 'explode-tool' failed because of an internal error.", response.Result.Get("content")[0].Get("text").String(), "The exception message is not sent by default.");
                     }),
 
                     Case(suiteId, "DuplicateToolRegistrationReplacesExisting", "registering a tool with the same name replaces the previous definition", async ct =>

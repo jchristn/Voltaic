@@ -52,15 +52,16 @@ namespace Test.Shared
                         TestAssert.Equal(1, Volatile.Read(ref connected), "ClientConnected fires exactly once.");
                     }),
 
-                    Case(suiteId, "RejectedInitializeCreatesNoSession", "initialize with an unsupported version returns -32602 and creates no session on /mcp or /rpc", async ct =>
+                    Case(suiteId, "RejectedInitializeCreatesNoSession", "An initialize that fails with -32602 creates no session on /mcp or /rpc", async ct =>
                     {
                         int connected = 0;
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
                         {
                             server.ClientConnected += (_, _) => Interlocked.Increment(ref connected);
+                            server.RegisterMethod("initialize", new Func<RpcParameters?, object>(_ => throw McpProtocolException.InvalidParams("initialize rejected by the application")));
                         }).ConfigureAwait(false);
 
-                        object parameters = new { protocolVersion = "1999-01-01", capabilities = new { }, clientInfo = new { name = "t", version = "1" } };
+                        object parameters = new { protocolVersion = "2025-11-25", capabilities = new { }, clientInfo = new { name = "t", version = "1" } };
                         RpcResult mcp = await fixture.PostJsonRpcAsync("/mcp/", "initialize", parameters, 1, null, ct).ConfigureAwait(false);
                         RpcResult rpc = await fixture.PostJsonRpcAsync("/rpc/", "initialize", parameters, 2, null, ct).ConfigureAwait(false);
 
@@ -116,16 +117,22 @@ namespace Test.Shared
                         TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "No session is created.");
                     }),
 
-                    Case(suiteId, "SessionlessPingOnMcpIsAnsweredWithoutSession", "A sessionless ping on /mcp is answered as a connectivity check and creates no session", async ct =>
+                    Case(suiteId, "SessionlessPingOnMcpIsAnsweredWithoutSession", "A handshake-era ping on /mcp without MCP-Session-Id gets 400 like any request other than initialize; with a session, or as a stateless 2026-07-28 request, it is answered", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct).ConfigureAwait(false);
 
-                        RpcResult ping = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, null, ct).ConfigureAwait(false);
+                        RpcResult sessionless = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, null, ct).ConfigureAwait(false);
+                        string? sessionId = await fixture.InitializeSessionAsync(ct).ConfigureAwait(false);
+                        RpcResult withSession = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 2, sessionId, ct).ConfigureAwait(false);
+                        RpcResult stateless = await McpHttpTestRequests.SendStatelessAsync(fixture, "ping", 3, null, null, null, ct).ConfigureAwait(false);
 
-                        TestAssert.Equal(HttpStatusCode.OK, ping.StatusCode);
-                        TestAssert.True(ping.Result.IsObject && ping.Result.Length == 0, "ping returns {}.");
-                        TestAssert.True(ping.SessionId == null, "No session header is returned.");
-                        TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "No session is created.");
+                        TestAssert.Equal(HttpStatusCode.BadRequest, sessionless.StatusCode, $"Body: {sessionless.Body}");
+                        TestAssert.Equal(-32600, sessionless.Error.Get("code").Int(), "The error is SessionRequired.");
+                        TestAssert.True(sessionless.SessionId == null, "No session header is returned.");
+                        TestAssert.Equal(HttpStatusCode.OK, withSession.StatusCode, "A ping on a session is answered.");
+                        TestAssert.True(withSession.Result.IsObject && withSession.Result.Length == 0, "ping returns {}.");
+                        TestAssert.Equal(HttpStatusCode.OK, stateless.StatusCode, "The stateless revision has no sessions.");
+                        TestAssert.Equal(1, fixture.Server.GetActiveSessions().Count, "Only initialize created a session.");
                     }),
 
                     Case(suiteId, "UnknownSessionOnMcpReturns404AndIsNotAdopted", "A made-up MCP-Session-Id on /mcp returns 404 with -32001 and is never adopted", async ct =>
@@ -255,29 +262,35 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.NotFound, asMallory.StatusCode, "Another principal cannot adopt the session.");
                     }),
 
-                    Case(suiteId, "RelaxedModeIssuesSessionsForSuccessfulRequests", "With RequireInitializedSessions false, successful sessionless requests get a session, failed ones do not, and unknown IDs still get 404", async ct =>
+                    Case(suiteId, "RelaxedModeIssuesSessionsForSuccessfulRequests", "RequireInitializedSessions is obsolete: setting it false no longer issues sessions to requests other than initialize", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, server =>
                         {
+#pragma warning disable CS0618 // Verifies that the obsolete setting has no effect.
                             server.RequireInitializedSessions = false;
+#pragma warning restore CS0618
                         }).ConfigureAwait(false);
 
                         RpcResult ping = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 1, null, ct).ConfigureAwait(false);
-                        RpcResult failed = await fixture.PostJsonRpcAsync("/mcp/", "no/such/method", null, 2, null, ct).ConfigureAwait(false);
                         RpcResult rpcPing = await fixture.PostJsonRpcAsync("/rpc/", "ping", null, 3, null, ct).ConfigureAwait(false);
                         RpcResult unknown = await fixture.PostJsonRpcAsync("/mcp/", "ping", null, 4, "made-up", ct).ConfigureAwait(false);
 
-                        TestAssert.False(String.IsNullOrEmpty(ping.SessionId), "A successful sessionless ping on /mcp is issued a session.");
-                        TestAssert.True(failed.SessionId == null, "A failed request is not issued a session.");
-                        TestAssert.False(String.IsNullOrEmpty(rpcPing.SessionId), "A successful sessionless ping on /rpc is issued a session.");
+                        TestAssert.Equal(HttpStatusCode.BadRequest, ping.StatusCode, "A sessionless ping on /mcp is rejected.");
+                        TestAssert.True(ping.SessionId == null, "It is not issued a session.");
+                        TestAssert.Equal(HttpStatusCode.OK, rpcPing.StatusCode, "The Voltaic /rpc endpoint serves sessionless requests.");
+                        TestAssert.True(rpcPing.SessionId == null, "A sessionless /rpc request is not issued a session.");
                         TestAssert.Equal(HttpStatusCode.NotFound, unknown.StatusCode, "Unknown IDs are still rejected.");
-                        TestAssert.Equal(2, fixture.Server.GetActiveSessions().Count, "Only the two successful requests created sessions.");
+                        TestAssert.Equal(0, fixture.Server.GetActiveSessions().Count, "No session was created.");
                     }),
 
-                    Case(suiteId, "RequireInitializedSessionsDefaultsToTrue", "RequireInitializedSessions defaults to true", ct =>
+                    Case(suiteId, "RequireInitializedSessionsDefaultsToTrue", "RequireInitializedSessions always reads true, even after being set false", ct =>
                     {
                         using McpHttpServer server = new McpHttpServer("localhost", TestPorts.GetFreePort());
+#pragma warning disable CS0618 // Verifies the obsolete property.
                         TestAssert.True(server.RequireInitializedSessions, "Strict sessions are the default.");
+                        server.RequireInitializedSessions = false;
+                        TestAssert.True(server.RequireInitializedSessions, "Setting false has no effect.");
+#pragma warning restore CS0618
                         return Task.CompletedTask;
                     }),
 

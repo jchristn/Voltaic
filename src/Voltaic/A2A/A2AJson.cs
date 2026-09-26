@@ -1,4 +1,3 @@
-#pragma warning disable CS1591
 namespace Voltaic.A2A
 {
     using System;
@@ -13,7 +12,10 @@ namespace Voltaic.A2A
         private static readonly Lazy<JsonSerializerOptions> _DefaultOptions = new Lazy<JsonSerializerOptions>(CreateDefaultOptions);
 
         /// <summary>
-        /// Gets A2A JSON options using web naming, null omission, and A2A enum names.
+        /// Gets A2A JSON options using web naming, null omission, and A2A enum names. Never null. The same instance is
+        /// returned on every call and is shared by Voltaic's A2A clients and servers; treat it as read-only (it becomes
+        /// immutable after first use, and modifying it afterwards throws <see cref="InvalidOperationException"/>).
+        /// Thread-safe.
         /// </summary>
         public static JsonSerializerOptions DefaultOptions => _DefaultOptions.Value;
 

@@ -160,6 +160,8 @@ namespace Test.Shared
                             "Voltaic.Mcp.McpTcpServer",
                             "Voltaic.Mcp.McpTextContent",
                             "Voltaic.Mcp.McpTextResourceContents",
+                            "Voltaic.Mcp.McpToolCallContext",
+                            "Voltaic.Mcp.McpToolException",
                             "Voltaic.Mcp.McpToolCallResult",
                             "Voltaic.Mcp.McpProtocolEra",
                             "Voltaic.Mcp.McpProtocolVersionInfo",

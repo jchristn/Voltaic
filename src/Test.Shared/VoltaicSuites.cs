@@ -51,9 +51,14 @@ namespace Test.Shared
                 ClientConnectionAdvancedSuites.ComprehensiveQueueAndLifecycle(),
                 JsonRpcTcpIntegrationSuites.TcpClientServerProtocol(),
                 McpStdioIntegrationSuites.StdioMcpParity(),
+                McpStreamTransportStatelessSuites.StatelessOnStreams(),
+                McpClientServerRequestSuites.ServerRequests(),
+                McpHttpSseResumabilitySuites.Resumability(),
+                McpHeaderParameterSuites.HeaderParameters(),
                 McpTransportParitySuites.TcpMcpParity(),
                 McpTransportParitySuites.WebSocketMcpParity(),
                 A2AProtocolSuites.ProtocolAndTransports(),
+                A2AProtocolSuites.Hardening(),
                 A2ACompatibilitySuites.OfficialSdkOracle(),
             };
 

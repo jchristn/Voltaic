@@ -102,7 +102,7 @@ namespace Test.Shared
         /// </summary>
         public async Task<RpcResult> PostMcpAsync(string method, object? parameters, object? id, string? sessionId, CancellationToken token)
         {
-            if (sessionId == null && method != "initialize" && method != "ping")
+            if (sessionId == null && method != "initialize")
             {
                 sessionId = await GetSharedSessionAsync(token).ConfigureAwait(false);
             }
