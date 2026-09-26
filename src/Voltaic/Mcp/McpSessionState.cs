@@ -30,6 +30,7 @@ namespace Voltaic.Mcp
         private McpPinger? _Pinger;
         private readonly CancellationTokenSource _Closed = new CancellationTokenSource();
         private const int _MaxEarlyCancels = 256;
+        private const int _MaxFinished = 4096;
         private string? _NegotiatedVersion;
         private JsonElement? _ClientCapabilities;
         private string? _LogLevel;
@@ -55,6 +56,9 @@ namespace Voltaic.Mcp
 
         // True for stream transports, whose connection can carry a ping request to the client at any time.
         internal bool CanPingClient { get; set; }
+
+        // Closes the connection; used when the client stops answering pings.
+        internal Action? Terminate { get; set; }
 
         /// <summary>
         /// Gets or sets how server-initiated messages (list changes, resource updates, log messages) reach the client, or
@@ -156,8 +160,7 @@ namespace Voltaic.Mcp
         {
             request.MarkCompleted();
             _InFlight.TryRemove(new KeyValuePair<string, McpInFlightRequest>(request.IdKey, request));
-            _Completed[request.IdKey] = DateTime.UtcNow;
-            Prune(_Completed);
+            RecordFinished(request.IdKey);
             request.Dispose();
         }
 
@@ -177,19 +180,27 @@ namespace Voltaic.Mcp
             return false;
         }
 
-        private static void Prune(ConcurrentDictionary<string, DateTime> entries)
+        // Records that a request with this ID was answered (or rejected); unless the ID is in flight again.
+        internal void RecordFinished(string idKey)
         {
-            if (entries.Count < _MaxEarlyCancels) return;
+            if (_InFlight.ContainsKey(idKey)) return;
+            _Completed[idKey] = DateTime.UtcNow;
+            Prune(_Completed, _MaxFinished);
+        }
+
+        private static void Prune(ConcurrentDictionary<string, DateTime> entries, int limit)
+        {
+            if (entries.Count < limit) return;
             DateTime now = DateTime.UtcNow;
             foreach (KeyValuePair<string, DateTime> entry in entries)
             {
                 if (now - entry.Value > _EarlyCancelLifetime) entries.TryRemove(entry.Key, out DateTime _);
             }
 
-            // Keep the set bounded even when many requests finish quickly: drop the oldest entries.
-            if (entries.Count >= _MaxEarlyCancels * 4)
+            // Keep the set bounded even when many requests finish within the lifetime: drop the oldest entries.
+            if (entries.Count >= limit * 2)
             {
-                foreach (KeyValuePair<string, DateTime> oldest in entries.OrderBy(entry => entry.Value).Take(entries.Count - (_MaxEarlyCancels * 2)).ToList())
+                foreach (KeyValuePair<string, DateTime> oldest in entries.OrderBy(entry => entry.Value).Take(entries.Count - limit).ToList())
                 {
                     entries.TryRemove(oldest.Key, out DateTime _);
                 }
@@ -221,10 +232,10 @@ namespace Voltaic.Mcp
         /// Cancels every in-flight request, for example when the connection closes.
         /// </summary>
         // Starts periodic pings to the client (stream transports, after initialize).
-        internal void StartPinging(int intervalMs, int timeoutMs, Action<string> log)
+        internal void StartPinging(int intervalMs, int timeoutMs, int failureThreshold, Action<string> log)
         {
             if (Push == null || !CanPingClient) return;
-            McpPinger? pinger = McpPinger.Start(intervalMs, token => PingAsync(timeoutMs, token), log);
+            McpPinger? pinger = McpPinger.Start(intervalMs, token => PingAsync(timeoutMs, token), log, () => Terminate?.Invoke(), failureThreshold);
             Interlocked.Exchange(ref _Pinger, pinger)?.Dispose();
         }
 
@@ -242,7 +253,9 @@ namespace Voltaic.Mcp
             {
                 await push("{\"jsonrpc\":\"2.0\",\"id\":" + idKey + ",\"method\":\"ping\"}", token).ConfigureAwait(false);
                 Task finished = await Task.WhenAny(answered.Task, Task.Delay(timeoutMs, token)).ConfigureAwait(false);
-                return finished == answered.Task;
+
+                // Only a result answers a ping; an error response or no response in time is a failure.
+                return finished == answered.Task && answered.Task.Result;
             }
             finally
             {
@@ -251,10 +264,10 @@ namespace Voltaic.Mcp
         }
 
         // Completes a ping this server sent; returns false when the response answers something else.
-        internal bool TryCompletePing(string idKey)
+        internal bool TryCompletePing(string idKey, bool succeeded)
         {
             if (!_PendingPings.TryRemove(idKey, out TaskCompletionSource<bool>? answered)) return false;
-            answered.TrySetResult(true);
+            answered.TrySetResult(succeeded);
             return true;
         }
 

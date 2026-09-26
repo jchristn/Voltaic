@@ -147,11 +147,13 @@ namespace Voltaic.Mcp
         /// not declare. The HTTP status is <c>400</c>.
         /// </summary>
         /// <param name="message">Error message. May not be null.</param>
-        /// <param name="requiredCapabilities">The capabilities required by the server. May be null.</param>
+        /// <param name="requiredCapabilities">The capabilities required by the server, shaped like the client capabilities
+        /// (for example <c>{"elicitation":{"url":{}}}</c>). Null sends an empty object; the error always carries
+        /// <c>data.requiredCapabilities</c>, as the specification requires.</param>
         /// <returns>Protocol exception.</returns>
         public static McpProtocolException MissingRequiredClientCapability(string message, object? requiredCapabilities = null)
         {
-            return new McpProtocolException(-32021, message, requiredCapabilities == null ? null : new { requiredCapabilities });
+            return new McpProtocolException(-32021, message, new { requiredCapabilities = requiredCapabilities ?? new Dictionary<string, object>() });
         }
 
         /// <summary>

@@ -129,10 +129,31 @@ namespace Voltaic.Mcp
             CancellationToken token,
             Func<string, CancellationToken, Task>? rawSend = null)
         {
+            try
+            {
+                return await HandleCoreAsync(envelope, session, statelessVersion, statelessResolved, notify, token, rawSend).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Every request that was answered (or rejected) is finished: a cancellation for its ID that arrives
+                // later is ignored, so it can never cancel a later request that reuses the ID.
+                if (envelope.Kind == McpEnvelopeKind.Request && envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
+            }
+        }
+
+        private async Task<McpHandledResponse?> HandleCoreAsync(
+            McpEnvelope envelope,
+            McpSessionState session,
+            string? statelessVersion,
+            bool statelessResolved,
+            Func<JsonRpcRequest, CancellationToken, Task>? notify,
+            CancellationToken token,
+            Func<string, CancellationToken, Task>? rawSend)
+        {
             switch (envelope.Kind)
             {
                 case McpEnvelopeKind.Response:
-                    if (envelope.IdKey != null && session.TryCompletePing(envelope.IdKey)) return null;
+                    if (envelope.IdKey != null && session.TryCompletePing(envelope.IdKey, envelope.Message.TryGetProperty("result", out JsonElement _))) return null;
                     _Log($"Ignoring a JSON-RPC response from the client (id {envelope.IdKey}) that answers no request this server sent.");
                     return null;
                 case McpEnvelopeKind.Invalid:
@@ -273,7 +294,7 @@ namespace Voltaic.Mcp
                     if (session.TryCompleteInitialize(negotiated, capabilities))
                     {
                         // Check the connection's health periodically (MCP ping utility); stream transports only.
-                        session.StartPinging(_Endpoint.PingIntervalMs, _Endpoint.PingTimeoutMs, _Log);
+                        session.StartPinging(_Endpoint.PingIntervalMs, _Endpoint.PingTimeoutMs, _Endpoint.PingFailureThreshold, _Log);
                     }
                 }
 
@@ -351,6 +372,19 @@ namespace Voltaic.Mcp
             return node?.ToJsonString() ?? json;
         }
 
+        private static bool NamesStatelessVersion(McpEnvelope envelope)
+        {
+            try
+            {
+                return McpStatelessDispatcher.ResolveStatelessVersion(envelope.Message.GetRawText(), envelope.Method!) != null;
+            }
+            catch (McpProtocolException)
+            {
+                // An unsupported stateless version: still a stateless request.
+                return true;
+            }
+        }
+
         private async Task ProcessBatchAsync(
             JsonElement batch,
             McpSessionState session,
@@ -387,6 +421,17 @@ namespace Voltaic.Mcp
                     continue;
                 }
 
+                // A request that names the stateless revision follows its rules, which allow no batches.
+                if (envelope.Kind != McpEnvelopeKind.Invalid && envelope.Method != null && NamesStatelessVersion(envelope))
+                {
+                    if (envelope.Kind == McpEnvelopeKind.Request)
+                    {
+                        pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest($"Protocol version {McpProtocol.ProtocolVersion20260728} does not allow JSON-RPC batches; send the request on its own.") })));
+                    }
+
+                    continue;
+                }
+
                 pending.Add(HandleAndSerializeAsync(envelope, session, null, false, notify, token, send));
             }
 
@@ -406,8 +451,14 @@ namespace Voltaic.Mcp
                 JsonElement? requestId = envelope.Params.HasValue && envelope.Params.Value.TryGetProperty("requestId", out JsonElement id) ? id : (JsonElement?)null;
                 if (requestId.HasValue && (requestId.Value.ValueKind == JsonValueKind.String || requestId.Value.ValueKind == JsonValueKind.Number))
                 {
+                    // Cancellation reasons are logged (MCP cancellation utility).
+                    string reason = envelope.Params!.Value.TryGetProperty("reason", out JsonElement reasonElement) && reasonElement.ValueKind == JsonValueKind.String
+                        ? reasonElement.GetString() ?? "none given"
+                        : "none given";
                     bool cancelled = session.Cancel(requestId.Value.GetRawText());
-                    _Log(cancelled ? $"Cancelled request {requestId.Value.GetRawText()} at the client's request." : $"Ignored a cancellation for unknown or finished request {requestId.Value.GetRawText()}.");
+                    _Log(cancelled
+                        ? $"Cancelled request {requestId.Value.GetRawText()} at the client's request (reason: {reason})."
+                        : $"Ignored a cancellation for unknown or finished request {requestId.Value.GetRawText()} (reason: {reason}).");
                 }
             }
             else if (method == "notifications/initialized")

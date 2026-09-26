@@ -5648,6 +5648,14 @@
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpClient.PingFailureThreshold">
+            <summary>
+            Gets or sets how many consecutive pings the server may leave unanswered before the client treats the
+            connection as failed and disconnects (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+            unanswered pings. Maximum is 100.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpClient.ClientName">
             <summary>
             Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.Client</c>.
@@ -6526,6 +6534,14 @@
             is 10000. Minimum is 100; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.PingFailureThreshold">
+            <summary>
+            Gets or sets how many consecutive pings the server may leave unanswered before the client treats the
+            connection as failed and disconnects (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+            unanswered pings. Maximum is 100.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.IsStateless">
             <summary>
@@ -8033,17 +8049,20 @@
         <member name="T:Voltaic.Mcp.McpPinger">
             <summary>
             Sends a <c>ping</c> at a fixed interval to check that the other side of a connection still answers, as the MCP
-            ping utility recommends. A ping that fails or times out is logged; the connection itself is left to the
-            transport. Thread-safe; dispose to stop.
+            ping utility recommends. Failed pings are logged, and after the configured number of consecutive failures the
+            connection is treated as failed: the failure callback runs (the owner closes the connection) and pinging stops.
+            Thread-safe; dispose to stop.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpPinger.Start(System.Int32,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Boolean}},System.Action{System.String})">
+        <member name="M:Voltaic.Mcp.McpPinger.Start(System.Int32,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Boolean}},System.Action{System.String},System.Action,System.Int32)">
             <summary>
             Starts pinging every <paramref name="intervalMs"/> milliseconds, or returns null when the interval is 0.
             </summary>
             <param name="intervalMs">The interval; 0 disables pinging.</param>
             <param name="ping">Sends one ping and returns true when it was answered in time.</param>
             <param name="log">Receives a message when a ping is not answered.</param>
+            <param name="onFailure">Called when the connection is treated as failed, or null.</param>
+            <param name="failureThreshold">Consecutive failed pings that make the connection failed; 0 only logs.</param>
         </member>
         <member name="M:Voltaic.Mcp.McpPinger.Dispose">
             <summary>
@@ -8541,7 +8560,9 @@
             not declare. The HTTP status is <c>400</c>.
             </summary>
             <param name="message">Error message. May not be null.</param>
-            <param name="requiredCapabilities">The capabilities required by the server. May be null.</param>
+            <param name="requiredCapabilities">The capabilities required by the server, shaped like the client capabilities
+            (for example <c>{"elicitation":{"url":{}}}</c>). Null sends an empty object; the error always carries
+            <c>data.requiredCapabilities</c>, as the specification requires.</param>
             <returns>Protocol exception.</returns>
         </member>
         <member name="M:Voltaic.Mcp.McpProtocolException.UnsupportedProtocolVersion(System.String,System.Collections.Generic.IEnumerable{System.String})">
@@ -8852,10 +8873,12 @@
         </member>
         <member name="T:Voltaic.Mcp.McpSchemaDocument">
             <summary>
-            A schema document prepared for validation: its dialect, and the targets of <c>$ref</c> and
-            <c>$dynamicRef</c> within it (JSON pointers, <c>$anchor</c> and <c>$dynamicAnchor</c> names, and embedded
-            resources identified by <c>$id</c>). References that leave the document cannot be resolved; schemas that use
-            them are rejected rather than treated as permissive. Thread-safe after construction.
+            A schema document prepared for one validation: its dialect, its resources (the root and every subschema with its
+            own <c>$id</c>) with their anchors, and the dynamic scope while it is evaluated. References resolve against the
+            resource they appear in: JSON pointers, plain-name anchors (<c>$anchor</c>, <c>$dynamicAnchor</c>, or a draft-07
+            <c>$id</c> of the form <c>#name</c>), and embedded resources named by their <c>$id</c>. <c>$dynamicRef</c>
+            follows the dynamic scope (JSON Schema 2020-12). References that leave the document cannot be resolved; schemas
+            that use them are rejected rather than treated as permissive. Not thread-safe: each validation builds its own.
             </summary>
         </member>
         <member name="F:Voltaic.Mcp.McpSchemaDocument.Draft202012">
@@ -8873,15 +8896,21 @@
             Gets the root schema.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpSchemaDocument.Dialect">
+            <summary>
+            Gets the root's <c>$schema</c> value, or null when absent (JSON Schema 2020-12).
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaDocument.IsDraft07">
+            <summary>
+            Gets whether the schema is draft-07: <c>$ref</c> then overrides its sibling keywords, and 2019-09/2020-12
+            keywords (such as <c>prefixItems</c> or <c>unevaluatedProperties</c>) are not keywords.
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpSchemaDocument.IsSupportedDialect(System.String)">
             <summary>
             Returns true when <paramref name="dialect"/> (a <c>$schema</c> value, or null for the default) is a dialect
             the validator implements: JSON Schema 2020-12 (the MCP default) or draft-07.
-            </summary>
-        </member>
-        <member name="P:Voltaic.Mcp.McpSchemaDocument.Dialect">
-            <summary>
-            Returns the root's <c>$schema</c> value, or null when absent.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpSchemaDocument.FindUnresolvedReference">
@@ -8889,16 +8918,32 @@
             Returns the first <c>$ref</c> or <c>$dynamicRef</c> that cannot be resolved within the document, or null.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpSchemaDocument.TryResolve(System.String,System.Text.Json.JsonElement@)">
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.Enter(System.Text.Json.JsonElement)">
             <summary>
-            Resolves a <c>$ref</c>: a JSON pointer (<c>#/...</c>), an anchor (<c>#name</c>), or an embedded resource
-            named by its <c>$id</c> (absolute or relative to the root <c>$id</c>), optionally followed by a fragment.
+            Enters the resource a schema starts (one with its own <c>$id</c>), making it the base for references and
+            adding it to the dynamic scope. Returns true when a resource was entered; the caller must call
+            <see cref="M:Voltaic.Mcp.McpSchemaDocument.Exit"/> afterwards.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpSchemaDocument.TryResolveDynamic(System.String,System.Text.Json.JsonElement@)">
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.Enter(Voltaic.Mcp.McpSchemaResource)">
             <summary>
-            Resolves a <c>$dynamicRef</c>. Within one document the outermost <c>$dynamicAnchor</c> of that name is the
-            dynamic scope's target; a reference without a matching dynamic anchor resolves like <c>$ref</c>.
+            Enters a resource explicitly, for a reference that jumps into it.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.Exit">
+            <summary>
+            Leaves the most recently entered resource.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.TryResolve(System.String,System.Text.Json.JsonElement@,Voltaic.Mcp.McpSchemaResource@)">
+            <summary>
+            Resolves a <c>$ref</c> against the current resource.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaDocument.TryResolveDynamic(System.String,System.Text.Json.JsonElement@,Voltaic.Mcp.McpSchemaResource@)">
+            <summary>
+            Resolves a <c>$dynamicRef</c>: statically first, and when that target is a <c>$dynamicAnchor</c> of the same
+            name, the outermost resource in the dynamic scope with such an anchor supplies the target instead.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpSchemaEvaluated">
@@ -8923,22 +8968,82 @@
             Adds the annotations of a subschema that validated the same instance.
             </summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpSchemaReference">
+            <summary>
+            A <c>$ref</c> or <c>$dynamicRef</c> found in a schema, with the resource it appears in, so it can be checked
+            for resolvability when the schema is registered. Immutable.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaReference.#ctor(System.String,Voltaic.Mcp.McpSchemaResource,System.Boolean)">
+            <summary>
+            Initializes a reference.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaReference.Reference">
+            <summary>
+            Gets the reference text.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaReference.Resource">
+            <summary>
+            Gets the resource the reference appears in.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaReference.Dynamic">
+            <summary>
+            Gets whether the reference is a <c>$dynamicRef</c>.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpSchemaResource">
+            <summary>
+            A schema resource within a schema document: the root, or a subschema with its own <c>$id</c>. References
+            without a resource part resolve against the resource they appear in, and anchors are scoped to their resource.
+            Not thread-safe; built once per document.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSchemaResource.#ctor(System.Uri,System.Text.Json.JsonElement)">
+            <summary>
+            Initializes a resource.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaResource.BaseUri">
+            <summary>
+            Gets the resource's absolute URI (its <c>$id</c> resolved against the enclosing resource, or a placeholder
+            for a root without one), used to resolve relative references.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaResource.Element">
+            <summary>
+            Gets the schema that is the resource.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaResource.Anchors">
+            <summary>
+            Gets the plain-name anchors in the resource (<c>$anchor</c>, <c>$dynamicAnchor</c>, or a draft-07
+            <c>$id</c> of the form <c>#name</c>).
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSchemaResource.DynamicAnchors">
+            <summary>
+            Gets the <c>$dynamicAnchor</c> names in the resource.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpSchemaValidator">
             <summary>
             Validates JSON values (tool arguments and structured tool output) against a JSON Schema, operating
-            directly on <see cref="T:System.Text.Json.JsonElement"/>. Supports the JSON Schema 2020-12 keywords commonly used by MCP tool
-            schemas: <c>type</c> (a name or an array of names), <c>enum</c>, <c>const</c>, <c>properties</c>,
-            <c>required</c>, <c>additionalProperties</c>, <c>patternProperties</c>, <c>propertyNames</c>,
-            <c>minProperties</c>, <c>maxProperties</c>, <c>dependentRequired</c>, <c>dependentSchemas</c>,
-            <c>items</c>, <c>prefixItems</c>, <c>additionalItems</c> (with the legacy array form of <c>items</c>),
-            <c>contains</c>, <c>minContains</c>, <c>maxContains</c>, <c>minItems</c>, <c>maxItems</c>,
-            <c>uniqueItems</c>, <c>minLength</c>, <c>maxLength</c>, <c>pattern</c>, <c>minimum</c>, <c>maximum</c>,
-            <c>exclusiveMinimum</c>, <c>exclusiveMaximum</c>, <c>multipleOf</c>, <c>allOf</c>, <c>anyOf</c>,
-            <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>, <c>unevaluatedProperties</c>,
-            <c>unevaluatedItems</c>, <c>$ref</c> and <c>$dynamicRef</c> within the schema (JSON pointers such as
-            <c>#/$defs/name</c>, <c>$anchor</c> and <c>$dynamicAnchor</c> names, and embedded resources identified by
-            <c>$id</c>), draft-07 <c>dependencies</c> and <c>definitions</c>, and boolean schemas. The dialect is the
-            schema's <c>$schema</c> (2020-12 by default; draft-07 is also supported); another dialect, or a reference that
+            directly on <see cref="T:System.Text.Json.JsonElement"/>, in the schema's declared dialect: JSON Schema 2020-12 (the default when
+            <c>$schema</c> is absent) or draft-07. Both dialects: <c>type</c>, <c>enum</c>, <c>const</c>,
+            <c>properties</c>, <c>required</c>, <c>additionalProperties</c>, <c>patternProperties</c>,
+            <c>propertyNames</c>, <c>minProperties</c>, <c>maxProperties</c>, <c>items</c>, <c>contains</c>,
+            <c>minItems</c>, <c>maxItems</c>, <c>uniqueItems</c>, <c>minLength</c>, <c>maxLength</c>, <c>pattern</c>
+            (ECMA-262), <c>minimum</c>, <c>maximum</c>, <c>exclusiveMinimum</c>, <c>exclusiveMaximum</c>,
+            <c>multipleOf</c>, <c>allOf</c>, <c>anyOf</c>, <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>,
+            <c>$ref</c>, and boolean schemas. 2020-12 only: <c>prefixItems</c>, <c>dependentRequired</c>,
+            <c>dependentSchemas</c>, <c>minContains</c>, <c>maxContains</c>, <c>unevaluatedProperties</c>,
+            <c>unevaluatedItems</c>, <c>$anchor</c>, <c>$dynamicAnchor</c>, and <c>$dynamicRef</c> (dynamic scope).
+            draft-07 only: the array form of <c>items</c> with <c>additionalItems</c>, <c>dependencies</c>, fragment
+            <c>$id</c> anchors, and <c>$ref</c> overriding its sibling keywords. References resolve within the resource
+            they appear in (a subschema with its own <c>$id</c> starts a resource). Another dialect, or a reference that
             cannot be resolved within the schema, is reported as an error rather than validated permissively. Annotation
             keywords (such as <c>format</c>, <c>description</c>, or <c>x-mcp-header</c>) are ignored, and a malformed
             keyword is ignored on its own without disabling the rest of the schema.
@@ -9048,6 +9153,14 @@
             Minimum is 100; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpServer.PingFailureThreshold">
+            <summary>
+            Gets or sets how many consecutive pings a client may leave unanswered before the server treats the
+            connection as failed and closes it (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+            unanswered pings. Maximum is 100.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
         </member>
         <member name="E:Voltaic.Mcp.McpServer.Log">
             <summary>
@@ -9452,7 +9565,7 @@
             Returns the in-flight request that carries the progress token, or null.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpSessionState.StartPinging(System.Int32,System.Int32,System.Action{System.String})">
+        <member name="M:Voltaic.Mcp.McpSessionState.StartPinging(System.Int32,System.Int32,System.Int32,System.Action{System.String})">
             <summary>
             Cancels every in-flight request, for example when the connection closes.
             </summary>
@@ -9648,6 +9761,14 @@
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpTcpClient.PingFailureThreshold">
+            <summary>
+            Gets or sets how many consecutive pings the server may leave unanswered before the client treats the
+            connection as failed and disconnects (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+            unanswered pings. Maximum is 100.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpTcpClient.ClientName">
             <summary>
             Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.TcpClient</c>.
@@ -9762,6 +9883,14 @@
             Minimum is 100; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpTcpServer.PingFailureThreshold">
+            <summary>
+            Gets or sets how many consecutive pings a client may leave unanswered before the server treats the
+            connection as failed and closes it (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+            unanswered pings. Maximum is 100.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpTcpServer.#ctor(System.Net.IPAddress,System.Int32,System.Boolean)">
             <summary>
@@ -10256,9 +10385,11 @@
         </member>
         <member name="M:Voltaic.Mcp.McpToolCallResult.FromStructured(System.Object)">
             <summary>
-            Creates a structured tool result.
+            Creates a structured tool result whose text block carries the same data as JSON. A null
+            <paramref name="structuredContent"/> is sent as JSON <c>null</c>, which MCP 2026-07-28 allows; sessions on
+            earlier revisions, whose schema requires an object, receive the text block only.
             </summary>
-            <param name="structuredContent">Structured content.</param>
+            <param name="structuredContent">Structured content, or null for JSON null.</param>
             <returns>Tool call result.</returns>
         </member>
         <member name="T:Voltaic.Mcp.McpUriTemplate">
@@ -10616,6 +10747,14 @@
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsClient.PingFailureThreshold">
+            <summary>
+            Gets or sets how many consecutive pings the server may leave unanswered before the client treats the
+            connection as failed and disconnects (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+            unanswered pings. Maximum is 100.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.ClientName">
             <summary>
             Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.WebsocketsClient</c>.
@@ -10858,6 +10997,14 @@
             Minimum is 100; maximum is 600000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 100 to 600000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpWebsocketsServer.PingFailureThreshold">
+            <summary>
+            Gets or sets how many consecutive pings a client may leave unanswered before the server treats the
+            connection as failed and closes it (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+            unanswered pings. Maximum is 100.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsServer.#ctor(System.String,System.Int32,System.String,System.Boolean)">
             <summary>

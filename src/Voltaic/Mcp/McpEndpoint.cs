@@ -74,6 +74,8 @@ namespace Voltaic.Mcp
 
         public int PingTimeoutMs { get; set; } = 10000;
 
+        public int PingFailureThreshold { get; set; } = 1;
+
         public McpEndpoint(string serverName)
         {
             ServerName = serverName;
@@ -885,6 +887,10 @@ namespace Voltaic.Mcp
 
                 return element.Clone();
             }
+
+            // An output schema is kept exactly as written (2026-07-28 allows any output schema); tools/list adapts it for
+            // older sessions. An input schema without a type is an object schema.
+            if (kind == "output") return element.Clone();
 
             System.Text.Json.Nodes.JsonObject withType = System.Text.Json.Nodes.JsonObject.Create(element) ?? new System.Text.Json.Nodes.JsonObject();
             System.Text.Json.Nodes.JsonObject copy = new System.Text.Json.Nodes.JsonObject { ["type"] = "object" };

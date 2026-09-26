@@ -103,6 +103,7 @@ namespace Voltaic.Core
         public JsonRpcClient()
         {
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
+            _RequestDispatcher.Log = LogMessage;
         }
 
         /// <summary>

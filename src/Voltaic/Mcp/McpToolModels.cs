@@ -47,20 +47,30 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
-        /// Creates a structured tool result.
+        /// Creates a structured tool result whose text block carries the same data as JSON. A null
+        /// <paramref name="structuredContent"/> is sent as JSON <c>null</c>, which MCP 2026-07-28 allows; sessions on
+        /// earlier revisions, whose schema requires an object, receive the text block only.
         /// </summary>
-        /// <param name="structuredContent">Structured content.</param>
+        /// <param name="structuredContent">Structured content, or null for JSON null.</param>
         /// <returns>Tool call result.</returns>
         public static McpToolCallResult FromStructured(object? structuredContent)
         {
             return new McpToolCallResult
             {
-                StructuredContent = structuredContent,
+                StructuredContent = structuredContent ?? JsonNullElement(),
                 Content = new List<object>
                 {
                     new McpTextContent { Text = JsonSerializer.Serialize(structuredContent) }
                 }
             };
+        }
+
+        private static JsonElement JsonNullElement()
+        {
+            using (JsonDocument document = JsonDocument.Parse("null"))
+            {
+                return document.RootElement.Clone();
+            }
         }
     }
 }

@@ -11,19 +11,19 @@ namespace Voltaic.Mcp
 
     /// <summary>
     /// Validates JSON values (tool arguments and structured tool output) against a JSON Schema, operating
-    /// directly on <see cref="JsonElement"/>. Supports the JSON Schema 2020-12 keywords commonly used by MCP tool
-    /// schemas: <c>type</c> (a name or an array of names), <c>enum</c>, <c>const</c>, <c>properties</c>,
-    /// <c>required</c>, <c>additionalProperties</c>, <c>patternProperties</c>, <c>propertyNames</c>,
-    /// <c>minProperties</c>, <c>maxProperties</c>, <c>dependentRequired</c>, <c>dependentSchemas</c>,
-    /// <c>items</c>, <c>prefixItems</c>, <c>additionalItems</c> (with the legacy array form of <c>items</c>),
-    /// <c>contains</c>, <c>minContains</c>, <c>maxContains</c>, <c>minItems</c>, <c>maxItems</c>,
-    /// <c>uniqueItems</c>, <c>minLength</c>, <c>maxLength</c>, <c>pattern</c>, <c>minimum</c>, <c>maximum</c>,
-    /// <c>exclusiveMinimum</c>, <c>exclusiveMaximum</c>, <c>multipleOf</c>, <c>allOf</c>, <c>anyOf</c>,
-    /// <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>, <c>unevaluatedProperties</c>,
-    /// <c>unevaluatedItems</c>, <c>$ref</c> and <c>$dynamicRef</c> within the schema (JSON pointers such as
-    /// <c>#/$defs/name</c>, <c>$anchor</c> and <c>$dynamicAnchor</c> names, and embedded resources identified by
-    /// <c>$id</c>), draft-07 <c>dependencies</c> and <c>definitions</c>, and boolean schemas. The dialect is the
-    /// schema's <c>$schema</c> (2020-12 by default; draft-07 is also supported); another dialect, or a reference that
+    /// directly on <see cref="JsonElement"/>, in the schema's declared dialect: JSON Schema 2020-12 (the default when
+    /// <c>$schema</c> is absent) or draft-07. Both dialects: <c>type</c>, <c>enum</c>, <c>const</c>,
+    /// <c>properties</c>, <c>required</c>, <c>additionalProperties</c>, <c>patternProperties</c>,
+    /// <c>propertyNames</c>, <c>minProperties</c>, <c>maxProperties</c>, <c>items</c>, <c>contains</c>,
+    /// <c>minItems</c>, <c>maxItems</c>, <c>uniqueItems</c>, <c>minLength</c>, <c>maxLength</c>, <c>pattern</c>
+    /// (ECMA-262), <c>minimum</c>, <c>maximum</c>, <c>exclusiveMinimum</c>, <c>exclusiveMaximum</c>,
+    /// <c>multipleOf</c>, <c>allOf</c>, <c>anyOf</c>, <c>oneOf</c>, <c>not</c>, <c>if</c>/<c>then</c>/<c>else</c>,
+    /// <c>$ref</c>, and boolean schemas. 2020-12 only: <c>prefixItems</c>, <c>dependentRequired</c>,
+    /// <c>dependentSchemas</c>, <c>minContains</c>, <c>maxContains</c>, <c>unevaluatedProperties</c>,
+    /// <c>unevaluatedItems</c>, <c>$anchor</c>, <c>$dynamicAnchor</c>, and <c>$dynamicRef</c> (dynamic scope).
+    /// draft-07 only: the array form of <c>items</c> with <c>additionalItems</c>, <c>dependencies</c>, fragment
+    /// <c>$id</c> anchors, and <c>$ref</c> overriding its sibling keywords. References resolve within the resource
+    /// they appear in (a subschema with its own <c>$id</c> starts a resource). Another dialect, or a reference that
     /// cannot be resolved within the schema, is reported as an error rather than validated permissively. Annotation
     /// keywords (such as <c>format</c>, <c>description</c>, or <c>x-mcp-header</c>) are ignored, and a malformed
     /// keyword is ignored on its own without disabling the rest of the schema.
@@ -143,6 +143,11 @@ namespace Voltaic.Mcp
                 return $"the JSON Schema dialect '{dialect}' is not supported (supported: {McpSchemaDocument.Draft202012}, the default, and draft-07).";
             }
 
+            if (!document.IsDraft07 && HasArrayItems(document.Root, 0))
+            {
+                return "the array form of 'items' is not valid in JSON Schema 2020-12; use 'prefixItems' (or declare draft-07).";
+            }
+
             string? unresolved = document.FindUnresolvedReference();
             if (unresolved != null)
             {
@@ -150,6 +155,21 @@ namespace Voltaic.Mcp
             }
 
             return null;
+        }
+
+        private static bool HasArrayItems(JsonElement element, int depth)
+        {
+            if (depth > 256) return false;
+            if (element.ValueKind == JsonValueKind.Array) return element.EnumerateArray().Any(item => HasArrayItems(item, depth + 1));
+            if (element.ValueKind != JsonValueKind.Object) return false;
+            foreach (JsonProperty member in element.EnumerateObject())
+            {
+                if (member.Name == "enum" || member.Name == "const" || member.Name == "default" || member.Name == "examples") continue;
+                if (member.Name == "items" && member.Value.ValueKind == JsonValueKind.Array) return true;
+                if (HasArrayItems(member.Value, depth + 1)) return true;
+            }
+
+            return false;
         }
 
         private static bool TryGetSchemaElement(object schema, out JsonElement root)
@@ -241,11 +261,32 @@ namespace Voltaic.Mcp
                 return null;
             }
 
+            // A subschema with its own $id is a resource: it becomes the base for references and joins the dynamic scope.
+            bool entered = root.Enter(schema);
+            try
+            {
+                return EvaluateKeywords(schema, instance, path, root, depth, chain, ref budget, evaluated);
+            }
+            finally
+            {
+                if (entered) root.Exit();
+            }
+        }
+
+        private static string? EvaluateKeywords(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, int chain, ref int budget, McpSchemaEvaluated? evaluated)
+        {
             // Properties and items this schema's keywords evaluated, for unevaluatedProperties and unevaluatedItems.
             McpSchemaEvaluated local = new McpSchemaEvaluated();
 
             string? error = CheckReference(schema, instance, path, root, depth, chain, ref budget, local);
             if (error != null) return error;
+
+            // draft-07: a schema with $ref is only that reference; its other keywords are ignored.
+            if (root.IsDraft07 && schema.TryGetProperty("$ref", out JsonElement _))
+            {
+                evaluated?.Merge(local);
+                return null;
+            }
 
             error = CheckType(schema, instance, path);
             if (error != null) return error;
@@ -285,6 +326,9 @@ namespace Voltaic.Mcp
         // in-place subschemas that passed) evaluated.
         private static string? CheckUnevaluated(JsonElement schema, JsonElement instance, string path, McpSchemaDocument root, int depth, ref int budget, McpSchemaEvaluated local)
         {
+            // unevaluatedProperties and unevaluatedItems are 2019-09/2020-12 keywords, not draft-07 ones.
+            if (root.IsDraft07) return null;
+
             if (instance.ValueKind == JsonValueKind.Object && schema.TryGetProperty("unevaluatedProperties", out JsonElement unevaluatedProperties) && IsSchema(unevaluatedProperties))
             {
                 foreach (JsonProperty member in instance.EnumerateObject())
@@ -332,27 +376,42 @@ namespace Voltaic.Mcp
             if (schema.TryGetProperty("$ref", out JsonElement reference) && reference.ValueKind == JsonValueKind.String)
             {
                 // An unresolvable reference fails validation instead of being treated as permissive.
-                if (!root.TryResolve(reference.GetString(), out JsonElement target))
+                if (!root.TryResolve(reference.GetString(), out JsonElement target, out McpSchemaResource? resource))
                 {
                     return $"{path} cannot be validated: the schema reference '{reference.GetString()}' cannot be resolved.";
                 }
 
-                string? error = Evaluate(target, instance, path, root, depth + 1, chain + 1, ref budget, local);
+                string? error = EvaluateIn(resource, target, instance, path, root, depth + 1, chain + 1, ref budget, local);
                 if (error != null) return error;
             }
 
-            if (schema.TryGetProperty("$dynamicRef", out JsonElement dynamicReference) && dynamicReference.ValueKind == JsonValueKind.String)
+            if (!root.IsDraft07 && schema.TryGetProperty("$dynamicRef", out JsonElement dynamicReference) && dynamicReference.ValueKind == JsonValueKind.String)
             {
-                if (!root.TryResolveDynamic(dynamicReference.GetString(), out JsonElement target))
+                if (!root.TryResolveDynamic(dynamicReference.GetString(), out JsonElement target, out McpSchemaResource? resource))
                 {
                     return $"{path} cannot be validated: the schema reference '{dynamicReference.GetString()}' cannot be resolved.";
                 }
 
-                string? error = Evaluate(target, instance, path, root, depth + 1, chain + 1, ref budget, local);
+                string? error = EvaluateIn(resource, target, instance, path, root, depth + 1, chain + 1, ref budget, local);
                 if (error != null) return error;
             }
 
             return null;
+        }
+
+        // Evaluates a reference target within the resource it belongs to, so its own references resolve there.
+        private static string? EvaluateIn(McpSchemaResource? resource, JsonElement target, JsonElement instance, string path, McpSchemaDocument root, int depth, int chain, ref int budget, McpSchemaEvaluated local)
+        {
+            if (resource == null) return Evaluate(target, instance, path, root, depth, chain, ref budget, local);
+            root.Enter(resource);
+            try
+            {
+                return Evaluate(target, instance, path, root, depth, chain, ref budget, local);
+            }
+            finally
+            {
+                root.Exit();
+            }
         }
 
         private static string? CheckType(JsonElement schema, JsonElement instance, string path)
@@ -439,7 +498,7 @@ namespace Voltaic.Mcp
                 return $"{path} must have at most {maxProperties} {Plural(maxProperties, "property", "properties")}.";
             }
 
-            if (schema.TryGetProperty("dependentRequired", out JsonElement dependentRequired) && dependentRequired.ValueKind == JsonValueKind.Object)
+            if (!root.IsDraft07 && schema.TryGetProperty("dependentRequired", out JsonElement dependentRequired) && dependentRequired.ValueKind == JsonValueKind.Object)
             {
                 foreach (JsonProperty dependency in dependentRequired.EnumerateObject())
                 {
@@ -457,7 +516,7 @@ namespace Voltaic.Mcp
                 }
             }
 
-            if (schema.TryGetProperty("dependentSchemas", out JsonElement dependentSchemas) && dependentSchemas.ValueKind == JsonValueKind.Object)
+            if (!root.IsDraft07 && schema.TryGetProperty("dependentSchemas", out JsonElement dependentSchemas) && dependentSchemas.ValueKind == JsonValueKind.Object)
             {
                 foreach (JsonProperty dependency in dependentSchemas.EnumerateObject())
                 {
@@ -469,7 +528,7 @@ namespace Voltaic.Mcp
             }
 
             // draft-07 dependencies: an array lists required properties, a schema applies to the whole object.
-            if (schema.TryGetProperty("dependencies", out JsonElement dependencies) && dependencies.ValueKind == JsonValueKind.Object)
+            if (root.IsDraft07 && schema.TryGetProperty("dependencies", out JsonElement dependencies) && dependencies.ValueKind == JsonValueKind.Object)
             {
                 foreach (JsonProperty dependency in dependencies.EnumerateObject())
                 {
@@ -599,13 +658,13 @@ namespace Voltaic.Mcp
                 }
             }
 
-            // Positional schemas: 2020-12 prefixItems, or the legacy array form of items (then additionalItems applies).
+            // Positional schemas: prefixItems (2020-12), or the array form of items with additionalItems (draft-07).
             JsonElement positional = default;
             bool hasPositional = false;
             JsonElement rest = default;
             bool hasRest = false;
 
-            if (schema.TryGetProperty("prefixItems", out JsonElement prefixItems) && prefixItems.ValueKind == JsonValueKind.Array)
+            if (!root.IsDraft07 && schema.TryGetProperty("prefixItems", out JsonElement prefixItems) && prefixItems.ValueKind == JsonValueKind.Array)
             {
                 positional = prefixItems;
                 hasPositional = true;
@@ -615,7 +674,7 @@ namespace Voltaic.Mcp
             {
                 if (items.ValueKind == JsonValueKind.Array)
                 {
-                    if (!hasPositional)
+                    if (root.IsDraft07 && !hasPositional)
                     {
                         positional = items;
                         hasPositional = true;
@@ -664,9 +723,11 @@ namespace Voltaic.Mcp
 
             if (schema.TryGetProperty("contains", out JsonElement contains) && IsSchema(contains))
             {
+                // minContains and maxContains are 2019-09/2020-12 keywords.
                 long minContains = 1;
-                if (TryGetCount(schema, "minContains", out long configuredMin)) minContains = configuredMin;
-                bool hasMaxContains = TryGetCount(schema, "maxContains", out long maxContains);
+                if (!root.IsDraft07 && TryGetCount(schema, "minContains", out long configuredMin)) minContains = configuredMin;
+                long maxContains = 0;
+                bool hasMaxContains = !root.IsDraft07 && TryGetCount(schema, "maxContains", out maxContains);
 
                 long matches = 0;
                 int index = 0;
@@ -735,28 +796,25 @@ namespace Voltaic.Mcp
 
         private static string? CheckNumber(JsonElement schema, JsonElement instance, string path)
         {
-            bool exclusiveMinimumFlag = schema.TryGetProperty("exclusiveMinimum", out JsonElement exclusiveMinimum) && exclusiveMinimum.ValueKind == JsonValueKind.True;
-            bool exclusiveMaximumFlag = schema.TryGetProperty("exclusiveMaximum", out JsonElement exclusiveMaximum) && exclusiveMaximum.ValueKind == JsonValueKind.True;
+            // exclusiveMinimum and exclusiveMaximum are numbers in draft-07 and 2020-12 (the boolean form is draft-04).
+            schema.TryGetProperty("exclusiveMinimum", out JsonElement exclusiveMinimum);
+            schema.TryGetProperty("exclusiveMaximum", out JsonElement exclusiveMaximum);
 
             if (schema.TryGetProperty("minimum", out JsonElement minimum) && minimum.ValueKind == JsonValueKind.Number)
             {
                 int? comparison = CompareNumbers(instance, minimum);
-                if (comparison < 0 || (exclusiveMinimumFlag && comparison == 0))
+                if (comparison < 0)
                 {
-                    return exclusiveMinimumFlag
-                        ? $"{path} must be greater than {minimum.GetRawText()}."
-                        : $"{path} must be greater than or equal to {minimum.GetRawText()}.";
+                    return $"{path} must be greater than or equal to {minimum.GetRawText()}.";
                 }
             }
 
             if (schema.TryGetProperty("maximum", out JsonElement maximum) && maximum.ValueKind == JsonValueKind.Number)
             {
                 int? comparison = CompareNumbers(instance, maximum);
-                if (comparison > 0 || (exclusiveMaximumFlag && comparison == 0))
+                if (comparison > 0)
                 {
-                    return exclusiveMaximumFlag
-                        ? $"{path} must be less than {maximum.GetRawText()}."
-                        : $"{path} must be less than or equal to {maximum.GetRawText()}.";
+                    return $"{path} must be less than or equal to {maximum.GetRawText()}.";
                 }
             }
 
@@ -1109,20 +1167,29 @@ namespace Voltaic.Mcp
             Regex? regex = null;
             try
             {
-                // The non-backtracking engine runs in linear time; patterns it cannot run (backreferences, lookarounds)
-                // fall back to the backtracking engine, bounded by the match timeout.
-                regex = new Regex(pattern, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, _RegexTimeout);
+                // JSON Schema patterns are ECMA-262 regular expressions: ECMAScript mode gives \d, \w, and \s their
+                // ASCII meaning. Matching is bounded by the match timeout.
+                regex = new Regex(pattern, RegexOptions.ECMAScript, _RegexTimeout);
             }
-            catch (Exception nonBacktrackingError) when (nonBacktrackingError is NotSupportedException || nonBacktrackingError is ArgumentException)
+            catch (ArgumentException)
             {
+                // A construct .NET's ECMAScript mode does not accept (such as \p{...} Unicode property escapes, which
+                // ECMA-262 allows with the u flag): the .NET engine runs it, linear-time where possible.
                 try
                 {
-                    regex = new Regex(pattern, RegexOptions.CultureInvariant, _RegexTimeout);
+                    regex = new Regex(pattern, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, _RegexTimeout);
                 }
-                catch (ArgumentException)
+                catch (Exception nonBacktrackingError) when (nonBacktrackingError is NotSupportedException || nonBacktrackingError is ArgumentException)
                 {
-                    // Not a valid regular expression: the keyword that uses it is ignored.
-                    regex = null;
+                    try
+                    {
+                        regex = new Regex(pattern, RegexOptions.CultureInvariant, _RegexTimeout);
+                    }
+                    catch (ArgumentException)
+                    {
+                        // Not a valid regular expression: the keyword that uses it is ignored.
+                        regex = null;
+                    }
                 }
             }
 

@@ -89,6 +89,7 @@ namespace Voltaic.Mcp
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
         private int _PingIntervalMs = 30000;
         private int _PingTimeoutMs = 10000;
+        private int _PingFailureThreshold = 1;
         private McpPinger? _Pinger;
         private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
 
@@ -98,6 +99,7 @@ namespace Voltaic.Mcp
         public McpWebsocketsClient()
         {
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
+            _RequestDispatcher.Log = LogMessage;
         }
 
         /// <summary>
@@ -352,6 +354,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how many consecutive pings the server may leave unanswered before the client treats the
+        /// connection as failed and disconnects (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+        /// unanswered pings. Maximum is 100.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        public int PingFailureThreshold
+        {
+            get => _PingFailureThreshold;
+            set
+            {
+                if (value < 0 || value > 100) throw new ArgumentOutOfRangeException(nameof(value), "PingFailureThreshold must be between 0 and 100.");
+                _PingFailureThreshold = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.WebsocketsClient</c>.
         /// </summary>
         public string ClientName
@@ -425,7 +443,7 @@ namespace Voltaic.Mcp
                 {
                     return false;
                 }
-            }, LogMessage);
+            }, LogMessage, () => Task.Run(() => Disconnect()), _PingFailureThreshold);
         }
 
         /// <summary>

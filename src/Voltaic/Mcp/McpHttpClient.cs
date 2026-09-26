@@ -115,6 +115,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how many consecutive pings the server may leave unanswered before the client treats the
+        /// connection as failed and disconnects (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+        /// unanswered pings. Maximum is 100.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        public int PingFailureThreshold
+        {
+            get => _PingFailureThreshold;
+            set
+            {
+                if (value < 0 || value > 100) throw new ArgumentOutOfRangeException(nameof(value), "PingFailureThreshold must be between 0 and 100.");
+                _PingFailureThreshold = value;
+            }
+        }
+
+        /// <summary>
         /// Gets a value indicating whether the client is operating in the stateless (2026-07-28)
         /// mode established by <see cref="ConnectStatelessAsync"/>.
         /// </summary>
@@ -239,6 +255,7 @@ namespace Voltaic.Mcp
         private bool _AutoNegotiate = true;
         private int _PingIntervalMs = 30000;
         private int _PingTimeoutMs = 10000;
+        private int _PingFailureThreshold = 1;
         private McpPinger? _Pinger;
         private bool _SseWanted;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
@@ -251,6 +268,7 @@ namespace Voltaic.Mcp
         public McpHttpClient()
         {
             _HttpClient = new HttpClient();
+            _RequestDispatcher.Log = LogMessage;
         }
 
         /// <summary>
@@ -513,7 +531,21 @@ namespace Voltaic.Mcp
         /// <exception cref="Exception">Thrown when the HTTP response body cannot be parsed as JSON-RPC.</exception>
         public Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
         {
+            // In stateless mode (2026-07-28) every request carries its own _meta and routing headers.
+            if (_Stateless) return SendStatelessAsync(method, ToParameterMap(parameters), null, token);
             return ExchangeAsync(method, parameters, timeoutMs, token);
+        }
+
+        // Converts request parameters to the field map stateless requests use; MCP params are always an object.
+        private static IReadOnlyDictionary<string, object?>? ToParameterMap(object? parameters)
+        {
+            if (parameters == null) return null;
+            if (parameters is IReadOnlyDictionary<string, object?> map) return map;
+            JsonElement element = parameters is JsonElement json ? json : JsonSerializer.SerializeToElement(parameters);
+            if (element.ValueKind != JsonValueKind.Object) throw new ArgumentException("MCP request parameters must be a JSON object.", nameof(parameters));
+            Dictionary<string, object?> fields = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (JsonProperty property in element.EnumerateObject()) fields[property.Name] = property.Value.Clone();
+            return fields;
         }
 
         private async Task<JsonRpcResponse> ExchangeAsync(string method, object? parameters, int timeoutMs, CancellationToken token)
@@ -945,7 +977,8 @@ namespace Voltaic.Mcp
             JsonRpcRequest request = new JsonRpcRequest
             {
                 Method = method,
-                Params = parameters
+                // In stateless mode (2026-07-28) a notification carries the protocol version and client identity too.
+                Params = _Stateless ? BuildStatelessParams(ToParameterMap(parameters)) : parameters
             };
 
             string requestJson = JsonSerializer.Serialize(request);
@@ -958,6 +991,7 @@ namespace Voltaic.Mcp
 
                 string? sentSessionId = SessionId;
                 using HttpRequestMessage httpRequest = CreatePostRequest(requestJson);
+                if (_Stateless) httpRequest.Headers.TryAddWithoutValidation(McpProtocol.MethodHeader, method);
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
                 if ((int)httpResponse.StatusCode == 404 && !String.IsNullOrEmpty(sentSessionId) && _Streamable)
                 {
@@ -1200,7 +1234,7 @@ namespace Voltaic.Mcp
                 {
                     return false;
                 }
-            }, LogMessage);
+            }, LogMessage, () => Task.Run(() => Disconnect()), _PingFailureThreshold);
         }
 
         // Declares the client capabilities whose requests have handlers, so servers know they may send them, limited to
@@ -1365,9 +1399,10 @@ namespace Voltaic.Mcp
         {
             if (result == null) return null;
             JsonElement element = result is JsonElement json ? json : JsonSerializer.SerializeToElement(result);
-            return element.ValueKind == JsonValueKind.Object && element.TryGetProperty("resultType", out JsonElement value) && value.ValueKind == JsonValueKind.String
-                ? value.GetString()
-                : null;
+            if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("resultType", out JsonElement value)) return null;
+
+            // A resultType that is not a string is unrecognized too; its raw JSON is returned so it is rejected.
+            return value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
         }
 
         private static T? DeserializeResult<T>(object? result)
@@ -1642,8 +1677,9 @@ namespace Voltaic.Mcp
                 httpRequest.Headers.Add(McpProtocol.SessionIdHeader, SessionId);
             }
 
-            // After initialize, every request carries the negotiated version, with or without a session.
-            if (!String.IsNullOrEmpty(SessionId) || _HandshakeComplete)
+            // After initialize, every request carries the negotiated version, with or without a session; in stateless
+            // mode every POST carries the version in use.
+            if (!String.IsNullOrEmpty(SessionId) || _HandshakeComplete || _Stateless)
             {
                 httpRequest.Headers.Add(McpProtocol.ProtocolVersionHeader, _ProtocolVersion);
             }

@@ -162,6 +162,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how many consecutive pings a client may leave unanswered before the server treats the
+        /// connection as failed and closes it (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+        /// unanswered pings. Maximum is 100.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        public int PingFailureThreshold
+        {
+            get => _Endpoint.PingFailureThreshold;
+            set
+            {
+                if (value < 0 || value > 100) throw new ArgumentOutOfRangeException(nameof(value), "PingFailureThreshold must be between 0 and 100.");
+                _Endpoint.PingFailureThreshold = value;
+            }
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
@@ -533,11 +549,19 @@ namespace Voltaic.Mcp
 
             LogToStderr("MCP server started");
 
+            // The run ends when the caller cancels, stdin closes, or the client stops answering pings.
+            using CancellationTokenSource run = CancellationTokenSource.CreateLinkedTokenSource(token);
+            _Session.Terminate = () =>
+            {
+                LogToStderr("The client did not answer ping; shutting down");
+                run.Cancel();
+            };
+
             try
             {
-                while (!token.IsCancellationRequested)
+                while (!run.Token.IsCancellationRequested)
                 {
-                    string? line = await stdin.ReadLineAsync(token).ConfigureAwait(false);
+                    string? line = await stdin.ReadLineAsync(run.Token).ConfigureAwait(false);
                     if (line == null)
                     {
                         LogToStderr("stdin closed, shutting down");
@@ -546,10 +570,10 @@ namespace Voltaic.Mcp
 
                     if (String.IsNullOrWhiteSpace(line)) continue;
                     LogToStderr($"Received: {line}");
-                    await _Processor.ProcessAsync(line, _Session, WriteLineAsync, token).ConfigureAwait(false);
+                    await _Processor.ProcessAsync(line, _Session, WriteLineAsync, run.Token).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            catch (OperationCanceledException) when (run.Token.IsCancellationRequested)
             {
             }
             catch (Exception ex)
@@ -559,6 +583,7 @@ namespace Voltaic.Mcp
             }
             finally
             {
+                _Session.Terminate = null;
                 _Session.CancelAll();
                 _Stdout = null;
                 Console.SetOut(originalOut);

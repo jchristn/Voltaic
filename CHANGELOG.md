@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.1.8
+Resolves every finding of a four-part review of v2.1.7 against the MCP specification, and corrects COMPATIBILITY.md, which overstated v2.1.7.
+
+### Security-relevant
+- **`Mcp-Name` for `resources/read` is checked against `params.uri`.** It was checked against `params.name` when present, so a stateless request could pass header validation with one value while the server read another URI. `tools/call` and `prompts/get` use `params.name`; other methods have no `Mcp-Name` source.
+
+### Transports and lifecycle
+- **The stdio client uses UTF-8.** `McpClient` did not set the child process's stream encodings, so on Windows they followed the console code page (for example 437) and non-ASCII text from servers built on other SDKs was garbled. Standard input, output, and error are now UTF-8 without a byte order mark, and lines end with `\n`.
+- A cancellation for a request the server rejected before running it (for example for a bad `_meta`) is ignored like one for an answered request, so a reused ID is never cancelled by it; up to 4096 recent IDs are remembered.
+- An unanswered ping is a connection failure, as the ping utility asks: servers close the connection, and clients disconnect, after `PingFailureThreshold` consecutive failures (default 1; 0 only logs). A ping answered with an error counts as unanswered. New `PingFailureThreshold` on every client and on the stdio, TCP, and WebSocket servers.
+- Cancellation reasons are logged by servers and clients.
+- A batch element that names 2026-07-28 in its `_meta` gets `-32600`; that revision allows one message at a time.
+
+### Schemas and results
+- **Schemas are validated in their declared dialect with that dialect's keywords only.** 2020-12 no longer applies draft-07 `dependencies`, and rejects the array form of `items` at registration; draft-07 no longer applies `prefixItems`, `dependentRequired`, `dependentSchemas`, `minContains`, `maxContains`, `unevaluated*`, `$anchor`, or `$dynamicRef`, and a draft-07 `$ref` overrides its sibling keywords. The boolean `exclusiveMinimum`/`exclusiveMaximum` of draft-04 is not applied.
+- **References resolve within their resource:** a subschema with its own `$id` is a resource whose pointers and anchors are its own; a draft-07 `$id` of the form `#name` is an anchor; `$dynamicRef` follows the dynamic scope.
+- `pattern` uses ECMA-262 semantics (`\d` and `\w` are ASCII).
+- A typeless output schema is kept as written. Sessions before 2026-07-28 receive it with `"type": "object"` when it only describes objects, and without it otherwise.
+- `McpToolCallResult.FromStructured(null)` sends JSON `null` as `structuredContent` (2026-07-28 allows any value); older sessions receive the text block.
+- `MissingRequiredClientCapability` always carries `data.requiredCapabilities`.
+
+### HTTP
+- A notification the server cannot accept gets 400 (also in a batch of notifications) instead of 202.
+- A 2025-03-26 batch in which a request fails for a missing scope is answered 403 with the `insufficient_scope` challenge; the body still carries every response.
+- A stateless POST whose body is not JSON gets 400 `-32700`.
+- In stateless mode, `McpHttpClient.CallAsync` and `NotifyAsync` send `MCP-Protocol-Version` and `_meta` like the other stateless calls, and a non-string `resultType` is rejected.
+
+### Documentation
+- COMPATIBILITY.md lists client and server transports separately (the stdio, TCP, and WebSocket clients speak the handshake revisions only), marks 2025-03-26 authorization as the application's, and lists the late-status and silent-handler behaviors as disclosed.
+- README corrections: a 2026-07-28 `ping` gets `-32601`; a sessionless request other than `initialize` gets 400; `?session=` works on `/events` only; only tools can be unregistered.
+
+### Tests
+- New suites `Mcp.SchemaDialectsExact` (6), `McpStreams.Strict` (6), and `McpHttp.Strict` (5). `Test.McpServer` gained a `--raw-utf8` mode that writes unescaped UTF-8, and the stdio test forces code page 437 so it fails without the fix (701 in total).
+
 ## v2.1.7
 Closes every remaining MUST, MUST NOT, SHOULD, and SHOULD NOT gap found by the v2.1.6 review; see [COMPATIBILITY.md](COMPATIBILITY.md) for the per-revision matrix, now all conforming or not applicable.
 

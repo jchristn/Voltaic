@@ -291,6 +291,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how many consecutive pings a client may leave unanswered before the server treats the
+        /// connection as failed and closes it (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+        /// unanswered pings. Maximum is 100.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        public int PingFailureThreshold
+        {
+            get => _Endpoint.PingFailureThreshold;
+            set
+            {
+                if (value < 0 || value > 100) throw new ArgumentOutOfRangeException(nameof(value), "PingFailureThreshold must be between 0 and 100.");
+                _Endpoint.PingFailureThreshold = value;
+            }
+        }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="McpWebsocketsServer"/> class.
         /// </summary>
         /// <param name="hostname">The hostname to listen on. Use <c>*</c> or <c>+</c> for all interfaces (requires admin or root privileges). A loopback name (<c>localhost</c>, <c>127.0.0.1</c>, <c>::1</c>) serves loopback clients only; see <see cref="RestrictToLoopbackClients"/>.</param>
@@ -1078,6 +1094,7 @@ namespace Voltaic.Mcp
                 client.Caller = caller;
                 ClientConnection connected = client;
                 McpSessionState session = new McpSessionState { Owner = connected, CanPingClient = true };
+                session.Terminate = () => KickClient(connected.SessionId);
                 session.Push = (json, ct) => SendToClientAsync(connected, json, ct);
                 client.ProtocolState = session;
                 _Clients.TryAdd(clientId, client);

@@ -29,6 +29,9 @@ namespace Voltaic.Core
 
         internal bool AnswersPing { get; set; }
 
+        // Receives diagnostic messages, such as the reason the server gave for cancelling a request.
+        internal Action<string>? Log { get; set; }
+
         /// <summary>
         /// Handles a <c>notifications/cancelled</c> from the server: the matching request's handler token is cancelled
         /// and no response is sent for it. Returns true when the notification was a cancellation.
@@ -37,10 +40,15 @@ namespace Voltaic.Core
         {
             if (notification == null || !StringComparer.Ordinal.Equals(notification.Method, "notifications/cancelled")) return false;
             string? idKey = null;
+            string reason = "none given";
             try
             {
                 JsonElement parameters = notification.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(notification.Params);
                 if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("requestId", out JsonElement requestId)) idKey = IdKey(requestId);
+                if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("reason", out JsonElement reasonElement) && reasonElement.ValueKind == JsonValueKind.String)
+                {
+                    reason = reasonElement.GetString() ?? reason;
+                }
             }
             catch (JsonException)
             {
@@ -50,6 +58,7 @@ namespace Voltaic.Core
             }
 
             if (idKey == null) return true;
+            Log?.Invoke($"The server cancelled request {idKey} (reason: {reason}).");
             if (_Running.TryGetValue(idKey, out CancellationTokenSource? running))
             {
                 try

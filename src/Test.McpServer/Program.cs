@@ -16,6 +16,12 @@ namespace Test.McpServer
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "--raw-utf8")
+            {
+                await RawUtf8ServerAsync().ConfigureAwait(false);
+                return;
+            }
+
             Console.Error.WriteLine("=== MCP Test Server Starting ===");
             Console.Error.WriteLine("Reading from stdin, writing to stdout");
             Console.Error.WriteLine("Press Ctrl+C or close stdin to stop");
@@ -184,6 +190,28 @@ namespace Test.McpServer
         // A fake stdio server for client tests: it sends requests to the client (ping, a registered method, an unknown
         // method) and reflects every message the client sends back as a notifications/echo notification, so a test can
         // observe the client's responses through NotificationReceived.
+        // A minimal stdio server that writes raw (unescaped) UTF-8, as servers built on other SDKs do: it answers
+        // initialize, and answers "raw/text" with non-ASCII text.
+        static async Task RawUtf8ServerAsync()
+        {
+            using System.IO.StreamReader stdin = new System.IO.StreamReader(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false));
+            using System.IO.Stream stdout = Console.OpenStandardOutput();
+            JsonSerializerOptions raw = new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+            string? line;
+            while ((line = await stdin.ReadLineAsync().ConfigureAwait(false)) != null)
+            {
+                using JsonDocument request = JsonDocument.Parse(line);
+                if (!request.RootElement.TryGetProperty("id", out JsonElement id) || !request.RootElement.TryGetProperty("method", out JsonElement method)) continue;
+                object result = method.GetString() == "initialize"
+                    ? new { protocolVersion = "2025-11-25", capabilities = new { }, serverInfo = new { name = "raw-utf8", version = "1" } }
+                    : new { text = "héllo 世界" };
+                string json = "{\"jsonrpc\":\"2.0\",\"id\":" + id.GetRawText() + ",\"result\":" + JsonSerializer.Serialize(result, raw) + "}\n";
+                byte[] bytes = new System.Text.UTF8Encoding(false).GetBytes(json);
+                await stdout.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+                await stdout.FlushAsync().ConfigureAwait(false);
+            }
+        }
+
         static async Task ProbeClientAsync()
         {
             string[] requests =

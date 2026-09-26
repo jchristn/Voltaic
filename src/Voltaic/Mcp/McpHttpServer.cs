@@ -1568,6 +1568,13 @@ namespace Voltaic.Mcp
             }
 
             McpEnvelope envelope = McpEnvelope.Parse(root);
+            if (IsRejectedNotification(envelope))
+            {
+                if (mayIssueSession) connection.Dispose();
+                await WriteJsonRpcErrorAsync(context, 400, null, new McpProtocolException(envelope.Error!.Code, envelope.Error.Message ?? "Invalid notification."), token).ConfigureAwait(false);
+                return;
+            }
+
             if (envelope.Kind == McpEnvelopeKind.Response)
             {
                 AcceptClientResponse(context, connection, mayIssueSession, hasSession);
@@ -1696,7 +1703,14 @@ namespace Voltaic.Mcp
         }
 
         // 403 with an RFC 6750 insufficient_scope challenge, for a handler that threw McpInsufficientScopeException.
-        private async Task WriteInsufficientScopeAsync(HttpListenerContext context, object? id, string scope, string? message, string? sessionId, CancellationToken token)
+        private Task WriteInsufficientScopeAsync(HttpListenerContext context, object? id, string scope, string? message, string? sessionId, CancellationToken token)
+        {
+            JsonRpcResponse response = new JsonRpcResponse { Id = id, Error = new JsonRpcError { Code = McpInsufficientScopeException.ErrorCode, Message = message ?? "Insufficient scope" } };
+            return WriteInsufficientScopeBodyAsync(context, scope, JsonSerializer.Serialize(response), sessionId, token);
+        }
+
+        // Answers 403 with an RFC 6750 insufficient_scope challenge (plus resource_metadata when configured).
+        private async Task WriteInsufficientScopeBodyAsync(HttpListenerContext context, string scope, string json, string? sessionId, CancellationToken token)
         {
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
             if (sessionId != null) SetSessionIdHeaders(context.Response, sessionId);
@@ -1705,8 +1719,7 @@ namespace Voltaic.Mcp
             if (metadataUrl != null) challenge += ", resource_metadata=\"" + metadataUrl + "\"";
             context.Response.AddHeader("WWW-Authenticate", challenge);
 
-            JsonRpcResponse response = new JsonRpcResponse { Id = id, Error = new JsonRpcError { Code = McpInsufficientScopeException.ErrorCode, Message = message ?? "Insufficient scope" } };
-            byte[] body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+            byte[] body = Encoding.UTF8.GetBytes(json);
             context.Response.StatusCode = 403;
             context.Response.ContentType = "application/json";
             context.Response.ContentLength64 = body.Length;
@@ -1714,7 +1727,6 @@ namespace Voltaic.Mcp
             context.Response.Close();
         }
 
-        // The absolute URL of the protected resource metadata, when it is configured.
         // The metadata URL clients discover from a challenge (RFC 9728): derived from the configured resource
         // identifier, which is the server's public URL, so it stays correct behind a TLS-terminating proxy. The
         // well-known path is inserted between the authority and the resource's path.
@@ -2158,6 +2170,19 @@ namespace Voltaic.Mcp
         {
             string? bodyMethod = incomingRequest?.Method;
 
+            // A body that is not JSON is a parse error.
+            try
+            {
+                using (JsonDocument.Parse(requestBody))
+                {
+                }
+            }
+            catch (JsonException)
+            {
+                await WriteJsonRpcErrorAsync(context, 400, null, new McpProtocolException(-32700, "Parse error"), token).ConfigureAwait(false);
+                return;
+            }
+
             // The body must be a single JSON-RPC request or notification: 2026-07-28 has no batches, and clients must
             // not send responses.
             if (IsBatchBody(requestBody))
@@ -2376,7 +2401,15 @@ namespace Voltaic.Mcp
                 StatelessSignalEnvelope? envelope = JsonSerializer.Deserialize<StatelessSignalEnvelope>(requestBody);
                 if (envelope != null && envelope.Params != null)
                 {
-                    name = !String.IsNullOrEmpty(envelope.Params.Name) ? envelope.Params.Name : envelope.Params.Uri;
+                    // The Mcp-Name source field depends on the method: params.uri for resources/read, params.name for
+                    // tools/call and prompts/get. Other methods have none.
+                    name = envelope.Method switch
+                    {
+                        "resources/read" => envelope.Params.Uri,
+                        "tools/call" => envelope.Params.Name,
+                        "prompts/get" => envelope.Params.Name,
+                        _ => null
+                    };
                     protocolVersion = envelope.Params.Meta?.ProtocolVersion;
                 }
             }
@@ -2387,6 +2420,9 @@ namespace Voltaic.Mcp
 
         private sealed class StatelessSignalEnvelope
         {
+            [JsonPropertyName("method")]
+            public string? Method { get; set; }
+
             [JsonPropertyName("params")]
             public StatelessSignalParams? Params { get; set; }
         }
@@ -2529,6 +2565,8 @@ namespace Voltaic.Mcp
 
             McpSessionState state = StateOf(connection);
             List<Task<string?>> pending = new List<Task<string?>>();
+            string? requiredScope = null;
+            bool rejectedNotification = false;
             foreach (JsonElement element in elements)
             {
                 McpEnvelope envelope = McpEnvelope.Parse(element);
@@ -2542,18 +2580,28 @@ namespace Voltaic.Mcp
                     continue;
                 }
 
-                pending.Add(_Processor.HandleAndSerializeAsync(envelope, state, null, true, null, token));
+                if (IsRejectedNotification(envelope)) rejectedNotification = true;
+                pending.Add(HandleBatchElementAsync(envelope, state, scope => requiredScope ??= scope, token));
             }
 
             List<string> responses = (await Task.WhenAll(pending).ConfigureAwait(false)).Where(json => json != null).Select(json => json!).ToList();
 
+            // A request that failed for a missing scope makes the whole response a 403 with the challenge, as
+            // authorization errors require an HTTP status; the body still carries every response.
+            if (requiredScope != null && responses.Count > 0)
+            {
+                await WriteInsufficientScopeBodyAsync(context, requiredScope, "[" + String.Join(",", responses) + "]", connection.SessionId, token).ConfigureAwait(false);
+                return;
+            }
+
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
             SetSessionIdHeaders(context.Response, connection.SessionId);
 
-            // A batch of only notifications and responses has nothing to answer: 202 with no body.
             if (responses.Count == 0)
             {
-                context.Response.StatusCode = 202;
+                // A batch of only notifications and responses has nothing to answer: 202 with no body, unless the
+                // server could not accept one of its notifications.
+                context.Response.StatusCode = rejectedNotification ? 400 : 202;
                 context.Response.Close();
                 return;
             }
@@ -2563,6 +2611,20 @@ namespace Voltaic.Mcp
             context.Response.ContentLength64 = buffer.Length;
             await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
             context.Response.Close();
+        }
+
+        // A notification the server cannot accept (a malformed message that has a method but no id).
+        private static bool IsRejectedNotification(McpEnvelope envelope)
+        {
+            return envelope.Kind == McpEnvelopeKind.Invalid && envelope.Method != null && envelope.Id == null && envelope.Error != null;
+        }
+
+        private async Task<string?> HandleBatchElementAsync(McpEnvelope envelope, McpSessionState state, Action<string> onInsufficientScope, CancellationToken token)
+        {
+            McpHandledResponse? handled = await _Processor.HandleAsync(envelope, state, null, true, null, token).ConfigureAwait(false);
+            if (handled == null) return null;
+            if (handled.InsufficientScope != null) onInsufficientScope(handled.InsufficientScope);
+            return _Processor.SerializeResponse(handled.Response, handled.StatelessVersion, envelope.Method, state);
         }
 
         private void HandleCorsPreflightRequest(HttpListenerContext context)

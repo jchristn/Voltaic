@@ -6,6 +6,7 @@ namespace Voltaic.Mcp
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Text;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
@@ -79,6 +80,7 @@ namespace Voltaic.Mcp
         private int _ShutdownGracePeriodMs = 5000;
         private int _PingIntervalMs = 30000;
         private int _PingTimeoutMs = 10000;
+        private int _PingFailureThreshold = 1;
         private McpPinger? _Pinger;
         private int _TerminateGracePeriodMs = 2000;
         private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
@@ -89,6 +91,7 @@ namespace Voltaic.Mcp
         public McpClient()
         {
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
+            _RequestDispatcher.Log = LogMessage;
         }
 
         /// <summary>
@@ -112,7 +115,12 @@ namespace Voltaic.Mcp
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+
+                    // stdio messages are UTF-8 (without a byte order mark) whatever the console code page is.
+                    StandardInputEncoding = new UTF8Encoding(false),
+                    StandardOutputEncoding = new UTF8Encoding(false),
+                    StandardErrorEncoding = new UTF8Encoding(false)
                 };
 
                 foreach (string argument in arguments)
@@ -128,6 +136,7 @@ namespace Voltaic.Mcp
                 _ServerProcess.Start();
 
                 _StdinWriter = _ServerProcess.StandardInput;
+                _StdinWriter.NewLine = "\n";
                 _StdoutReader = _ServerProcess.StandardOutput;
                 _StderrReader = _ServerProcess.StandardError;
 
@@ -361,6 +370,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets how many consecutive pings the server may leave unanswered before the client treats the
+        /// connection as failed and disconnects (MCP: ping timeouts are connection failures). Default is 1. 0 only logs
+        /// unanswered pings. Maximum is 100.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set outside 0 to 100.</exception>
+        public int PingFailureThreshold
+        {
+            get => _PingFailureThreshold;
+            set
+            {
+                if (value < 0 || value > 100) throw new ArgumentOutOfRangeException(nameof(value), "PingFailureThreshold must be between 0 and 100.");
+                _PingFailureThreshold = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets the client name reported in <c>initialize</c>. Default is <c>Voltaic.Mcp.Client</c>.
         /// </summary>
         public string ClientName
@@ -434,7 +459,7 @@ namespace Voltaic.Mcp
                 {
                     return false;
                 }
-            }, LogMessage);
+            }, LogMessage, () => Task.Run(() => Shutdown()), _PingFailureThreshold);
         }
 
         /// <summary>

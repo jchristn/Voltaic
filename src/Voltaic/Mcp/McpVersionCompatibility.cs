@@ -209,6 +209,22 @@ namespace Voltaic.Mcp
             }
         }
 
+        // True for a typeless schema whose keywords all apply to objects, so adding "type": "object" does not change
+        // which structured results it describes for older clients.
+        private static bool DescribesOnlyObjects(JsonObject schema)
+        {
+            string[] objectKeywords = { "properties", "required", "additionalProperties", "patternProperties", "propertyNames", "minProperties", "maxProperties", "dependentRequired", "dependentSchemas" };
+            string[] annotationKeywords = { "$schema", "$id", "$defs", "definitions", "title", "description", "$comment", "examples", "default" };
+            bool hasObjectKeyword = false;
+            foreach (KeyValuePair<string, JsonNode?> member in schema)
+            {
+                if (objectKeywords.Contains(member.Key)) hasObjectKeyword = true;
+                else if (!annotationKeywords.Contains(member.Key)) return false;
+            }
+
+            return hasObjectKeyword;
+        }
+
         private static void DowngradeTool(JsonObject tool, int revision)
         {
             if (revision < _Rev20250618)
@@ -232,11 +248,26 @@ namespace Voltaic.Mcp
                 tool.Remove("_meta");
             }
 
-            // Before 2026-07-28 an outputSchema must be an object schema; one of another type is omitted.
-            if (tool["outputSchema"] is JsonObject outputSchema && outputSchema["type"] is JsonValue outputType
-                && (!outputType.TryGetValue(out string? typeName) || typeName != "object"))
+            // Before 2026-07-28 an outputSchema must declare "type": "object". A schema of another type is omitted; one
+            // without a type gets "type": "object" when it only describes objects, and is omitted otherwise.
+            if (tool["outputSchema"] is JsonObject outputSchema)
             {
-                tool.Remove("outputSchema");
+                if (outputSchema["type"] is JsonValue outputType)
+                {
+                    if (!outputType.TryGetValue(out string? typeName) || typeName != "object") tool.Remove("outputSchema");
+                }
+                else if (outputSchema.ContainsKey("type"))
+                {
+                    tool.Remove("outputSchema");
+                }
+                else if (DescribesOnlyObjects(outputSchema))
+                {
+                    outputSchema["type"] = "object";
+                }
+                else
+                {
+                    tool.Remove("outputSchema");
+                }
             }
 
             // ToolAnnotations was added in 2025-03-26.

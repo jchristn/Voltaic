@@ -341,7 +341,7 @@ namespace Test.Shared
                     {
                         // MissingRequiredClientCapability with no capabilities carries no data payload.
                         McpProtocolException missingNoData = McpProtocolException.MissingRequiredClientCapability("nope");
-                        TestAssert.Null(missingNoData.ErrorData, "Missing-capability data should be null when no capabilities are supplied.");
+                        TestAssert.True(TestJson.SerializeToElement(missingNoData.ErrorData!).Has("requiredCapabilities"), "Missing-capability data always carries requiredCapabilities, as the specification requires.");
 
                         // UnsupportedProtocolVersion tolerates a null supported list by emitting an empty array.
                         McpProtocolException unsupportedNull = McpProtocolException.UnsupportedProtocolVersion("2000-01-01", null!);
