@@ -139,7 +139,7 @@ If an application replaced `ping` with `RegisterMethod("ping", _ => "pong")`, re
 - v2.0.0 `McpHttpClient` to v1.x server: works (`PingAsync` accepts `"pong"`).
 - v1.x `McpHttpClient` to v2.0.0 server: **fails**. `ConnectAsync` and `ConnectStreamableAsync` in v1.x call `CallAsync<string>("ping")`, which cannot read `{}`, and return `false`. Upgrade Voltaic clients before or together with servers.
 - Third-party MCP clients (Claude Code, MCP Inspector, the official SDKs) expect `{}` and are unaffected or improved.
-- v2.1.0 note: from v2.1.0, `McpHttpClient` connects with the `initialize` handshake instead of `ping`, and `McpHttpServer` creates sessions only on a successful `initialize`. A v2.0.0 `McpHttpClient` talking to a v2.1.0 server needs `RequireInitializedSessions = false` on the server. See "Upgrading to v2.1.0" in the README.
+- v2.1.0 note: from v2.1.0, `McpHttpClient` connects with the `initialize` handshake instead of `ping`, and `McpHttpServer` creates sessions only on a successful `initialize`. A v2.0.0 `McpHttpClient` talking to a v2.1.0 server needs `RequireInitializedSessions = false` on the server. See "Upgrading to v2.1.0" in [UPGRADING.md](UPGRADING.md).
 
 ---
 

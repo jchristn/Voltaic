@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+- New `UPGRADING.md` holds the per-version upgrade tables (v1.x to v2.1.13) that were in the README. The README keeps a short "Upgrading" summary and one upgrade note in place of four per-release callouts.
+- README: the version line names v2.1.13, and the test counts read 838 cases.
+
 ## v2.1.13
 Resolves every finding of a four-part review of v2.1.12 against the MCP specification, then every finding of a second four-part review of this release before it shipped. Adds `subscriptions/listen`, message and session limits on every transport, and a per-revision conformance matrix.
 
@@ -524,7 +530,7 @@ A specification-conformance patch, found by reviewing Voltaic against the publis
 - The README now states that `/rpc` and `/events` are Voltaic-specific endpoints, not the deprecated 2024-11-05 HTTP+SSE transport.
 
 ## v2.1.0
-A security release (reports: `archive/BUG_TO_FIX.md`, `archive/AUTH_BUGS.md`). It fixes handshake sessions being created for requests that never initialized, and closes the ways a web page in the user's browser, or another host on the network, could reach a Voltaic server the developer believed was local-only. Defaults change as a result; see "Upgrading to v2.1.0" in the README for the one-line fixes.
+A security release (reports: `archive/BUG_TO_FIX.md`, `archive/AUTH_BUGS.md`). It fixes handshake sessions being created for requests that never initialized, and closes the ways a web page in the user's browser, or another host on the network, could reach a Voltaic server the developer believed was local-only. Defaults change as a result; see "Upgrading to v2.1.0" in [UPGRADING.md](UPGRADING.md) for the one-line fixes.
 
 ### Security fixes
 - **Browser origins are validated** on `McpHttpServer`, `McpWebsocketsServer`, and `A2AHttpServer`, as the MCP Streamable HTTP specification requires. Before, any page could call tools with a preflight-free `text/plain` POST and read the result, because every response carried `Access-Control-Allow-Origin: *`, and any page could open a WebSocket (browsers do not apply CORS to WebSockets). Requests without an `Origin` header (non-browser clients) and loopback origins (`http(s)://localhost`, `127.0.0.0/8`, `[::1]`, any port) are allowed; every other origin gets 403 with no CORS headers, before preflight handling and authentication. Configure with the new `OriginPolicy` property (`AllowedOrigins`, `AllowLoopbackOrigins`, `OriginValidator`).
