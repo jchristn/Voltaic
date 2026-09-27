@@ -232,13 +232,29 @@ namespace Voltaic.Mcp
                         || (bodyValue.ValueKind == JsonValueKind.False && decodedHeader == "false");
                 case "integer":
                 case "number":
-                    return bodyValue.ValueKind == JsonValueKind.Number
-                        && Decimal.TryParse(decodedHeader, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal header)
-                        && bodyValue.TryGetDecimal(out decimal body)
-                        && header == body;
+                    if (bodyValue.ValueKind != JsonValueKind.Number) return false;
+                    McpJsonNumber? header = ParseHeaderNumber(decodedHeader);
+                    McpJsonNumber? body = McpJsonNumber.Parse(bodyValue.GetRawText());
+                    return header != null && body != null && McpJsonNumber.Compare(header, body) == 0;
                 default:
                     return false;
             }
+        }
+
+        // A header number compares exactly with the body value. Besides JSON number syntax, a leading '+', and a decimal
+        // point without digits on one side (".5", "42."), are accepted.
+        private static McpJsonNumber? ParseHeaderNumber(string text)
+        {
+            string value = text.Trim();
+            if (value.StartsWith("+", StringComparison.Ordinal)) value = value.Substring(1);
+            bool negative = value.StartsWith("-", StringComparison.Ordinal);
+            if (negative) value = value.Substring(1);
+            int exponent = value.IndexOfAny(new[] { 'e', 'E' });
+            string mantissa = exponent < 0 ? value : value.Substring(0, exponent);
+            string suffix = exponent < 0 ? String.Empty : value.Substring(exponent);
+            if (mantissa.StartsWith(".", StringComparison.Ordinal)) mantissa = "0" + mantissa;
+            if (mantissa.EndsWith(".", StringComparison.Ordinal)) mantissa = mantissa.Substring(0, mantissa.Length - 1);
+            return McpJsonNumber.Parse((negative ? "-" : String.Empty) + mantissa + suffix);
         }
 
         private static void Walk(JsonElement schema, List<string> path, bool reachable, List<McpHeaderParameter> parameters, bool strictIntegerBounds)

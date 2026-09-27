@@ -34,6 +34,15 @@ namespace Voltaic.Mcp
         // Char and Backreference: match right to left (inside a lookbehind).
         internal bool Backward { get; set; }
 
+        // Backreference: every group that shares the referenced name (the one that participated is used), or null.
+        internal int[]? Groups { get; set; }
+
+        // Backreference, WordBoundary, and NotWordBoundary: case-insensitive (the i modifier).
+        internal bool IgnoreCase { get; set; }
+
+        // Start and End: also match next to a line terminator (the m modifier).
+        internal bool Multiline { get; set; }
+
         // Lookaround: the sub-program and whether it is negative.
         internal McpRegexProgram? Program { get; set; }
 

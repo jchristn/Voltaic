@@ -40,13 +40,15 @@ namespace Test.Shared
                 "MCP edge-case requirements on stream transports",
                 new List<TestCaseDescriptor>
                 {
-                    Case(suiteId, "WebSocketKeepsUtf8SplitAcrossReads", "Raw UTF-8 messages larger than the receive buffer arrive intact at McpWebsocketsServer and McpWebsocketsClient, although reads split multi-byte characters", async ct =>
+                    Case(suiteId, "WebSocketKeepsUtf8SplitAcrossReads", "Raw UTF-8 messages larger than the 64 KiB receive buffer arrive intact at McpWebsocketsServer and McpWebsocketsClient, although reads split multi-byte characters", async ct =>
                     {
                         // Voltaic escapes non-ASCII when it serializes, so raw peers send the literal UTF-8 other SDKs send.
-                        string text = "a" + String.Concat(Enumerable.Repeat("世界", 5000));
+                        // Larger than the 64 KiB receive buffer, with ASCII padding so the first read ends inside a character.
+                        const string requestPrefix = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"echo_text\",\"arguments\":{\"text\":\"";
+                        int pad = (65536 - requestPrefix.Length - 1) % 3;
+                        string text = new string('a', 1 + pad) + String.Concat(Enumerable.Repeat("世界", 15000));
                         await using WebSocketMcpFixture fixture = await WebSocketMcpFixture.StartAsync(ct, server =>
                         {
-                            server.MaxMessageSize = 4096;
                             server.RegisterTool("echo_text", "Echoes text", new { type = "object", properties = new { text = new { type = "string" } } }, args => args?.GetString("text") ?? "");
                         }).ConfigureAwait(false);
                         using (ClientWebSocket raw = new ClientWebSocket())
@@ -75,14 +77,14 @@ namespace Test.Shared
                             await SendTextAsync(socket.WebSocket, "{\"jsonrpc\":\"2.0\",\"id\":" + call.Get("id").Int() + ",\"result\":{\"text\":\"" + text + "\"}}", ct).ConfigureAwait(false);
                             await Task.Delay(500, ct).ConfigureAwait(false);
                         }, ct);
-                        using McpWebsocketsClient client = new McpWebsocketsClient { MaxMessageSize = 4096 };
+                        using McpWebsocketsClient client = new McpWebsocketsClient();
                         TestAssert.True(await client.ConnectAsync($"ws://localhost:{port}/", ct).ConfigureAwait(false), "The client connects to the raw server.");
                         JsonProbe received = JsonProbe.From(await client.CallAsync<object?>("custom/text", new { }, 15000, ct).ConfigureAwait(false));
                         TestAssert.Equal(text, received.Get("text").String(), "The client decoded the split characters correctly.");
                         await serve.ConfigureAwait(false);
                     }),
 
-                    Case(suiteId, "CancelBeforeRequestSuppressesIt", "A notifications/cancelled that arrives before its request makes the server skip that request and send no response", async ct =>
+                    Case(suiteId, "CancelBeforeRequestIsIgnored", "A notifications/cancelled that arrives before its request names an unknown ID and is ignored; the request is answered", async ct =>
                     {
                         await using TcpJsonRpcFixture fixture = await StartTcpAsync(ct).ConfigureAwait(false);
                         using RawLineClient client = await RawLineClient.ConnectAsync(fixture.Port, ct).ConfigureAwait(false);
@@ -91,7 +93,9 @@ namespace Test.Shared
                         await client.SendAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":\"early\"}}").ConfigureAwait(false);
                         await client.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":\"early\",\"method\":\"tools/list\"}").ConfigureAwait(false);
                         await client.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":\"after\",\"method\":\"ping\"}").ConfigureAwait(false);
-                        TestAssert.Equal("after", Next(client).Get("id").String(), "The pre-cancelled request got no response.");
+                        // Requests run concurrently, so the two responses may arrive in either order.
+                        HashSet<string?> answered = new HashSet<string?> { Next(client).Get("id").String(), Next(client).Get("id").String() };
+                        TestAssert.True(answered.Contains("early") && answered.Contains("after"), "The request after the cancellation, and the next one, are answered.");
                         TestAssert.True(client.Receive(_Quiet) == null, "Nothing else arrives.");
                     }),
 

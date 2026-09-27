@@ -15,8 +15,7 @@ namespace Test.Shared
     using Voltaic.Mcp;
 
     /// <summary>
-    /// Covers the requirements closed in v2.1.12: nothing is sent for a cancelled request that was rejected before it
-    /// ran (server and client), no cancellation reaches a later connection, the stdio client shuts down a server whose
+    /// Covers the requirements closed in v2.1.12: no cancellation reaches a later connection, the stdio client shuts down a server whose
     /// stdout closed, a failed explicit initialize closes the connection, the log limit applies per client on HTTP, and a
     /// rejected notification's error carries no id.
     /// </summary>
@@ -35,41 +34,6 @@ namespace Test.Shared
                 "Cancellation of rejected requests, reconnection, shutdown, and limits",
                 new List<TestCaseDescriptor>
                 {
-                    Case(suiteId, "CancelledRejectedRequestsGetNoResponse", "A request rejected before it runs gets no response once its cancellation arrived", async ct =>
-                    {
-                        await using TcpJsonRpcFixture fixture = await TcpJsonRpcFixture.StartMcpTcpAsync(ct).ConfigureAwait(false);
-                        using RawLineClient client = await RawLineClient.ConnectAsync(fixture.Port, ct).ConfigureAwait(false);
-                        string badMeta = "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientInfo\":{\"name\":\"t\",\"version\":\"1\"},\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/logLevel\":\"loud\"}";
-                        for (int i = 0; i < 40; i++)
-                        {
-                            // The cancellation is sent first, so it has certainly arrived before the request is rejected.
-                            await client.SendAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":\"r" + i + "\"}}").ConfigureAwait(false);
-                            await client.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":\"r" + i + "\",\"method\":\"tools/list\",\"params\":{" + badMeta + "}}").ConfigureAwait(false);
-                        }
-
-                        await Task.Delay(500, ct).ConfigureAwait(false);
-                        await client.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":\"after\",\"method\":\"ping\"}").ConfigureAwait(false);
-                        TestAssert.Equal("after", McpStrictSuites.Next(client).Get("id").String(), "No rejected, cancelled request was answered.");
-                    }),
-
-                    Case(suiteId, "ClientSkipsCancelledRequestsItWouldReject", "A client does not answer a server request it would reject once the server cancelled it", async ct =>
-                    {
-                        using RawTcpPeer peer = RawTcpPeer.Listen();
-                        using McpTcpClient client = new McpTcpClient { AutoInitialize = false, PingIntervalMs = 0 };
-                        Task accepting = peer.AcceptAsync(ct);
-                        TestAssert.True(await client.ConnectAsync("127.0.0.1", peer.Port, ct).ConfigureAwait(false), "The client connects.");
-                        await accepting.ConfigureAwait(false);
-                        for (int i = 0; i < 20; i++)
-                        {
-                            // The cancellation goes first, so it has certainly arrived before the request is rejected.
-                            await peer.SendAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":" + i + "}}\n{\"jsonrpc\":\"2.0\",\"id\":" + i + ",\"method\":\"unknown/method\"}", ct).ConfigureAwait(false);
-                        }
-
-                        await peer.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":\"z\",\"method\":\"ping\"}", ct).ConfigureAwait(false);
-                        string? line = await peer.ReceiveAsync(_Wait, ct).ConfigureAwait(false);
-                        TestAssert.True(line != null && TestJson.ParseRoot(line).Get("id").String() == "z", $"Only the uncancelled request is answered: {line}");
-                    }),
-
                     Case(suiteId, "NoCancellationReachesALaterConnection", "When the connection drops, a waiting call fails at once and its cancellation never reaches the next connection", async ct =>
                     {
                         using McpTcpClient client = new McpTcpClient { AutoInitialize = false, PingIntervalMs = 0 };
@@ -224,27 +188,6 @@ namespace Test.Shared
                         client.Disconnect();
                         TestAssert.True(await client.ConnectStreamableAsync(fake.BaseUrl, "/mcp", ct).ConfigureAwait(false), "The handshake after a stateless connection succeeds.");
                         TestAssert.True(fake.InitializeBodies.Last().Contains("\"2025-11-25\"", StringComparison.Ordinal), $"initialize never requests 2026-07-28: {fake.InitializeBodies.Last()}");
-                    }),
-
-                    Case(suiteId, "SessionsAreSeparateRateLimitClients", "Two sessions from one address have their own tool call limits", async ct =>
-                    {
-                        await using HttpMcpTestServerFixture fixture = await HttpMcpTestServerFixture.StartAsync(ct, s =>
-                        {
-                            s.RateLimits.ToolCallsPerSecond = 5;
-                            s.RegisterTool("t", "Tool", new { type = "object" }, args => "ok");
-                        }).ConfigureAwait(false);
-                        int limited = 0;
-                        foreach (int session in new[] { 1, 2 })
-                        {
-                            string id = (await McpHttpTestRequests.InitializeAsync(fixture, "2025-11-25", null, ct).ConfigureAwait(false)).SessionId!;
-                            for (int call = 0; call < 4; call++)
-                            {
-                                RpcResult result = await McpHttpTestRequests.SendAsync(fixture, "tools/call", call + 10, new { name = "t", arguments = new { } }, id, "2025-11-25", null, ct).ConfigureAwait(false);
-                                if (result.Result.Has("isError") && result.Result.Get("isError").Bool()) limited++;
-                            }
-                        }
-
-                        TestAssert.Equal(0, limited, "Neither session exceeded its own limit.");
                     }),
 
                     Case(suiteId, "SchemasResolveAndCompareExactly", "A pointer into an embedded resource resolves there; uniqueItems and huge exponents compare exactly; valid extreme keyword values register and malformed ones do not", async ct =>

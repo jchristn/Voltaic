@@ -66,7 +66,7 @@ namespace Voltaic.Mcp
         {
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(requestJson))
+                using (JsonDocument document = JsonDocument.Parse(requestJson, JsonLimits.Document))
                 {
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object) return false;
@@ -93,7 +93,7 @@ namespace Voltaic.Mcp
 
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(requestJson))
+                using (JsonDocument document = JsonDocument.Parse(requestJson, JsonLimits.Document))
                 {
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object) return null;

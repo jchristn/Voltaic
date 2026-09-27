@@ -210,8 +210,8 @@ namespace Voltaic.Core
             if (_IsDisposed) throw new ObjectDisposedException(nameof(ClientConnection));
             if (notification == null) throw new ArgumentNullException(nameof(notification));
 
+            // Queueing a server notification is not client activity; delivering it to a client stream is.
             _Queue.Enqueue(notification);
-            LastActivity = DateTime.UtcNow;
 
             // Enforce max queue size
             while (_Queue.Count > _MaxQueueSize)

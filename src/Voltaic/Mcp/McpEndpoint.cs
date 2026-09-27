@@ -94,7 +94,11 @@ namespace Voltaic.Mcp
         public McpEndpoint(string serverName)
         {
             ServerName = serverName;
+            Subscriptions = new McpSubscriptions(this);
         }
+
+        // The subscriptions/listen streams of 2026-07-28 clients.
+        internal McpSubscriptions Subscriptions { get; }
 
         public object Initialize(RpcParameters? args)
         {
@@ -157,10 +161,9 @@ namespace Voltaic.Mcp
 
         public McpDiscoverResult Discover(RpcParameters? args)
         {
-            // server/discover describes the stateless (2026-07-28) surface. Change notifications there are
-            // delivered only through subscriptions/listen, which Voltaic does not implement, so the stateless
-            // capabilities must not promise listChanged or resource subscriptions.
-            McpServerCapabilities capabilities = BuildCapabilities(includeChangeNotifications: false);
+            // server/discover describes the stateless (2026-07-28) surface, where change notifications are delivered
+            // through subscriptions/listen.
+            McpServerCapabilities capabilities = BuildCapabilities(includeChangeNotifications: true);
 
             McpDiscoverResult result = new McpDiscoverResult
             {
@@ -341,8 +344,11 @@ namespace Voltaic.Mcp
                 }
 
                 toolArguments = call.Arguments == null ? null : RpcParameters.FromObject(call.Arguments);
+
+                // Every string and property name must be valid Unicode text, also where the schema does not look.
+                if (call.Arguments is JsonElement provided) EnsureValidText(provided, 0);
             }
-            catch (InvalidOperationException)
+            catch (Exception unreadable) when (unreadable is InvalidOperationException || unreadable is JsonException)
             {
                 // A string with an unpaired UTF-16 surrogate is not valid Unicode (I-JSON forbids it) and cannot be
                 // processed as text: an input validation error, reported as a tool execution error.
@@ -384,10 +390,12 @@ namespace Voltaic.Mcp
                 return invalid;
             }
 
-            // Make the MRTR retry state (inputResponses, requestState) available to the handler.
+            // Make the MRTR retry state (inputResponses, requestState) available to the handler. inputResponses exists
+            // only in 2026-07-28; the handler sees the validated responses it can recognize.
             object result;
             string? statelessVersion = McpRequestProtocol.StatelessVersion;
-            using (McpToolCallContext.Push(new McpToolCallContext(toolName, call.InputResponses, call.RequestState, statelessVersion != null, McpRequestScope.Current)))
+            Dictionary<string, JsonElement>? inputResponses = statelessVersion != null ? FilterInputResponses(call.InputResponses) : null;
+            using (McpToolCallContext.Push(new McpToolCallContext(toolName, inputResponses, call.RequestState, statelessVersion != null, McpRequestScope.Current)))
             {
                 try
                 {
@@ -716,7 +724,16 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams("prompts/get name must be a non-empty string.");
             }
 
-            RpcParameters? promptArguments = request.Arguments == null ? null : RpcParameters.FromObject(request.Arguments);
+            RpcParameters? promptArguments;
+            try
+            {
+                promptArguments = request.Arguments == null ? null : RpcParameters.FromObject(request.Arguments);
+            }
+            catch (Exception unreadable) when (unreadable is InvalidOperationException || unreadable is JsonException)
+            {
+                // A string with an unpaired surrogate is not valid Unicode text.
+                throw McpProtocolException.InvalidParams("prompts/get arguments must be valid Unicode text.");
+            }
 
             PromptRegistration? prompt;
             lock (_Lock)
@@ -731,7 +748,16 @@ namespace Voltaic.Mcp
 
             if (request.Arguments != null)
             {
-                JsonElement provided = JsonSerializer.SerializeToElement(request.Arguments);
+                JsonElement provided;
+                try
+                {
+                    provided = JsonSerializer.SerializeToElement(request.Arguments);
+                }
+                catch (Exception unreadable) when (unreadable is InvalidOperationException || unreadable is JsonException)
+                {
+                    throw McpProtocolException.InvalidParams("prompts/get arguments must be valid Unicode text.");
+                }
+
                 if (provided.ValueKind != JsonValueKind.Object)
                 {
                     throw McpProtocolException.InvalidParams("prompts/get arguments must be a JSON object.");
@@ -742,6 +768,15 @@ namespace Voltaic.Mcp
                     if (argument.Value.ValueKind != JsonValueKind.String)
                     {
                         throw McpProtocolException.InvalidParams($"Prompt argument '{argument.Name}' must be a string.");
+                    }
+
+                    try
+                    {
+                        argument.Value.GetString();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        throw McpProtocolException.InvalidParams($"Prompt argument '{argument.Name}' must be valid Unicode text.");
                     }
                 }
             }
@@ -1045,7 +1080,7 @@ namespace Voltaic.Mcp
         private static JsonElement ParseObjectParams(RpcParameters? args, string method)
         {
             if (args == null || !args.HasValue) throw McpProtocolException.InvalidParams($"{method} requires params.");
-            using (JsonDocument document = JsonDocument.Parse(args.RawJson!))
+            using (JsonDocument document = JsonDocument.Parse(args.RawJson!, JsonLimits.Document))
             {
                 if (document.RootElement.ValueKind != JsonValueKind.Object) throw McpProtocolException.InvalidParams($"{method} params must be a JSON object.");
                 return document.RootElement.Clone();
@@ -1074,6 +1109,128 @@ namespace Voltaic.Mcp
             return parameters.Uri;
         }
 
+        // MRTR: an input response is the result of an input request (ElicitResult, CreateMessageResult, or
+        // ListRootsResult). A response recognizable as one of them (by action, by role or model, or by roots) must match
+        // its schema (-32602 otherwise); anything else is information the server does not recognize and is ignored.
+        private static Dictionary<string, JsonElement>? FilterInputResponses(Dictionary<string, JsonElement>? responses)
+        {
+            if (responses == null) return null;
+            Dictionary<string, JsonElement> recognized = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, JsonElement> entry in responses)
+            {
+                JsonElement response = entry.Value;
+                if (response.ValueKind != JsonValueKind.Object) continue;
+                string? problem;
+                if (response.TryGetProperty("action", out JsonElement _)) problem = ElicitResultProblem(response);
+                else if (response.TryGetProperty("roots", out JsonElement _)) problem = ListRootsResultProblem(response);
+                else if (response.TryGetProperty("role", out JsonElement _) || response.TryGetProperty("model", out JsonElement _)) problem = CreateMessageResultProblem(response);
+                else continue;
+
+                if (problem != null) throw McpProtocolException.InvalidParams($"Invalid params: inputResponses['{entry.Key}'] {problem}");
+                recognized[entry.Key] = response;
+            }
+
+            return recognized;
+        }
+
+        private static string? ElicitResultProblem(JsonElement response)
+        {
+            JsonElement action = response.GetProperty("action");
+            string? name = action.ValueKind == JsonValueKind.String ? action.GetString() : null;
+            if (name != "accept" && name != "decline" && name != "cancel") return "has an action other than accept, decline, or cancel.";
+            if (!response.TryGetProperty("content", out JsonElement content)) return null;
+            if (content.ValueKind != JsonValueKind.Object) return "has content that is not an object.";
+            foreach (JsonProperty field in content.EnumerateObject())
+            {
+                JsonValueKind kind = field.Value.ValueKind;
+                bool valid = kind == JsonValueKind.String || kind == JsonValueKind.Number || kind == JsonValueKind.True || kind == JsonValueKind.False
+                    || (kind == JsonValueKind.Array && field.Value.EnumerateArray().All(item => item.ValueKind == JsonValueKind.String));
+                if (!valid) return $"has a content value '{field.Name}' that is not a string, number, boolean, or string array.";
+            }
+
+            return null;
+        }
+
+        private static string? ListRootsResultProblem(JsonElement response)
+        {
+            JsonElement roots = response.GetProperty("roots");
+            if (roots.ValueKind != JsonValueKind.Array) return "has roots that are not an array.";
+            foreach (JsonElement root in roots.EnumerateArray())
+            {
+                if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("uri", out JsonElement uri) || uri.ValueKind != JsonValueKind.String) return "has a root without a string uri.";
+                if (root.TryGetProperty("name", out JsonElement rootName) && rootName.ValueKind != JsonValueKind.String) return "has a root whose name is not a string.";
+            }
+
+            return null;
+        }
+
+        private static string? CreateMessageResultProblem(JsonElement response)
+        {
+            if (!response.TryGetProperty("role", out JsonElement role) || role.ValueKind != JsonValueKind.String || (role.GetString() != "user" && role.GetString() != "assistant")) return "has a role other than user or assistant.";
+            if (!response.TryGetProperty("model", out JsonElement model) || model.ValueKind != JsonValueKind.String) return "has no string model.";
+            if (response.TryGetProperty("stopReason", out JsonElement stopReason) && stopReason.ValueKind != JsonValueKind.String) return "has a stopReason that is not a string.";
+            if (!response.TryGetProperty("content", out JsonElement content)) return "has no content.";
+            if (content.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement block in content.EnumerateArray())
+                {
+                    if (!IsSamplingContentBlock(block)) return "has a content block of an unknown or malformed type.";
+                }
+
+                return null;
+            }
+
+            return IsSamplingContentBlock(content) ? null : "has content that is not a content block.";
+        }
+
+        // Text, image, audio, tool use, and tool result blocks, with the members their schemas require.
+        private static bool IsSamplingContentBlock(JsonElement block)
+        {
+            if (block.ValueKind != JsonValueKind.Object || !block.TryGetProperty("type", out JsonElement type) || type.ValueKind != JsonValueKind.String) return false;
+            switch (type.GetString())
+            {
+                case "text":
+                    return HasString(block, "text");
+                case "image":
+                case "audio":
+                    return HasString(block, "data") && HasString(block, "mimeType");
+                case "tool_use":
+                    return HasString(block, "id") && HasString(block, "name") && block.TryGetProperty("input", out JsonElement input) && input.ValueKind == JsonValueKind.Object;
+                case "tool_result":
+                    return HasString(block, "toolUseId") && block.TryGetProperty("content", out JsonElement resultContent) && resultContent.ValueKind == JsonValueKind.Array;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool HasString(JsonElement element, string name)
+        {
+            return element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String;
+        }
+
+        // Reads every string and property name, which throws InvalidOperationException for an unpaired UTF-16 surrogate.
+        private static void EnsureValidText(JsonElement element, int depth)
+        {
+            if (depth > 256) return;
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.String:
+                    element.GetString();
+                    break;
+                case JsonValueKind.Object:
+                    foreach (JsonProperty property in element.EnumerateObject())
+                    {
+                        _ = property.Name;
+                        EnsureValidText(property.Value, depth + 1);
+                    }
+
+                    break;
+                case JsonValueKind.Array:
+                    foreach (JsonElement item in element.EnumerateArray()) EnsureValidText(item, depth + 1);
+                    break;
+            }
+        }
+
         // Reads typed params; a member of the wrong JSON type is invalid params (-32602), not an internal error.
         private static T? ParseParams<T>(RpcParameters? args) where T : class
         {
@@ -1084,11 +1241,19 @@ namespace Voltaic.Mcp
             }
             catch (JsonException invalid)
             {
-                throw McpProtocolException.InvalidParams($"Invalid params: {invalid.Message}");
+                // The serializer's message names .NET types and reader positions; report only the JSON path.
+                throw McpProtocolException.InvalidParams(String.IsNullOrEmpty(invalid.Path)
+                    ? "Invalid params: the params do not have the expected shape."
+                    : $"Invalid params: the value at '{invalid.Path}' has the wrong type.");
             }
-            catch (NotSupportedException invalid)
+            catch (NotSupportedException)
             {
-                throw McpProtocolException.InvalidParams($"Invalid params: {invalid.Message}");
+                throw McpProtocolException.InvalidParams("Invalid params: the params do not have the expected shape.");
+            }
+            catch (InvalidOperationException)
+            {
+                // A string with an unpaired UTF-16 surrogate is not valid Unicode text.
+                throw McpProtocolException.InvalidParams("Invalid params: a string is not valid Unicode text.");
             }
         }
 

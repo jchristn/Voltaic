@@ -26,6 +26,15 @@ namespace Voltaic.Mcp
         // Backreference by name, resolved to CaptureIndex after parsing.
         internal string? GroupName { get; set; }
 
+        // Backreference by a name that several groups share (in different alternatives): every group of that name.
+        internal int[]? CaptureIndexes { get; set; }
+
+        // Backreference and word boundaries: inside an i modifier (or flag) scope.
+        internal bool IgnoreCase { get; set; }
+
+        // Start and End: inside an m modifier scope, so line terminators also count.
+        internal bool Multiline { get; set; }
+
         // Quantifier: the bounds (Max -1 is unbounded) and greediness.
         internal int Min { get; set; }
 

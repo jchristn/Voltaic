@@ -223,6 +223,8 @@ namespace Voltaic.Mcp
             McpInitializeOutcome outcome;
             try
             {
+                // The previous connection's result no longer describes this server.
+                _InitializeResult = null;
                 outcome = await McpClientHandshake.RunAsync(
                     async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
                     ct => NotifyAsync("notifications/initialized", null, ct),
@@ -269,6 +271,7 @@ namespace Voltaic.Mcp
 
         private protected override async Task<bool> OnConnectedAsync(CancellationToken token)
         {
+            _InitializeResult = null;
             if (!AutoInitialize) return true;
             try
             {

@@ -28,6 +28,23 @@ namespace Voltaic.Core
         }
 
         /// <summary>
+        /// Gets or sets the maximum size in bytes of one received message. A newline-delimited message over the limit is
+        /// skipped and answered with an Invalid Request error (<c>-32600</c>, <c>id</c> null); a Content-Length framed
+        /// message over the limit closes the connection, since its body is not read. Default is 16 MiB (16777216 bytes).
+        /// Minimum is 4096 bytes. Applies to messages read after the change.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        public int MaxMessageSize
+        {
+            get => _MaxMessageSize;
+            set
+            {
+                if (value < 4096) throw new ArgumentOutOfRangeException(nameof(value), "Maximum message size must be at least 4096 bytes");
+                _MaxMessageSize = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets the maximum number of notifications that can be queued per client connection.
         /// When the limit is reached, oldest notifications are discarded.
         /// Default is 100 notifications. Minimum is 1.
@@ -87,6 +104,7 @@ namespace Voltaic.Core
         private int _ClientIdCounter = 0;
         private string _DefaultContentType = "application/json; charset=utf-8";
         private int _MaxQueueSize = 100;
+        private int _MaxMessageSize = 16 * 1024 * 1024;
         private bool _IsDisposed = false;
 
         /// <summary>
@@ -273,6 +291,7 @@ namespace Voltaic.Core
         /// </summary>
         public void Stop()
         {
+            OnStopping();
             _TokenSource?.Cancel();
 
             foreach (ClientConnection client in _Clients.Values)
@@ -395,7 +414,7 @@ namespace Voltaic.Core
                 {
                     // Read a complete message using LSP-style framing
                     (string? message, byte[] newBuffer, int newOffset, int newCount) = await MessageFraming.ReadMessageAsync(
-                        stream, buffer, bufferOffset, bufferCount, token).ConfigureAwait(false);
+                        stream, buffer, bufferOffset, bufferCount, token, _MaxMessageSize).ConfigureAwait(false);
 
                     // Update buffer reference in case it was resized
                     buffer = newBuffer;
@@ -447,39 +466,69 @@ namespace Voltaic.Core
         // browser's cross-protocol HTTP request (whose first line is "POST / HTTP/1.1") never reaches a handler.
         private async Task ReadNewlineMessagesAsync(ClientConnection client, NetworkStream stream, byte[] initial, int initialCount, CancellationToken token)
         {
-            List<byte> pending = new List<byte>(initialCount);
-            for (int i = 0; i < initialCount; i++) pending.Add(initial[i]);
+            // The current line's bytes; only newly read bytes are scanned for the newline, so a long line costs linear
+            // time. A line over MaxMessageSize is skipped up to its newline and answered with an Invalid Request error.
+            MemoryStream line = new MemoryStream();
+            bool discarding = false;
             byte[] chunk = new byte[8192];
+            byte[] data = initial;
+            int count = initialCount;
 
             while (!token.IsCancellationRequested)
             {
-                int newline;
-                while ((newline = pending.IndexOf((byte)'\n')) >= 0)
+                int position = 0;
+                while (position < count)
                 {
-                    string line = Encoding.UTF8.GetString(pending.GetRange(0, newline).ToArray()).TrimEnd('\r');
-                    pending.RemoveRange(0, newline + 1);
-                    if (String.IsNullOrWhiteSpace(line)) continue;
+                    int newline = Array.IndexOf(data, (byte)'\n', position, count - position);
+                    int end = newline < 0 ? count : newline;
+                    if (!discarding)
+                    {
+                        if (line.Length + (end - position) > _MaxMessageSize)
+                        {
+                            discarding = true;
+                            line.SetLength(0);
+                        }
+                        else
+                        {
+                            line.Write(data, position, end - position);
+                        }
+                    }
 
-                    string trimmed = line.TrimStart();
+                    if (newline < 0) break;
+                    position = newline + 1;
+
+                    if (discarding)
+                    {
+                        discarding = false;
+                        LogMessage($"Skipped a message from {client.SessionId} larger than MaxMessageSize ({_MaxMessageSize} bytes).");
+                        await WriteToClientAsync(client, TooLargeError(client, _MaxMessageSize), token).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    string text = Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length).TrimEnd('\r');
+                    line.SetLength(0);
+                    if (String.IsNullOrWhiteSpace(text)) continue;
+
+                    string trimmed = text.TrimStart();
                     if (!trimmed.StartsWith("{", StringComparison.Ordinal) && !trimmed.StartsWith("[", StringComparison.Ordinal) && !IsJsonValue(trimmed))
                     {
                         LogMessage($"Closing {client.SessionId}: a line is not a JSON message.");
                         return;
                     }
 
-                    await ProcessMessageAsync(client, line, token).ConfigureAwait(false);
+                    await ProcessMessageAsync(client, text, token).ConfigureAwait(false);
                 }
 
-                if (pending.Count > MaxNewlineMessageBytes)
-                {
-                    LogMessage($"Closing {client.SessionId}: a message exceeds {MaxNewlineMessageBytes} bytes.");
-                    return;
-                }
-
-                int read = await stream.ReadAsync(chunk, 0, chunk.Length, token).ConfigureAwait(false);
-                if (read == 0) return;
-                for (int i = 0; i < read; i++) pending.Add(chunk[i]);
+                count = await stream.ReadAsync(chunk, 0, chunk.Length, token).ConfigureAwait(false);
+                if (count == 0) return;
+                data = chunk;
             }
+        }
+
+        // The error sent for a message over the size limit; its ID cannot be read, so it is null.
+        private protected virtual string TooLargeError(ClientConnection client, long limit)
+        {
+            return "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"Invalid Request: the message exceeds the maximum message size of " + limit + " bytes.\"},\"id\":null}";
         }
 
         // True when the line is some other JSON value (a string or number), which gets an Invalid Request reply.
@@ -487,7 +536,7 @@ namespace Voltaic.Core
         {
             try
             {
-                using (JsonDocument.Parse(line))
+                using (JsonDocument.Parse(line, JsonLimits.Document))
                 {
                     return true;
                 }
@@ -507,13 +556,15 @@ namespace Voltaic.Core
         // Derived servers may accept newline-delimited JSON in addition to Content-Length framing.
         private protected virtual bool AcceptNewlineFraming => false;
 
-        // Largest newline-delimited message accepted.
-        private protected virtual int MaxNewlineMessageBytes => 16 * 1024 * 1024;
-
         // Called for every complete message. The default handles one JSON-RPC request at a time.
         private protected virtual Task ProcessMessageAsync(ClientConnection client, string message, CancellationToken token)
         {
             return ProcessRequestAsync(client, message, token);
+        }
+
+        // Called when Stop begins, before connections close.
+        private protected virtual void OnStopping()
+        {
         }
 
         // Called when a client connects, before any message is read.
@@ -572,7 +623,7 @@ namespace Voltaic.Core
             {
                 LogMessage($"Received from {client.SessionId}: {requestString}");
 
-                JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString);
+                JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString, JsonLimits.Serializer);
                 if (request == null)
                 {
                     JsonRpcResponse invalidResponse = new JsonRpcResponse

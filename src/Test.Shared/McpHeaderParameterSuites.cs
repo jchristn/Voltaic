@@ -84,6 +84,17 @@ namespace Test.Shared
                         TestAssert.Equal(HttpStatusCode.OK, absent.StatusCode, $"Absent values need no header. Body: {absent.Body}");
                     }),
 
+                    Case(suiteId, "NumericHeadersCompareNumerically", "An integer header in exponent form (4.2e1, 420E-1) matches the body value 42", async ct =>
+                    {
+                        await using HttpMcpTestServerFixture fixture = await StartAsync(ct).ConfigureAwait(false);
+                        foreach (string header in new[] { "4.2e1", "420E-1", "+42" })
+                        {
+                            RpcResult result = await CallAsync(fixture, new { region = "us", count = 42, query = "q" },
+                                new Dictionary<string, string> { { "Mcp-Param-Region", "us" }, { "Mcp-Param-Count", header } }, ct).ConfigureAwait(false);
+                            TestAssert.Equal(HttpStatusCode.OK, result.StatusCode, $"{header} matches 42. Body: {result.Body}");
+                        }
+                    }),
+
                     Case(suiteId, "MissingOrMismatchedHeadersAreRejected", "A missing header for a present value, a different value, a header without a body value, invalid Base64, or a wrong boolean or integer gets 400 -32020 and the tool does not run", async ct =>
                     {
                         int calls = 0;

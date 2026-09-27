@@ -4,6 +4,7 @@ namespace Voltaic.Mcp
     using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Globalization;
+    using System.Linq;
 
     /// <summary>
     /// An immutable set of Unicode code points (0 to U+10FFFF), stored as sorted, non-overlapping ranges. Used by the
@@ -13,6 +14,7 @@ namespace Voltaic.Mcp
     {
         internal const int MaxCodePoint = 0x10FFFF;
 
+        private static readonly Lazy<Dictionary<int, int[]>> _FoldClasses = new Lazy<Dictionary<int, int[]>>(BuildFoldClasses);
         private static readonly ConcurrentDictionary<string, McpRegexCharSet> _Categories = new ConcurrentDictionary<string, McpRegexCharSet>(StringComparer.Ordinal);
         private static List<int[]>[]? _CategoryRanges;
         private static readonly object _CategoryLock = new object();
@@ -37,8 +39,12 @@ namespace Voltaic.Mcp
         // ECMA-262 \d.
         internal static McpRegexCharSet Digits { get; } = FromRanges(new[] { new[] { (int)'0', (int)'9' } });
 
-        // ECMA-262 \w (without the i and u-case-folding combination, which JSON Schema patterns never use).
+        // ECMA-262 \w without the i flag.
         internal static McpRegexCharSet WordCharacters { get; } = FromRanges(new[] { new[] { (int)'0', (int)'9' }, new[] { (int)'A', (int)'Z' }, new[] { (int)'_', (int)'_' }, new[] { (int)'a', (int)'z' } });
+
+        // ECMA-262 WordCharacters with the u and i flags: \w plus the characters that canonicalize into it, U+017F
+        // (long s) and U+212A (Kelvin sign).
+        internal static McpRegexCharSet WordCharactersIgnoreCase { get; } = WordCharacters.Union(Single(0x017F)).Union(Single(0x212A));
 
         // ECMA-262 \s: WhiteSpace (TAB, VT, FF, ZWNBSP, and every Space_Separator) and LineTerminator.
         internal static McpRegexCharSet Whitespace { get; } = FromRanges(new[] { new[] { 0x09, 0x0D }, new[] { 0x20, 0x20 }, new[] { 0xA0, 0xA0 }, new[] { 0xFEFF, 0xFEFF }, new[] { 0x2028, 0x2029 } }).Union(Category("Zs") ?? Empty);
@@ -110,6 +116,88 @@ namespace Voltaic.Mcp
 
             if (next <= MaxCodePoint) ranges.Add(new[] { next, MaxCodePoint });
             return FromRanges(ranges);
+        }
+
+        /// <summary>
+        /// Returns the ECMA-262 Canonicalize value of a code point for the <c>u</c> and <c>i</c> flags (Unicode simple
+        /// case folding), expressed as the smallest member of its case folding class: two code points are equal
+        /// ignoring case exactly when their values are equal.
+        /// </summary>
+        internal static int Canonicalize(int codePoint)
+        {
+            int[] runs = McpRegexCaseFolding.Runs;
+            int lo = 0;
+            int hi = runs.Length / 4 - 1;
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) >> 1;
+                int first = runs[mid * 4];
+                if (codePoint < first)
+                {
+                    hi = mid - 1;
+                }
+                else if (codePoint > runs[mid * 4 + 1])
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    return (codePoint - first) % runs[mid * 4 + 2] == 0 ? codePoint + runs[mid * 4 + 3] : codePoint;
+                }
+            }
+
+            return codePoint;
+        }
+
+        /// <summary>
+        /// Returns this set closed under case folding: every code point whose Canonicalize value equals that of a
+        /// member. A character matches a set under the <c>i</c> flag exactly when it is in this closure.
+        /// </summary>
+        internal McpRegexCharSet CaseClosure()
+        {
+            Dictionary<int, int[]> classes = _FoldClasses.Value;
+            if (_Low.Length == 1 && _Low[0] == _High[0])
+            {
+                if (!classes.TryGetValue(Canonicalize(_Low[0]), out int[]? members)) return this;
+                return FromRanges(members.Select(member => new[] { member, member }));
+            }
+
+            List<int[]> ranges = new List<int[]>(_Low.Length);
+            for (int i = 0; i < _Low.Length; i++) ranges.Add(new[] { _Low[i], _High[i] });
+            int before = ranges.Count;
+            foreach (int[] members in classes.Values)
+            {
+                if (!members.Any(Contains)) continue;
+                foreach (int member in members)
+                {
+                    if (!Contains(member)) ranges.Add(new[] { member, member });
+                }
+            }
+
+            return ranges.Count == before ? this : FromRanges(ranges);
+        }
+
+        // Canonicalize value -> every member of that case folding class (only classes with two or more members).
+        private static Dictionary<int, int[]> BuildFoldClasses()
+        {
+            Dictionary<int, List<int>> classes = new Dictionary<int, List<int>>();
+            int[] runs = McpRegexCaseFolding.Runs;
+            for (int i = 0; i < runs.Length; i += 4)
+            {
+                for (int codePoint = runs[i]; codePoint <= runs[i + 1]; codePoint += runs[i + 2])
+                {
+                    int canonical = codePoint + runs[i + 3];
+                    if (!classes.TryGetValue(canonical, out List<int>? members))
+                    {
+                        members = new List<int> { canonical };
+                        classes[canonical] = members;
+                    }
+
+                    members.Add(codePoint);
+                }
+            }
+
+            return classes.ToDictionary(entry => entry.Key, entry => entry.Value.ToArray());
         }
 
         /// <summary>

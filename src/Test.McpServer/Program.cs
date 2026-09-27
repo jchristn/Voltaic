@@ -31,6 +31,15 @@ namespace Test.McpServer
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "--matrix")
+            {
+                // The revision matrix fixture, the same one the in-process servers of the matrix suites serve.
+                McpServer matrix = new McpServer();
+                Test.Shared.McpMatrixFixture.Configure(matrix.RegisterTool, matrix.RegisterResource, matrix.RegisterPrompt);
+                await matrix.RunAsync().ConfigureAwait(false);
+                return;
+            }
+
             if (args.Length > 1 && args[0] == "--close-stdout")
             {
                 // A server that closes its stdout at once and keeps running, to test that clients still shut it down.
@@ -56,6 +65,9 @@ namespace Test.McpServer
                 server.PingIntervalMs = pingMs;
                 server.PingTimeoutMs = Math.Max(100, pingMs);
             }
+
+            // Tests lower the message size limit to exercise it.
+            if (int.TryParse(Environment.GetEnvironmentVariable("VOLTAIC_MAX_MESSAGE"), out int maxMessage)) server.MaxMessageSize = maxMessage;
 
             // Subscribe to logs (goes to stderr)
             server.Log += (sender, message) =>

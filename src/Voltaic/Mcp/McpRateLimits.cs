@@ -4,8 +4,10 @@ namespace Voltaic.Mcp
 
     /// <summary>
     /// The rate limits an MCP server applies per client (MCP: servers must rate-limit tool invocations, and should
-    /// rate-limit completions and log messages). A client is a session, or, for HTTP requests without a
-    /// session, the authenticated principal and remote address. Each limit allows that many operations per second, with
+    /// rate-limit completions and log messages). A client is identified by its authenticated principal and remote
+    /// address (every HTTP session and request, and every WebSocket connection, of that client shares the limits), by
+    /// its remote address on TCP, and by the process on stdio, so opening more sessions or connections never raises a
+    /// client's limit. Each limit allows that many operations per second, with
     /// a burst of the same size. A tool call over the limit gets a tool result with <c>isError: true</c> (so the model
     /// can back off), a completion request gets no suggestions, and a log message is not sent. Changes take effect
     /// immediately. Thread-safe.

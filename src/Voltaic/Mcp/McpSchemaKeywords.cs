@@ -165,13 +165,15 @@ namespace Voltaic.Mcp
 
             if (_NumberKeywords.Contains(keyword))
             {
-                return value.ValueKind == JsonValueKind.Number ? null : $"{at} must be a number.";
+                if (value.ValueKind != JsonValueKind.Number) return $"{at} must be a number.";
+                return McpJsonNumber.Parse(value.GetRawText()) != null ? null : $"{at} has an exponent longer than {McpJsonNumber.MaxExponentDigits} digits.";
             }
 
             if (keyword == "multipleOf")
             {
                 McpJsonNumber? divisor = value.ValueKind == JsonValueKind.Number ? McpJsonNumber.Parse(value.GetRawText()) : null;
-                return divisor != null && divisor.IsPositive ? null : $"{at} must be a number greater than 0.";
+                if (divisor == null || !divisor.IsPositive) return $"{at} must be a number greater than 0 (with an exponent of at most {McpJsonNumber.MaxExponentDigits} digits).";
+                return divisor.Digits.Length <= McpJsonNumber.MaxDivisorDigits ? null : $"{at} has more than {McpJsonNumber.MaxDivisorDigits} significant digits.";
             }
 
             if (_CountKeywords.Contains(keyword))

@@ -57,14 +57,14 @@ namespace Voltaic.Mcp
             JsonElement root;
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(raw))
+                using (JsonDocument document = JsonDocument.Parse(raw, JsonLimits.Document))
                 {
                     root = document.RootElement.Clone();
                 }
             }
             catch (JsonException)
             {
-                await SafeSendAsync(send, JsonSerializer.Serialize(new JsonRpcResponse { Error = JsonRpcError.ParseError(), Id = null }), token).ConfigureAwait(false);
+                await SafeSendAsync(send, SerializeError(new JsonRpcResponse { Error = JsonRpcError.ParseError(), Id = null }, session.NegotiatedVersion), token).ConfigureAwait(false);
                 return;
             }
 
@@ -72,6 +72,14 @@ namespace Voltaic.Mcp
 
             if (root.ValueKind == JsonValueKind.Array)
             {
+                // Reserve the batch's request IDs in message order, so a cancellation read after the batch applies to
+                // its elements, including ones the batch rejects.
+                foreach (JsonElement element in root.EnumerateArray())
+                {
+                    McpEnvelope batchEnvelope = McpEnvelope.Parse(element);
+                    if (batchEnvelope.Kind == McpEnvelopeKind.Request && batchEnvelope.IdKey != null) session.ReserveRequest(batchEnvelope.IdKey);
+                }
+
                 _ = Task.Run(() => ProcessBatchAsync(root, session, send, notify, token));
                 return;
             }
@@ -109,6 +117,7 @@ namespace Voltaic.Mcp
         /// <param name="notify">The channel for notifications related to this request, or null.</param>
         /// <param name="token">The transport's cancellation token.</param>
         /// <param name="rawSend">The stream transport's writer, used unchanged for a stateless request's notifications, or null.</param>
+        /// <param name="deferFinish">True for a batch element: the caller decides whether it is answered and finishes its ID when the batch response is assembled.</param>
         internal async Task<string?> HandleAndSerializeAsync(
             McpEnvelope envelope,
             McpSessionState session,
@@ -116,9 +125,10 @@ namespace Voltaic.Mcp
             bool statelessResolved,
             Func<JsonRpcRequest, CancellationToken, Task>? notify,
             CancellationToken token,
-            Func<string, CancellationToken, Task>? rawSend = null)
+            Func<string, CancellationToken, Task>? rawSend = null,
+            bool deferFinish = false)
         {
-            McpHandledResponse? handled = await HandleAsync(envelope, session, statelessVersion, statelessResolved, notify, token, rawSend).ConfigureAwait(false);
+            McpHandledResponse? handled = await HandleAsync(envelope, session, statelessVersion, statelessResolved, notify, token, rawSend, deferFinish).ConfigureAwait(false);
             if (handled == null) return null;
             return SerializeResponse(handled.Response, handled.StatelessVersion, envelope.Method, session);
         }
@@ -134,7 +144,8 @@ namespace Voltaic.Mcp
             bool statelessResolved,
             Func<JsonRpcRequest, CancellationToken, Task>? notify,
             CancellationToken token,
-            Func<string, CancellationToken, Task>? rawSend = null)
+            Func<string, CancellationToken, Task>? rawSend = null,
+            bool deferFinish = false)
         {
             try
             {
@@ -142,7 +153,7 @@ namespace Voltaic.Mcp
 
                 // A request rejected before it ran (for example for a bad _meta, or before initialize) gets no response
                 // once the client cancelled it: nothing may be sent for a cancelled request.
-                if (handled != null && envelope.IdKey != null && session.WasCancelledBeforeStart(envelope.IdKey))
+                if (!deferFinish && handled != null && envelope.IdKey != null && session.WasCancelledBeforeStart(envelope.IdKey))
                 {
                     _Log($"Request {envelope.IdKey} was cancelled by the client before it ran; its error response is not sent.");
                     return null;
@@ -155,7 +166,7 @@ namespace Voltaic.Mcp
                 // Every request that was answered (or rejected, including a malformed one whose ID could be read) is
                 // finished: a cancellation for its ID that arrives later is ignored, so it can never cancel a later
                 // request that reuses the ID.
-                if (envelope.Kind != McpEnvelopeKind.Response && envelope.Kind != McpEnvelopeKind.Notification && envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
+                if (!deferFinish && envelope.Kind != McpEnvelopeKind.Response && envelope.Kind != McpEnvelopeKind.Notification && envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
             }
         }
 
@@ -366,6 +377,8 @@ namespace Voltaic.Mcp
                 return FinishStatelessResponse(serialized, method);
             }
 
+            if (response.Error != null) return SerializeError(response, session.NegotiatedVersion);
+
             string json = JsonSerializer.Serialize(response);
             if (response.Error == null && !IsObjectResult(response.Result))
             {
@@ -390,11 +403,35 @@ namespace Voltaic.Mcp
             return json;
         }
 
+        /// <summary>
+        /// True when the revision's schema makes an error response's <c>id</c> optional (2025-11-25 and later), so an
+        /// error whose request ID cannot be read omits it; earlier revisions follow JSON-RPC 2.0, which requires
+        /// <c>"id": null</c>.
+        /// </summary>
+        internal static bool OmitsUnreadableErrorId(string? version)
+        {
+            return version != null && String.CompareOrdinal(version, McpProtocol.ProtocolVersion20251125) >= 0;
+        }
+
+        /// <summary>
+        /// Serializes an error response for a revision: a null <c>id</c> is written as <c>"id": null</c> or omitted, as
+        /// <see cref="OmitsUnreadableErrorId"/> decides.
+        /// </summary>
+        internal static string SerializeError(JsonRpcResponse response, string? version)
+        {
+            string json = JsonSerializer.Serialize(response);
+            if (response.Id != null || !OmitsUnreadableErrorId(version)) return json;
+            JsonObject? envelope = JsonNode.Parse(json) as JsonObject;
+            if (envelope == null) return json;
+            envelope.Remove("id");
+            return envelope.ToJsonString();
+        }
+
         private static bool IsSuccessResponse(string json)
         {
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(json))
+                using (JsonDocument document = JsonDocument.Parse(json, JsonLimits.Document))
                 {
                     return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("result", out JsonElement _);
                 }
@@ -466,7 +503,7 @@ namespace Voltaic.Mcp
             List<JsonElement> elements = batch.EnumerateArray().ToList();
             if (elements.Count == 0)
             {
-                await SafeSendAsync(send, JsonSerializer.Serialize(new JsonRpcResponse { Id = null, Error = InvalidRequest("An empty JSON-RPC batch is not allowed.") }), token).ConfigureAwait(false);
+                await SafeSendAsync(send, SerializeError(new JsonRpcResponse { Id = null, Error = InvalidRequest("An empty JSON-RPC batch is not allowed.") }, session.NegotiatedVersion), token).ConfigureAwait(false);
                 return;
             }
 
@@ -475,20 +512,26 @@ namespace Voltaic.Mcp
             if (info == null || !info.SupportsBatching)
             {
                 string reason = version == null
-                    ? "JSON-RPC batches are allowed only after initialize negotiates protocol version 2025-03-26."
+                    ? "JSON-RPC batches are allowed only after initialize negotiates protocol version 2024-11-05 or 2025-03-26."
                     : $"JSON-RPC batching is not supported in protocol version '{version}'.";
-                await SafeSendAsync(send, JsonSerializer.Serialize(new JsonRpcResponse { Id = null, Error = InvalidRequest(reason) }), token).ConfigureAwait(false);
+                // The element IDs were reserved when the batch was read; none of them will run.
+                FinishBatchIds(elements, session);
+                await SafeSendAsync(send, SerializeError(new JsonRpcResponse { Id = null, Error = InvalidRequest(reason) }, session.NegotiatedVersion), token).ConfigureAwait(false);
                 return;
             }
 
+            // The request ID of each pending answer: the elements finish together when the batch response is assembled,
+            // since until then none of their responses has been sent and a cancellation read meanwhile still applies.
             List<Task<string?>> pending = new List<Task<string?>>();
+            List<string?> pendingIds = new List<string?>();
             foreach (JsonElement element in elements)
             {
                 McpEnvelope envelope = McpEnvelope.Parse(element);
+                string? requestKey = envelope.Kind != McpEnvelopeKind.Response && envelope.Kind != McpEnvelopeKind.Notification ? envelope.IdKey : null;
                 if (envelope.Method == "initialize")
                 {
                     // initialize must not be part of a JSON-RPC batch (2025-03-26).
-                    if (envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
+                    pendingIds.Add(requestKey);
                     pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest("initialize must not be part of a JSON-RPC batch.") })));
                     continue;
                 }
@@ -498,21 +541,44 @@ namespace Voltaic.Mcp
                 {
                     if (envelope.Kind == McpEnvelopeKind.Request)
                     {
-                        if (envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
+                        pendingIds.Add(requestKey);
                         pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest($"Protocol version {McpProtocol.ProtocolVersion20260728} does not allow JSON-RPC batches; send the request on its own.") })));
                     }
 
                     continue;
                 }
 
-                pending.Add(HandleAndSerializeAsync(envelope, session, null, false, notify, token, send));
+                pendingIds.Add(requestKey);
+                pending.Add(HandleAndSerializeAsync(envelope, session, null, false, notify, token, send, true));
             }
 
             string?[] results = await Task.WhenAll(pending).ConfigureAwait(false);
-            List<string> responses = results.Where(result => result != null).Select(result => result!).ToList();
+            List<string> responses = new List<string>();
+            for (int i = 0; i < results.Length; i++)
+            {
+                string? idKey = pendingIds[i];
+                bool cancelled = idKey != null && session.WasCancelledBeforeStart(idKey);
+                if (idKey != null) session.RecordFinished(idKey);
+                if (cancelled)
+                {
+                    _Log($"Batch element {idKey} was cancelled by the client before the batch was answered; its response is not sent.");
+                    continue;
+                }
+
+                if (results[i] != null) responses.Add(results[i]!);
+            }
             if (responses.Count > 0)
             {
                 await SafeSendAsync(send, "[" + String.Join(",", responses) + "]", token).ConfigureAwait(false);
+            }
+        }
+
+        private static void FinishBatchIds(List<JsonElement> elements, McpSessionState session)
+        {
+            foreach (JsonElement element in elements)
+            {
+                McpEnvelope envelope = McpEnvelope.Parse(element);
+                if (envelope.Kind == McpEnvelopeKind.Request && envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
             }
         }
 
@@ -599,7 +665,7 @@ namespace Voltaic.Mcp
         {
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(requestBody))
+                using (JsonDocument document = JsonDocument.Parse(requestBody, JsonLimits.Document))
                 {
                     McpEnvelope envelope = McpEnvelope.Parse(document.RootElement);
                     return ValidateStatelessMeta(envelope, out JsonElement? _, out string? _);
@@ -647,18 +713,45 @@ namespace Voltaic.Mcp
         {
             JsonNode? node = JsonNode.Parse(json);
             if (node is not JsonObject envelope) return json;
+            if (envelope["error"] is JsonObject error) return FinishStatelessError(envelope, error);
             if (!envelope.ContainsKey("result")) return json;
 
             if (envelope["result"] is not JsonObject result)
             {
                 _Log("A method returned a non-object result, which protocol version 2026-07-28 does not allow; answering with an internal error.");
-                JsonObject replaced = new JsonObject
+                return InternalErrorFor(envelope, "Internal error: the method returned a result that is not a JSON object.");
+            }
+
+            // A result type set by a handler must be a core type or one of an extension the server advertises (task,
+            // with the tasks extension), and an input-required result must follow the MRTR rules.
+            if (result.ContainsKey("resultType"))
+            {
+                string? resultTypeName = result["resultType"] is JsonValue resultType && resultType.TryGetValue(out string? typeName) ? typeName : null;
+                bool extensionType = resultTypeName == McpResult.ResultTypeTask && _Endpoint.AdvertiseTasksExtension;
+                if (resultTypeName != McpResult.ResultTypeComplete && resultTypeName != McpResult.ResultTypeInputRequired && !extensionType)
                 {
-                    ["jsonrpc"] = "2.0",
-                    ["error"] = new JsonObject { ["code"] = -32603, ["message"] = "Internal error: the method returned a result that is not a JSON object." },
-                    ["id"] = envelope["id"]?.DeepClone()
-                };
-                return replaced.ToJsonString();
+                    _Log($"Method '{method}' returned result type '{resultTypeName}', which this server does not support; answering with an internal error.");
+                    return InternalErrorFor(envelope, "Internal error: the method returned an unsupported result type.");
+                }
+
+                if (resultTypeName == McpResult.ResultTypeInputRequired)
+                {
+                    // Only tools/call, resources/read, and prompts/get may ask the client for input.
+                    if (method != "tools/call" && method != "resources/read" && method != "prompts/get")
+                    {
+                        _Log($"Method '{method}' returned an input-required result, which only tools/call, resources/read, and prompts/get may return; answering with an internal error.");
+                        return InternalErrorFor(envelope, "Internal error: this method cannot request input from the client.");
+                    }
+
+                    // Every input-required result carries inputRequests or requestState.
+                    bool hasRequests = result["inputRequests"] is JsonObject requests && requests.Count > 0;
+                    bool hasState = result["requestState"] is JsonValue state && state.TryGetValue(out string? stateText) && !String.IsNullOrEmpty(stateText);
+                    if (!hasRequests && !hasState)
+                    {
+                        _Log($"Method '{method}' returned an input-required result with neither inputRequests nor requestState; answering with an internal error.");
+                        return InternalErrorFor(envelope, "Internal error: the input-required result is incomplete.");
+                    }
+                }
             }
 
             McpStatelessResultStamper.Stamp(result, method);
@@ -679,6 +772,56 @@ namespace Voltaic.Mcp
             if (result["cacheScope"] is JsonValue scope && (!scope.TryGetValue(out string? scopeValue) || (scopeValue != "public" && scopeValue != "private"))) result["cacheScope"] = "private";
 
             return envelope.ToJsonString();
+        }
+
+        // An error an application raised under 2026-07-28 is brought into that revision's shape: the id is omitted when
+        // it is null, -32042 (which the revision forbids) and codes from -32000 to -32019 (which it reserves) become
+        // -32603, and -32021 and -32022 carry the data members their schemas require.
+        private string FinishStatelessError(JsonObject envelope, JsonObject error)
+        {
+            if (envelope.ContainsKey("id") && envelope["id"] == null) envelope.Remove("id");
+            int code = error["code"] is JsonValue codeValue && codeValue.TryGetValue(out int parsed) ? parsed : -32603;
+            if (code == -32042 || (code >= -32019 && code <= -32000))
+            {
+                _Log($"An error with reserved code {code} was raised under protocol version 2026-07-28; answering with an internal error.");
+                error["code"] = -32603;
+                error["message"] = "Internal error";
+                error.Remove("data");
+                return envelope.ToJsonString();
+            }
+
+            if (code == -32021)
+            {
+                JsonObject data = error["data"] as JsonObject ?? new JsonObject();
+                if (data["requiredCapabilities"] is not JsonObject) data["requiredCapabilities"] = new JsonObject();
+                error["data"] = data;
+            }
+            else if (code == -32022)
+            {
+                JsonObject data = error["data"] as JsonObject ?? new JsonObject();
+                if (data["supported"] is not JsonArray)
+                {
+                    JsonArray supported = new JsonArray();
+                    foreach (string version in _Endpoint.SupportedVersions()) supported.Add(version);
+                    data["supported"] = supported;
+                }
+
+                if (data["requested"] is not JsonValue) data["requested"] = String.Empty;
+                error["data"] = data;
+            }
+
+            return envelope.ToJsonString();
+        }
+
+        private static string InternalErrorFor(JsonObject envelope, string message)
+        {
+            JsonObject replaced = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["error"] = new JsonObject { ["code"] = -32603, ["message"] = message },
+                ["id"] = envelope["id"]?.DeepClone()
+            };
+            return replaced.ToJsonString();
         }
 
         private McpHandledResponse Respond(JsonRpcRequest? request, JsonRpcResponse response, McpSessionState session, string? statelessVersion)

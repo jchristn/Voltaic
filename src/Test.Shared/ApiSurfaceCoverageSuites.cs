@@ -157,6 +157,7 @@ namespace Test.Shared
                             "Voltaic.Mcp.McpServerCapabilities",
                             "Voltaic.Mcp.McpSessionLifecycleState",
                             "Voltaic.Mcp.McpSetLogLevelRequest",
+                            "Voltaic.Mcp.McpSubscriptionFilter",
                             "Voltaic.Mcp.McpTcpClient",
                             "Voltaic.Mcp.McpTcpServer",
                             "Voltaic.Mcp.McpTextContent",

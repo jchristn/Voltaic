@@ -23,8 +23,8 @@ namespace Voltaic.Mcp
     public class McpWebsocketsClient : IDisposable
     {
         /// <summary>
-        /// Gets or sets the maximum message size in bytes that can be received.
-        /// Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
+        /// Gets or sets the maximum size in bytes of one received message, however it is fragmented; a larger message
+        /// closes the connection with status 1009 (message too big). Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
         /// </summary>
         public int MaxMessageSize
         {
@@ -162,6 +162,7 @@ namespace Voltaic.Mcp
                 _ReceiveTask = Task.Run(() => ReceiveLoop(_TokenSource.Token));
 
                 Interlocked.Increment(ref _ConnectionGeneration);
+                _InitializeResult = null;
                 _IsConnected = true;
                 _Endpoint = url;
                 _ConnectedUtc = DateTime.UtcNow;
@@ -487,6 +488,8 @@ namespace Voltaic.Mcp
             McpInitializeOutcome outcome;
             try
             {
+                // The previous connection's result no longer describes this server.
+                _InitializeResult = null;
                 outcome = await McpClientHandshake.RunAsync(
                     async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
                     ct => NotifyAsync("notifications/initialized", null, ct),
@@ -624,8 +627,9 @@ namespace Voltaic.Mcp
 
         private async Task ReceiveLoop(CancellationToken token)
         {
-            byte[] buffer = new byte[_MaxMessageSize];
+            byte[] buffer = new byte[Math.Min(_MaxMessageSize, 65536)];
             StringBuilder messageBuilder = new StringBuilder();
+            long messageBytes = 0;
             // Decodes across frames, so a multi-byte UTF-8 character split between reads is preserved.
             Decoder decoder = new UTF8Encoding(false).GetDecoder();
 
@@ -642,8 +646,26 @@ namespace Voltaic.Mcp
                         break;
                     }
 
+                    if (result.MessageType == WebSocketMessageType.Binary)
+                    {
+                        // MCP messages are UTF-8 JSON text; a binary message is refused with 1003 (unsupported data).
+                        LogMessage("Closing: binary WebSocket messages are not supported");
+                        await _WebSocket.CloseAsync(WebSocketCloseStatus.InvalidMessageType, "Binary messages are not supported", token).ConfigureAwait(false);
+                        break;
+                    }
+
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
+                        // A message larger than MaxMessageSize, however it is fragmented, closes the connection.
+                        messageBytes += result.Count;
+                        if (messageBytes > _MaxMessageSize)
+                        {
+                            LogMessage($"Closing: a message exceeded MaxMessageSize ({_MaxMessageSize} bytes)");
+                            await _WebSocket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too big", token).ConfigureAwait(false);
+                            break;
+                        }
+
+                        if (result.EndOfMessage) messageBytes = 0;
                         char[] chars = new char[decoder.GetCharCount(buffer, 0, result.Count, result.EndOfMessage)];
                         int decoded = decoder.GetChars(buffer, 0, result.Count, chars, 0, result.EndOfMessage);
                         messageBuilder.Append(chars, 0, decoded);
@@ -731,19 +753,10 @@ namespace Voltaic.Mcp
                 return;
             }
 
-            List<JsonRpcRequest> requests = new List<JsonRpcRequest>();
+            ClientBatch batch;
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(batchJson))
-                {
-                    foreach (JsonElement element in document.RootElement.EnumerateArray())
-                    {
-                        string raw = element.GetRawText();
-                        JsonRpcRequest? request = ClientRequestDispatcher.ParseRequest(raw);
-                        if (request != null) requests.Add(request);
-                        else ProcessResponse(raw);
-                    }
-                }
+                batch = ClientBatch.Parse(batchJson, _RequestDispatcher);
             }
             catch (JsonException ex)
             {
@@ -751,15 +764,17 @@ namespace Voltaic.Mcp
                 return;
             }
 
-            if (requests.Count == 0) return;
+            foreach (string raw in batch.Others) ProcessResponse(raw);
+            if (batch.Requests.Count == 0 && batch.Errors.Count == 0) return;
             _ = Task.Run(async () =>
             {
                 CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
                 try
                 {
-                    JsonRpcResponse?[] answered = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
                     // Requests the server cancelled get no response; a batch with nothing left is not answered.
-                    List<JsonRpcResponse> responses = answered.Where(response => response != null).Select(response => response!).ToList();
+                    // Invalid elements (and an empty batch) are answered with Invalid Request errors, as JSON-RPC 2.0 requires.
+                    List<JsonRpcResponse> responses = new List<JsonRpcResponse>(batch.Errors);
+                    responses.AddRange(await _RequestDispatcher.DispatchBatchAsync(batch.Requests, token).ConfigureAwait(false));
                     if (responses.Count > 0) await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -856,7 +871,7 @@ namespace Voltaic.Mcp
                 LogMessage($"Received: {responseString}");
 
                 // Try to parse as response first
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString);
+                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString, JsonLimits.Serializer);
                 if (response != null && response.Id != null)
                 {
                     // Extract the numeric id value when the response id is a JSON number.
@@ -879,7 +894,7 @@ namespace Voltaic.Mcp
                 else
                 {
                     // Try to parse as notification (request without ID)
-                    JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString);
+                    JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString, JsonLimits.Serializer);
                     if (notification != null && notification.Id == null)
                     {
                         // A cancellation of a request the server sent stops its handler; the notification is still raised.

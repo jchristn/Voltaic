@@ -112,7 +112,7 @@ namespace Test.Shared
                         return Task.CompletedTask;
                     }),
 
-                    Case(suiteId, "LastActivityUpdatesOnEnqueue", "LastActivity updates when a notification is enqueued", async ct =>
+                    Case(suiteId, "LastActivityUnchangedOnEnqueue", "Queueing a notification is not client activity, so LastActivity does not change", async ct =>
                     {
                         using ClientConnection connection = new ClientConnection("session");
                         DateTime initial = connection.LastActivity;
@@ -120,7 +120,7 @@ namespace Test.Shared
 
                         connection.Enqueue(new JsonRpcRequest { Method = "event" });
 
-                        TestAssert.True(connection.LastActivity > initial, "Enqueue should update LastActivity.");
+                        TestAssert.Equal(initial, connection.LastActivity, "Enqueue leaves LastActivity alone.");
                     }),
 
                     Case(suiteId, "LastActivityUpdatesOnDequeueAsync", "LastActivity updates when a notification is dequeued", async ct =>

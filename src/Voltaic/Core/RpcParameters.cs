@@ -63,7 +63,7 @@ namespace Voltaic.Core
                 return default;
             }
 
-            return JsonSerializer.Deserialize<T>(_RawJson!);
+            return JsonSerializer.Deserialize<T>(_RawJson!, JsonLimits.Serializer);
         }
 
         /// <summary>
@@ -91,7 +91,7 @@ namespace Voltaic.Core
 
             try
             {
-                return JsonSerializer.Deserialize<string>(raw);
+                return JsonSerializer.Deserialize<string>(raw, JsonLimits.Serializer);
             }
             catch (JsonException)
             {

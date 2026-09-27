@@ -25,12 +25,14 @@ namespace Voltaic.Mcp
         /// </summary>
         /// <param name="code">JSON-RPC error code.</param>
         /// <param name="message">Error message.</param>
-        /// <param name="data">Optional error data.</param>
+        /// <param name="data">Optional error data. For <c>-32021</c> (missing required client capability) the data must
+        /// carry <c>requiredCapabilities</c>; when it is null, <c>{"requiredCapabilities":{}}</c> is used. Prefer
+        /// <see cref="MissingRequiredClientCapability"/>.</param>
         public McpProtocolException(int code, string message, object? data = null)
             : base(message)
         {
             Code = code;
-            ErrorData = data;
+            ErrorData = data == null && code == -32021 ? new { requiredCapabilities = new Dictionary<string, object>() } : data;
         }
 
         /// <summary>

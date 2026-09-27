@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Voltaic\Voltaic.csproj" />
+    <Compile Include="..\Test.Shared\McpMatrixFixture.cs" Link="McpMatrixFixture.cs" />
   </ItemGroup>
 
 </Project>

@@ -18,8 +18,8 @@ namespace Voltaic.Mcp
     public class McpWebsocketsServer : IDisposable
     {
         /// <summary>
-        /// Gets or sets the maximum message size in bytes that can be received.
-        /// Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
+        /// Gets or sets the maximum size in bytes of one received message, however it is fragmented; a larger message
+        /// closes the connection with status 1009 (message too big). Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
         /// </summary>
         public int MaxMessageSize
         {
@@ -360,7 +360,7 @@ namespace Voltaic.Mcp
             _Endpoint.ListChanged = kind =>
             {
                 if (!_Endpoint.SupportsListChangedNotifications) return;
-                _ = McpServerNotifications.ListChangedAsync(Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
+                _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
             _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage)
             {
@@ -745,7 +745,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyToolsChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/tools/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/tools/list_changed", token);
         }
 
         /// <summary>
@@ -755,7 +755,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyResourcesChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/resources/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/resources/list_changed", token);
         }
 
         /// <summary>
@@ -768,7 +768,7 @@ namespace Voltaic.Mcp
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="uri"/> is null or empty.</exception>
         public Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)
         {
-            return McpServerNotifications.ResourceUpdatedAsync(Sessions(), uri, token);
+            return McpServerNotifications.ResourceUpdatedAsync(_Endpoint.Subscriptions, Sessions(), uri, token);
         }
 
         /// <summary>
@@ -778,7 +778,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyPromptsChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/prompts/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/prompts/list_changed", token);
         }
 
         /// <summary>
@@ -864,6 +864,8 @@ namespace Voltaic.Mcp
             if (_IsStopping) return;
             _IsStopping = true;
 
+            // Open subscriptions/listen streams end gracefully, with their completion results, before the connections close.
+            _Endpoint.Subscriptions.CloseAllAndWait(TimeSpan.FromSeconds(1));
             _TokenSource?.Cancel();
 
             foreach (ClientConnection client in _Clients.Values)
@@ -981,6 +983,7 @@ namespace Voltaic.Mcp
             RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
             RegisterMethod("ping", (args) => _Endpoint.Ping(args));
             RegisterMethod("server/discover", (args) => _Endpoint.Discover(args));
+            RegisterMethod("subscriptions/listen", (RpcParameters? args, CancellationToken token) => _Endpoint.Subscriptions.ListenAsync(args, token));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
@@ -1117,6 +1120,9 @@ namespace Voltaic.Mcp
                 client.Caller = caller;
                 ClientConnection connected = client;
                 McpSessionState session = new McpSessionState { Owner = connected, CanPingClient = true };
+
+                // Every connection of one principal from one address shares the rate limits.
+                session.RateLimitKey = "ws|" + (caller?.Principal ?? String.Empty) + "|" + (context.Request.RemoteEndPoint?.Address.ToString() ?? clientId);
                 session.Terminate = () => KickClient(connected.SessionId);
                 session.Push = (json, ct) => SendToClientAsync(connected, json, ct);
                 client.ProtocolState = session;
@@ -1146,8 +1152,9 @@ namespace Voltaic.Mcp
         
         private async Task ReceiveLoopAsync(ClientConnection client, CancellationToken token)
         {
-            byte[] buffer = new byte[_MaxMessageSize];
+            byte[] buffer = new byte[Math.Min(_MaxMessageSize, 65536)];
             StringBuilder messageBuilder = new StringBuilder();
+            long messageBytes = 0;
             // Decodes across frames, so a multi-byte UTF-8 character split between reads is preserved.
             Decoder decoder = new UTF8Encoding(false).GetDecoder();
 
@@ -1169,8 +1176,27 @@ namespace Voltaic.Mcp
                             break;
                         }
 
+                        if (result.MessageType == WebSocketMessageType.Binary)
+                        {
+                            // MCP messages are UTF-8 JSON text; a binary message is refused with 1003 (unsupported data)
+                            // rather than dropped, so the peer does not wait for an answer.
+                            LogMessage($"Closing {client.SessionId}: binary WebSocket messages are not supported");
+                            await client.WebSocket.CloseAsync(WebSocketCloseStatus.InvalidMessageType, "Binary messages are not supported", token).ConfigureAwait(false);
+                            break;
+                        }
+
                         if (result.MessageType == WebSocketMessageType.Text)
                         {
+                            // A message larger than MaxMessageSize, however it is fragmented, closes the connection.
+                            messageBytes += result.Count;
+                            if (messageBytes > _MaxMessageSize)
+                            {
+                                LogMessage($"Closing {client.SessionId}: a message exceeded MaxMessageSize ({_MaxMessageSize} bytes)");
+                                await client.WebSocket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too big", token).ConfigureAwait(false);
+                                break;
+                            }
+
+                            if (result.EndOfMessage) messageBytes = 0;
                             char[] chars = new char[decoder.GetCharCount(buffer, 0, result.Count, result.EndOfMessage)];
                             int decoded = decoder.GetChars(buffer, 0, result.Count, chars, 0, result.EndOfMessage);
                             messageBuilder.Append(chars, 0, decoded);

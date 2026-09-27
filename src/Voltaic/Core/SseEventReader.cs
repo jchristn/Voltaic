@@ -10,11 +10,13 @@ namespace Voltaic.Core
     /// Parses a Server-Sent Events stream following the WHATWG event stream interpretation rules: <c>data</c> lines
     /// are joined with line feeds, an optional single space after the colon is removed, comment lines (starting
     /// with a colon) are ignored, <c>id</c> updates the last event ID even for events without data (as an MCP
-    /// priming event does), and <c>retry</c> records the reconnection time. Not thread-safe.
+    /// priming event does), and <c>retry</c> records the reconnection time. Lines end at CR, LF, or CRLF. A line or an
+    /// event's data larger than the size limit throws <see cref="MessageTooLargeException"/>. Not thread-safe.
     /// </summary>
     internal sealed class SseEventReader
     {
-        private readonly StreamReader _Reader;
+        private readonly BoundedLineReader _Lines;
+        private readonly Func<long> _MaxBytes;
         private readonly StringBuilder _Data = new StringBuilder();
         private string? _EventType;
         private string? _LastEventIdBuffer;
@@ -30,9 +32,11 @@ namespace Voltaic.Core
         /// </summary>
         internal int? RetryMs { get; private set; }
 
-        internal SseEventReader(StreamReader reader, string? lastEventId = null)
+        internal SseEventReader(StreamReader reader, string? lastEventId = null, Func<long>? maxBytes = null)
         {
-            _Reader = reader ?? throw new ArgumentNullException(nameof(reader));
+            if (reader == null) throw new ArgumentNullException(nameof(reader));
+            _MaxBytes = maxBytes ?? (() => 16L * 1024 * 1024);
+            _Lines = new BoundedLineReader(reader, _MaxBytes, true);
             LastEventId = lastEventId;
             _LastEventIdBuffer = lastEventId;
         }
@@ -46,8 +50,9 @@ namespace Voltaic.Core
             while (true)
             {
                 token.ThrowIfCancellationRequested();
-                string? line = await _Reader.ReadLineAsync(token).ConfigureAwait(false);
+                string? line = await _Lines.ReadLineAsync(token).ConfigureAwait(false);
                 if (line == null) return null;
+                if (_Lines.LastLineTooLarge) throw new MessageTooLargeException(_MaxBytes());
 
                 if (line.Length == 0)
                 {
@@ -77,6 +82,7 @@ namespace Voltaic.Core
                 {
                     case "data":
                         _Data.Append(value).Append('\n');
+                        if (_Data.Length > _MaxBytes()) throw new MessageTooLargeException(_MaxBytes());
                         break;
                     case "event":
                         _EventType = value;

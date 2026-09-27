@@ -127,6 +127,12 @@ namespace Voltaic.Mcp
         public const string MetaServerInfoKey = "io.modelcontextprotocol/serverInfo";
 
         /// <summary>
+        /// The <c>_meta</c> key carrying the subscription ID (the JSON-RPC ID of the <c>subscriptions/listen</c> request)
+        /// on every message of a subscription stream (2026-07-28+).
+        /// </summary>
+        public const string MetaSubscriptionIdKey = "io.modelcontextprotocol/subscriptionId";
+
+        /// <summary>
         /// The <c>_meta</c> key carrying the minimum log level for one request (2026-07-28+). Without it, a server sends
         /// no <c>notifications/message</c> for that request.
         /// </summary>

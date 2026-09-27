@@ -212,7 +212,7 @@ namespace Voltaic.Mcp
             _Endpoint.ListChanged = kind =>
             {
                 if (!_Endpoint.SupportsListChangedNotifications) return;
-                _ = McpServerNotifications.ListChangedAsync(Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
+                _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
             _Processor = new McpMessageProcessor(_Endpoint, Methods, WriteLog)
             {
@@ -482,7 +482,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyToolsChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/tools/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/tools/list_changed", token);
         }
 
         /// <summary>
@@ -492,7 +492,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyResourcesChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/resources/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/resources/list_changed", token);
         }
 
         /// <summary>
@@ -505,7 +505,7 @@ namespace Voltaic.Mcp
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="uri"/> is null or empty.</exception>
         public Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)
         {
-            return McpServerNotifications.ResourceUpdatedAsync(Sessions(), uri, token);
+            return McpServerNotifications.ResourceUpdatedAsync(_Endpoint.Subscriptions, Sessions(), uri, token);
         }
 
         /// <summary>
@@ -515,7 +515,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyPromptsChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(Sessions(), "notifications/prompts/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/prompts/list_changed", token);
         }
 
         /// <summary>
@@ -633,6 +633,7 @@ namespace Voltaic.Mcp
             RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
             RegisterMethod("ping", (args) => _Endpoint.Ping(args));
             RegisterMethod("server/discover", (args) => _Endpoint.Discover(args));
+            RegisterMethod("subscriptions/listen", (RpcParameters? args, CancellationToken token) => _Endpoint.Subscriptions.ListenAsync(args, token));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
@@ -700,9 +701,27 @@ namespace Voltaic.Mcp
         // MCP over TCP accepts newline-delimited JSON (the stdio framing) as well as Content-Length framing.
         private protected override bool AcceptNewlineFraming => true;
 
+        // Open subscriptions/listen streams end gracefully, with their completion results, before the connections close.
+        private protected override void OnStopping()
+        {
+            _Endpoint.Subscriptions.CloseAllAndWait(TimeSpan.FromSeconds(1));
+        }
+
+        // The error id follows the session's revision: null before 2025-11-25, omitted from then on.
+        private protected override string TooLargeError(ClientConnection client, long limit)
+        {
+            JsonRpcError tooLarge = JsonRpcError.InvalidRequest();
+            tooLarge.Message = $"Invalid Request: the message exceeds the maximum message size of {limit} bytes.";
+            return McpMessageProcessor.SerializeError(new JsonRpcResponse { Id = null, Error = tooLarge }, (client.ProtocolState as McpSessionState)?.NegotiatedVersion);
+        }
+
         private protected override void OnClientConnected(ClientConnection client)
         {
             McpSessionState session = new McpSessionState { Owner = client, CanPingClient = true };
+
+            // Every connection from one address shares the rate limits, so opening connections never multiplies them.
+            string address = (client.TcpClient?.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString() ?? client.SessionId;
+            session.RateLimitKey = "tcp|" + address;
             session.Terminate = () => KickClient(client.SessionId);
             session.Push = (json, token) => WriteToClientAsync(client, json, token);
             client.ProtocolState = session;

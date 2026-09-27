@@ -179,6 +179,22 @@ namespace Voltaic.Mcp
         public bool AutoReconnectSse { get; set; } = true;
 
         /// <summary>
+        /// Gets or sets the maximum size in bytes of one message received from the server: a JSON response body, or one
+        /// SSE line or event. A larger message fails the call (or ends the stream) with an <see cref="IOException"/>.
+        /// Default is 16 MiB (16777216 bytes). Minimum is 4096 bytes.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        public int MaxMessageSize
+        {
+            get => _MaxMessageSize;
+            set
+            {
+                if (value < 4096) throw new ArgumentOutOfRangeException(nameof(value), "Maximum message size must be at least 4096 bytes");
+                _MaxMessageSize = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets the delay in milliseconds before reopening an SSE stream when the server has not sent a
         /// <c>retry</c> value. A server-supplied <c>retry</c> value always takes precedence. Default is 1000.
         /// Minimum is 0; maximum is 600000.
@@ -269,6 +285,7 @@ namespace Voltaic.Mcp
         private int _SseReconnectDelayMs = 1000;
         private int _SseMaxReconnectAttempts = 5;
         private string? _SseLastEventId;
+        private int _MaxMessageSize = 16 * 1024 * 1024;
         private int? _SseRetryMs;
         private bool _HandshakeComplete;
         private bool _Streamable;
@@ -391,6 +408,7 @@ namespace Voltaic.Mcp
             catch (Exception ex)
             {
                 LogMessage($"Connection failed: {ex.Message}");
+                TryDeleteSession();
                 SessionId = null;
                 return false;
             }
@@ -431,6 +449,8 @@ namespace Voltaic.Mcp
             catch (Exception ex)
             {
                 LogMessage($"Streamable HTTP connection failed: {ex.Message}");
+                // A session the handshake opened (for example before the version was rejected) is ended on the server.
+                TryDeleteSession();
                 SessionId = null;
                 return false;
             }
@@ -553,6 +573,33 @@ namespace Voltaic.Mcp
         /// <exception cref="Exception">Thrown when the HTTP response body cannot be parsed as JSON-RPC.</exception>
         public Task<JsonRpcResponse> CallAsync(string method, object? parameters = null, int timeoutMs = 0, CancellationToken token = default)
         {
+            return CallCoreAsync(method, parameters, timeoutMs, token);
+        }
+
+        /// <summary>
+        /// Opens a <c>subscriptions/listen</c> stream (2026-07-28 subscribe and notify; stateless mode only) and keeps it
+        /// open until <paramref name="token"/> is cancelled or the server ends it. The server's
+        /// <c>notifications/subscriptions/acknowledged</c> (the types it agreed to send) and every notification on the
+        /// stream are raised through <see cref="NotificationReceived"/>, each carrying the subscription ID in
+        /// <c>params._meta["io.modelcontextprotocol/subscriptionId"]</c>. Cancelling the token closes the stream, which
+        /// ends the subscription.
+        /// </summary>
+        /// <param name="filter">The notification types to receive. Must not be null.</param>
+        /// <param name="token">Cancels the subscription.</param>
+        /// <returns>The server's response when it ended the subscription gracefully (for example when it stops).</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="filter"/> is null.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the client is not in stateless mode (see <see cref="ConnectStatelessAsync"/>).</exception>
+        /// <exception cref="OperationCanceledException">Thrown when <paramref name="token"/> ends the subscription.</exception>
+        public Task<JsonRpcResponse> ListenAsync(McpSubscriptionFilter filter, CancellationToken token = default)
+        {
+            if (filter == null) throw new ArgumentNullException(nameof(filter));
+            if (!_Stateless) throw new InvalidOperationException("subscriptions/listen exists only in protocol version 2026-07-28; connect with ConnectStatelessAsync first.");
+            Dictionary<string, object?> parameters = new Dictionary<string, object?>(StringComparer.Ordinal) { { "notifications", filter } };
+            return SendStatelessAsync("subscriptions/listen", parameters, null, Timeout.Infinite, token);
+        }
+
+        private Task<JsonRpcResponse> CallCoreAsync(string method, object? parameters, int timeoutMs, CancellationToken token)
+        {
             // In stateless mode (2026-07-28) every request carries its own _meta and routing headers.
             if (_Stateless) return SendStatelessAsync(method, ToParameterMap(parameters), null, timeoutMs, token);
             return ExchangeAsync(method, parameters, timeoutMs, token);
@@ -631,7 +678,7 @@ namespace Voltaic.Mcp
                         string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
                         LogMessage($"Received response: {responseJson}");
 
-                        JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
+                        JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson, JsonLimits.Serializer);
                         if (response == null)
                         {
                             throw new Exception("Invalid response from server");
@@ -860,7 +907,8 @@ namespace Voltaic.Mcp
 
             using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                cts.CancelAfter(timeoutMs > 0 ? timeoutMs : _RequestTimeoutMs);
+                // Timeout.Infinite keeps a long-lived request (a subscription stream) open until it is cancelled.
+                cts.CancelAfter(timeoutMs == Timeout.Infinite ? Timeout.Infinite : (timeoutMs > 0 ? timeoutMs : _RequestTimeoutMs));
 
                 using HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
                 httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
@@ -906,7 +954,7 @@ namespace Voltaic.Mcp
                     throw new McpProtocolException(-32603, $"Empty stateless response (HTTP {(int)httpResponse.StatusCode}).");
                 }
 
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson);
+                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson, JsonLimits.Serializer);
                 if (response == null)
                 {
                     throw new McpProtocolException(-32603, "Invalid stateless response from server.");
@@ -1100,14 +1148,15 @@ namespace Voltaic.Mcp
                 HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, cts.Token).ConfigureAwait(false);
                 if ((int)httpResponse.StatusCode == 404 && !String.IsNullOrEmpty(sentSessionId) && _Streamable)
                 {
-                    // The session is gone. A notification about the old session (initialized or a cancellation) means
-                    // nothing to a new one, and notifications/initialized is sent by the handshake itself (which may be
-                    // a recovery holding the recovery lock), so neither starts a recovery. Anything else is sent again
-                    // on a new session.
+                    // The session is gone. notifications/initialized is sent by the handshake itself (which may be a
+                    // recovery holding the recovery lock), so it starts no recovery. Anything else starts a new session
+                    // and is sent again on it, except a cancellation, which refers to a request of the old session.
                     httpResponse.Dispose();
-                    if (method == "notifications/initialized" || method == "notifications/cancelled") return;
+                    if (method == "notifications/initialized") return;
                     bool recovered = await RecoverSessionAsync(sentSessionId, token).ConfigureAwait(false);
                     if (!recovered) throw McpProtocolException.SessionNotFound();
+
+                    if (method == "notifications/cancelled") return;
 
                     using HttpRequestMessage retry = CreatePostRequest(requestJson);
                     httpResponse = await _HttpClient.SendAsync(retry, cts.Token).ConfigureAwait(false);
@@ -1223,7 +1272,7 @@ namespace Voltaic.Mcp
                         using (Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
                         using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
                         {
-                            SseEventReader events = new SseEventReader(reader, _SseLastEventId);
+                            SseEventReader events = new SseEventReader(reader, _SseLastEventId, () => _MaxMessageSize);
                             try
                             {
                                 SseEvent? sseEvent;
@@ -1526,7 +1575,7 @@ namespace Voltaic.Mcp
             }
 
             string raw = JsonSerializer.Serialize(result);
-            return JsonSerializer.Deserialize<T>(raw);
+            return JsonSerializer.Deserialize<T>(raw, JsonLimits.Serializer);
         }
 
         private static McpInputRequiredResult? TryParseInputRequired(object? result)
@@ -1537,10 +1586,10 @@ namespace Voltaic.Mcp
             }
 
             string raw = JsonSerializer.Serialize(result);
-            ResultTypeProbe? probe = JsonSerializer.Deserialize<ResultTypeProbe>(raw);
+            ResultTypeProbe? probe = JsonSerializer.Deserialize<ResultTypeProbe>(raw, JsonLimits.Serializer);
             if (probe != null && StringComparer.Ordinal.Equals(probe.ResultType, "input_required"))
             {
-                return JsonSerializer.Deserialize<McpInputRequiredResult>(raw);
+                return JsonSerializer.Deserialize<McpInputRequiredResult>(raw, JsonLimits.Serializer);
             }
 
             return null;
@@ -1560,7 +1609,7 @@ namespace Voltaic.Mcp
             string? mediaType = httpResponse.Content.Headers.ContentType?.MediaType;
             if (!StringComparer.OrdinalIgnoreCase.Equals(mediaType, "text/event-stream"))
             {
-                return await httpResponse.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+                return await ReadBoundedStringAsync(httpResponse.Content, token).ConfigureAwait(false);
             }
 
             string requestIdJson = JsonSerializer.Serialize(requestId);
@@ -1569,7 +1618,7 @@ namespace Voltaic.Mcp
             using (Stream stream = await httpResponse.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
             using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
             {
-                SseEventReader events = new SseEventReader(reader);
+                SseEventReader events = new SseEventReader(reader, null, () => _MaxMessageSize);
                 try
                 {
                     SseEvent? sseEvent;
@@ -1631,7 +1680,7 @@ namespace Voltaic.Mcp
                     using (Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
                     using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
                     {
-                        SseEventReader events = new SseEventReader(reader, lastEventId);
+                        SseEventReader events = new SseEventReader(reader, lastEventId, () => _MaxMessageSize);
                         try
                         {
                             SseEvent? sseEvent;
@@ -1667,7 +1716,7 @@ namespace Voltaic.Mcp
 
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(payload))
+                using (JsonDocument document = JsonDocument.Parse(payload, JsonLimits.Document))
                 {
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object) return null;
@@ -1782,6 +1831,27 @@ namespace Voltaic.Mcp
             return request;
         }
 
+        // Reads a response body up to MaxMessageSize bytes; a larger body (declared or actual) throws.
+        private async Task<string> ReadBoundedStringAsync(HttpContent content, CancellationToken token)
+        {
+            int limit = _MaxMessageSize;
+            if (content.Headers.ContentLength > limit) throw new MessageTooLargeException(limit);
+            using (Stream stream = await content.ReadAsStreamAsync(token).ConfigureAwait(false))
+            using (MemoryStream body = new MemoryStream())
+            {
+                byte[] chunk = new byte[16384];
+                while (true)
+                {
+                    int read = await stream.ReadAsync(chunk, 0, chunk.Length, token).ConfigureAwait(false);
+                    if (read == 0) break;
+                    if (body.Length + read > limit) throw new MessageTooLargeException(limit);
+                    body.Write(chunk, 0, read);
+                }
+
+                return Encoding.UTF8.GetString(body.GetBuffer(), 0, (int)body.Length);
+            }
+        }
+
         private HttpRequestMessage CreatePostRequest(string requestJson)
         {
             HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
@@ -1842,7 +1912,7 @@ namespace Voltaic.Mcp
             {
                 LogMessage($"Received notification: {data}");
 
-                JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(data);
+                JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(data, JsonLimits.Serializer);
                 if (notification != null)
                 {
                     // A cancellation of a request the server sent stops its handler; the notification is still raised.

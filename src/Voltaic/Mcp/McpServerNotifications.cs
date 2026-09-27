@@ -10,8 +10,9 @@ namespace Voltaic.Mcp
 
     /// <summary>
     /// Sends server-initiated MCP notifications with the specification's targeting rules, shared by every transport:
-    /// list changes go to sessions that completed the handshake (stateless-era clients receive them only through
-    /// <c>subscriptions/listen</c>), resource updates only to sessions subscribed to the resource, log messages only
+    /// list changes go to sessions that completed the handshake and to the <c>subscriptions/listen</c> streams that asked
+    /// for them (stateless-era clients receive them only there), resource updates only to sessions and streams subscribed
+    /// to the resource, log messages only
     /// at or above each session's level, and progress only to the request that carries the progress token.
     /// </summary>
     internal static class McpServerNotifications
@@ -19,20 +20,24 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Sends a list-changed notification to every initialized session.
         /// </summary>
-        internal static Task ListChangedAsync(IEnumerable<McpSessionState> sessions, string method, CancellationToken token)
+        internal static Task ListChangedAsync(McpSubscriptions subscriptions, IEnumerable<McpSessionState> sessions, string method, CancellationToken token)
         {
             JsonRpcRequest notification = new JsonRpcRequest { Method = method };
-            return SendAsync(sessions.Where(session => session.NotificationsReady), notification, token);
+            return Task.WhenAll(
+                SendAsync(sessions.Where(session => session.NotificationsReady), notification, token),
+                subscriptions.ListChangedAsync(method, token));
         }
 
         /// <summary>
         /// Sends <c>notifications/resources/updated</c> to sessions subscribed to <paramref name="uri"/>.
         /// </summary>
-        internal static Task ResourceUpdatedAsync(IEnumerable<McpSessionState> sessions, string uri, CancellationToken token)
+        internal static Task ResourceUpdatedAsync(McpSubscriptions subscriptions, IEnumerable<McpSessionState> sessions, string uri, CancellationToken token)
         {
             if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
             JsonRpcRequest notification = new JsonRpcRequest { Method = "notifications/resources/updated", Params = new { uri } };
-            return SendAsync(sessions.Where(session => session.NotificationsReady && session.IsSubscribed(uri)), notification, token);
+            return Task.WhenAll(
+                SendAsync(sessions.Where(session => session.NotificationsReady && session.IsSubscribed(uri)), notification, token),
+                subscriptions.ResourceUpdatedAsync(uri, token));
         }
 
         /// <summary>

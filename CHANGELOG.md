@@ -1,5 +1,103 @@
 # Changelog
 
+## v2.1.13
+Resolves every finding of a four-part review of v2.1.12 against the MCP specification, then every finding of a second four-part review of this release before it shipped. Adds `subscriptions/listen`, message and session limits on every transport, and a per-revision conformance matrix.
+
+### Subscribe and notify (2026-07-28)
+- Every server serves `subscriptions/listen` on every transport:
+  - The acknowledgment comes first, holding only the notification types the server supports.
+  - Only the requested list changes and resource updates follow, each tagged with the subscription ID.
+  - A client cancellation or a transport close ends the subscription silently; a stopping server ends it with a completion result.
+  - `server/discover` now advertises `listChanged` and `resources.subscribe`.
+- `McpHttpClient.ListenAsync(McpSubscriptionFilter, token)` opens a subscription and raises its notifications through `NotificationReceived`.
+
+### Limits
+- Every transport bounds one received message with `MaxMessageSize`: 16 MiB on stdio, TCP and HTTP, 1 MB on WebSocket, on servers and clients. Before, stdio, TCP Content-Length framing, HTTP bodies and client reads were unbounded, and the WebSocket property was not enforced.
+  - Servers:
+    - skip an oversized newline-delimited message with `-32600`;
+    - close a Content-Length framed connection;
+    - answer an oversized HTTP body with 413, checking a declared `Content-Length` before reading, also before authentication;
+    - close a WebSocket with 1009.
+  - Clients end the connection or fail the call.
+  - Newline reading is linear time. It used to rescan the buffer.
+- `McpHttpServer.MaxSessions` (10,000) and `MaxSessionsPerClient` (100) cap sessions:
+  - An `initialize` beyond `MaxSessions` gets 503.
+  - A client over its cap loses its least recently active session.
+  - `ClientIdentifier` names clients behind a reverse proxy.
+  - Stream logs of ended sessions are dropped, and the unbounded list of terminated session IDs is gone.
+- All the `pattern` matches of one value share one step budget, sized by the whole value. A value split into many strings used to get a fresh budget per string: 142 strings cost 31 seconds, now 3.
+- Resetting captures at each start position now counts as steps.
+- Numbers:
+  - Significant digits are kept as text, so parsing and comparing are linear in the digits. A number with 200,000 trailing zeros used to take seconds.
+  - `multipleOf` with a divisor of up to 18 digits uses 128-bit arithmetic.
+  - A written exponent may have at most 1,000 digits: a larger one fails validation, and a schema bound with one, or a `multipleOf` over 1,000 digits, is rejected at registration.
+- Received messages may nest up to 256 levels, as schema validation does. Valid JSON nested more than 64 levels used to be answered as a parse error.
+
+### Cancellation and batches
+- A cancellation for an ID the receiver does not know is ignored, as the specification asks. Earlier releases remembered it for 30 seconds and silently dropped a later request with that ID. Servers and clients both changed.
+- A cancellation read while a batch is still being answered drops the responses of the elements it names that had not finished. Refused elements count as unfinished until the batch response is assembled; an element whose handler finished is answered, as the specification allows.
+- A refused batch no longer leaves its element IDs reserved for the life of the connection.
+- Clients answer an empty batch with one `-32600` and each invalid element with `-32600`, as JSON-RPC 2.0 requires.
+
+### Transports
+- stdio and newline-delimited TCP split messages only at LF. A bare CR inside a message used to split it.
+- A binary WebSocket message closes the connection with 1003. It used to be dropped silently.
+- `InitializeResult` is cleared when a client connects and when a handshake starts.
+
+### HTTP
+- Error ids:
+  - An id that is not a string or an integer is never echoed.
+  - An unreadable id is `null` before 2025-11-25 and omitted from 2025-11-25 on, on every transport. The revision is the `MCP-Protocol-Version` header, else the session's, else 2025-03-26.
+- Rate limits apply per client (principal and remote address across all sessions and WebSocket connections; the address on TCP), not per session.
+- Queued server notifications no longer count as session activity, so an abandoned session expires.
+- When the limit is reached, POST response streams are evicted before GET streams, so a long-lived GET stream stays resumable.
+- A 405 carries `Allow`. An insufficient-scope challenge strips backslashes as well as quotes.
+- `McpHttpClient`:
+  - starts a new session after a 404 on `notifications/cancelled` without resending it;
+  - sends `DELETE` for a session whose handshake then failed.
+
+### 2026-07-28
+- `inputResponses` (on `tools/call`):
+  - A value recognizable as an elicitation, roots, or sampling result must match that result's schema, else `-32602`.
+  - Any other value is ignored as unrecognized information, and the handler sees only the recognized responses.
+  - Handshake-era calls ignore `inputResponses`.
+- A handler's `resultType` must be `complete`, `input_required` (which must carry `inputRequests` or `requestState`), or `task` with the tasks extension advertised; anything else is `-32603`. Only `tools/call`, `resources/read` and `prompts/get` may return an input-required result.
+- Application errors get their required data: `data.requiredCapabilities` for `-32021`, `data.supported` and `data.requested` for `-32022`. `-32042` and the reserved `-32000` to `-32019` become `-32603`.
+- `Mcp-Param-*` numbers compare exactly: `4.2e1` matches 42; `42.00000000000000000000000000001` does not.
+- A parameter of the wrong type gets a `-32602` message naming the JSON path instead of .NET internals.
+
+### Schemas and features
+- `pattern`:
+  - Supports the ES2025 additions: pattern modifiers `(?ims-ims:...)` and the same group name in different alternatives.
+  - The `i` modifier matches by Unicode simple case folding, from a generated Unicode 16.0 table.
+  - Where V8 differs from ECMA-262, Voltaic follows ECMA-262: V8 does not fold `ſ`, `K`, `ẞ` or `Å` under `(?i:...)`, and it accepts some duplicate names that ES2025 forbids.
+  - The step budget adds 4 steps per character squared, capped at 200,000,000, so ordinary quadratic matches such as `[a-z]+\d` on 5,000 characters fit.
+  - Loop scans and backreference comparisons count as steps.
+  - Exactly 500 nested groups are accepted.
+- A tool argument string or property name with an unpaired UTF-16 surrogate fails validation wherever it appears. Any other parameter string that is not valid Unicode is `-32602`, including in `prompts/get`.
+- URI templates:
+  - `:n` prefixes count decoded characters, in query expressions too.
+  - A variable with both a prefix and `*` is rejected.
+
+### Documentation
+- COMPATIBILITY.md:
+  - A "Verified by" column names the test suites behind each requirement.
+  - New rows cover subscribe and notify, and the limits.
+  - The cancellation, rate-limit, batch, error-id, budget and number rows are corrected.
+  - `subscriptions/listen` is no longer listed as not implemented.
+- README:
+  - New: subscriptions, the limits, and the error-id policy.
+  - Corrected: the cancellation, rate-limit client, session activity, 404 recovery, URI template, `inputResponses`, budget and number descriptions, and the server-request text (`2026-07-28` servers send no requests).
+
+### Tests
+- New suites:
+  - `Mcp.RevisionMatrix` (20): the same core scenario for each of the five revisions on stdio, TCP, WebSocket and Streamable HTTP. It uses raw channels and a shared fixture; Test.McpServer has a `--matrix` mode.
+  - `Mcp.Settle` (16), `Mcp.Limits` (7), `Mcp.Closeout` (17) and `Mcp.RegexModern` (8).
+- Rewritten and superseded cases:
+  - `CancelBeforeRequestIsIgnored`, `LastActivityUnchangedOnEnqueue`, `WebSocketKeepsUtf8SplitAcrossReads`, `DiscoverAdvertisesChangeNotifications` and `TaskResultNotOverwritten` are rewritten.
+  - A numeric-header case is added.
+  - Three `Mcp.Polish` cases are superseded.
+
 ## v2.1.12
 Resolves every finding of a four-part review of v2.1.11 against the MCP specification.
 

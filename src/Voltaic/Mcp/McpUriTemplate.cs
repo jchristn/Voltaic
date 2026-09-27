@@ -21,6 +21,10 @@ namespace Voltaic.Mcp
         private readonly Dictionary<string, string> _Groups = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<List<string>> _QueryExpressions = new List<List<string>>();
         private readonly List<string> _QueryGroups = new List<string>();
+        // Prefix modifiers ({var:n}), by path capture group and by query variable name: the decoded value may have at
+        // most n characters (RFC 6570 applies the prefix before encoding).
+        private readonly Dictionary<string, int> _GroupPrefixes = new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _QueryPrefixes = new Dictionary<string, int>(StringComparer.Ordinal);
 
         /// <summary>
         /// Parses a template.
@@ -67,6 +71,9 @@ namespace Voltaic.Mcp
                         }
 
                         name = name.Substring(0, colon);
+
+                        // RFC 6570 section 2.4: a variable has a prefix or an explode modifier, not both.
+                        if (exploded[exploded.Count - 1]) throw new ArgumentException($"Resource template variable '{spec}' cannot have both a prefix and an explode modifier.", nameof(template));
                     }
 
                     prefixes.Add(prefix);
@@ -80,6 +87,11 @@ namespace Voltaic.Mcp
                     string group = "q" + groupIndex++;
                     _QueryExpressions.Add(names);
                     _QueryGroups.Add(group);
+                    for (int n = 0; n < names.Count; n++)
+                    {
+                        if (prefixes[n] > 0) _QueryPrefixes[names[n]] = prefixes[n];
+                    }
+
                     pattern.Append("(?<").Append(group).Append(">(?:[?&][^#]*)?)");
                     continue;
                 }
@@ -101,8 +113,18 @@ namespace Voltaic.Mcp
                         ';' => explode ? "[^/?#]" : "[^;/?#,]",
                         _ => explode ? "[^/?#]" : "[^/?#,&=]"
                     };
-                    string repeat = prefixes[n] > 0 && !explode ? "{0," + prefixes[n] + "}" : "*";
-                    string value = characters + repeat + (op == '+' || op == '#' ? "?" : String.Empty);
+                    // A prefix limits the decoded value to n characters: the pattern counts a percent-encoded sequence or
+                    // a surrogate pair as one character, and the exact count is checked after matching.
+                    string unit = characters;
+                    string repeat = "*";
+                    if (prefixes[n] > 0)
+                    {
+                        _GroupPrefixes[group] = prefixes[n];
+                        unit = "(?:(?:%[0-9A-Fa-f]{2}){1,4}|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|" + characters + ")";
+                        repeat = "{0," + prefixes[n] + "}";
+                    }
+
+                    string value = unit + repeat + (op == '+' || op == '#' ? "?" : String.Empty);
 
                     string capture = "(?<" + group + ">" + value + ")";
                     string separator = n == 0
@@ -149,7 +171,10 @@ namespace Voltaic.Mcp
             foreach (KeyValuePair<string, string> group in _Groups)
             {
                 Group captured = match.Groups[group.Key];
-                if (captured.Success && captured.Length > 0) variables[group.Value] = Uri.UnescapeDataString(captured.Value);
+                if (!captured.Success || captured.Length == 0) continue;
+                string decoded = Uri.UnescapeDataString(captured.Value);
+                if (_GroupPrefixes.TryGetValue(group.Key, out int limit) && CharacterCount(decoded) > limit) return false;
+                variables[group.Value] = decoded;
             }
 
             // The first query expression's capture usually holds the whole query ({?a}{&b} matches "?a=1&b=2"), so every
@@ -167,11 +192,26 @@ namespace Voltaic.Mcp
                     int equals = pair.IndexOf('=');
                     string name = Uri.UnescapeDataString(equals < 0 ? pair : pair.Substring(0, equals));
                     string value = equals < 0 ? String.Empty : Uri.UnescapeDataString(pair.Substring(equals + 1));
-                    if (queryNames.Contains(name)) variables[name] = value;
+                    if (!queryNames.Contains(name)) continue;
+                    if (_QueryPrefixes.TryGetValue(name, out int limit) && CharacterCount(value) > limit) return false;
+                    variables[name] = value;
                 }
             }
 
             return true;
+        }
+
+        // Characters as RFC 6570 counts them: Unicode code points (a surrogate pair is one).
+        private static int CharacterCount(string value)
+        {
+            int count = 0;
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (Char.IsHighSurrogate(value[i]) && i + 1 < value.Length && Char.IsLowSurrogate(value[i + 1])) i++;
+                count++;
+            }
+
+            return count;
         }
     }
 }

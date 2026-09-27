@@ -60,19 +60,25 @@ namespace Voltaic.Mcp
                     code.Add(new McpRegexInstruction(McpRegexOp.Save) { A = node.CaptureIndex * 2 + (backward ? 0 : 1) });
                     return;
                 case McpRegexNodeKind.Start:
-                    code.Add(new McpRegexInstruction(McpRegexOp.Start));
+                    code.Add(new McpRegexInstruction(McpRegexOp.Start) { Multiline = node.Multiline });
                     return;
                 case McpRegexNodeKind.End:
-                    code.Add(new McpRegexInstruction(McpRegexOp.End));
+                    code.Add(new McpRegexInstruction(McpRegexOp.End) { Multiline = node.Multiline });
                     return;
                 case McpRegexNodeKind.WordBoundary:
-                    code.Add(new McpRegexInstruction(McpRegexOp.WordBoundary));
+                    code.Add(new McpRegexInstruction(McpRegexOp.WordBoundary) { IgnoreCase = node.IgnoreCase });
                     return;
                 case McpRegexNodeKind.NotWordBoundary:
-                    code.Add(new McpRegexInstruction(McpRegexOp.NotWordBoundary));
+                    code.Add(new McpRegexInstruction(McpRegexOp.NotWordBoundary) { IgnoreCase = node.IgnoreCase });
                     return;
                 case McpRegexNodeKind.Backreference:
-                    code.Add(new McpRegexInstruction(McpRegexOp.Backreference) { A = node.CaptureIndex, Backward = backward });
+                    code.Add(new McpRegexInstruction(McpRegexOp.Backreference)
+                    {
+                        A = node.CaptureIndex,
+                        Groups = node.CaptureIndexes,
+                        IgnoreCase = node.IgnoreCase,
+                        Backward = backward
+                    });
                     return;
                 case McpRegexNodeKind.Lookaround:
                     code.Add(new McpRegexInstruction(McpRegexOp.Lookaround)

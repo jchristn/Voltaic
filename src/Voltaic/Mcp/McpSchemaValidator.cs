@@ -34,6 +34,15 @@ namespace Voltaic.Mcp
         private static readonly int _MaximumNestingDepth = 512;
         private static readonly int _MaximumCompositionDepth = 64;
         private static readonly int _EvaluationBudget = 1000000;
+
+        // The pattern steps left for the validation running on this thread (validation is synchronous). All the
+        // pattern matches of one validation share one budget, sized by the whole value, so a value split into many
+        // strings costs no more than one string of the same size.
+        [ThreadStatic]
+        private static long _PatternStepsLeft;
+
+        [ThreadStatic]
+        private static bool _PatternPoolActive;
         private static readonly int _MaximumCachedPatterns = 512;
         private static readonly int _MaximumMessageValueLength = 200;
         private static readonly JsonDocumentOptions _DocumentOptions = new JsonDocumentOptions { MaxDepth = 256 };
@@ -81,40 +90,53 @@ namespace Voltaic.Mcp
             int budget = _EvaluationBudget;
             string? error;
 
-            if (String.IsNullOrWhiteSpace(valueJson))
+            long previousSteps = _PatternStepsLeft;
+            bool previousActive = _PatternPoolActive;
+            _PatternPoolActive = true;
+            _PatternStepsLeft = McpEcmaRegex.Budget(valueJson?.Length ?? 0);
+            try
             {
-                if (!AllowsObject(root))
+                if (String.IsNullOrWhiteSpace(valueJson))
                 {
-                    throw McpProtocolException.ValidationError($"{path} is required.");
-                }
+                    if (!AllowsObject(root))
+                    {
+                        throw McpProtocolException.ValidationError($"{path} is required.");
+                    }
 
-                error = Evaluate(root, _EmptyObject, path, document, 0, 0, ref budget);
-            }
-            else
-            {
-                JsonDocument parsed;
-                try
-                {
-                    parsed = JsonDocument.Parse(valueJson!, _DocumentOptions);
+                    error = Evaluate(root, _EmptyObject, path, document, 0, 0, ref budget);
                 }
-                catch (JsonException)
+                else
                 {
-                    throw McpProtocolException.ValidationError($"{path} is not valid JSON.");
-                }
-
-                using (parsed)
-                {
+                    JsonDocument parsed;
                     try
                     {
-                        error = Evaluate(root, parsed.RootElement, path, document, 0, 0, ref budget);
+                        parsed = JsonDocument.Parse(valueJson!, _DocumentOptions);
                     }
-                    catch (InvalidOperationException)
+                    catch (JsonException)
                     {
-                        // A string or property name with an unpaired UTF-16 surrogate is not valid Unicode (I-JSON forbids
-                        // it) and cannot be read as text, so the value is rejected as invalid input.
-                        throw McpProtocolException.ValidationError($"{path} contains a string with an unpaired UTF-16 surrogate, which is not valid Unicode.");
+                        throw McpProtocolException.ValidationError($"{path} is not valid JSON.");
+                    }
+
+                    using (parsed)
+                    {
+                        try
+                        {
+                            error = Evaluate(root, parsed.RootElement, path, document, 0, 0, ref budget);
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // A string or property name with an unpaired UTF-16 surrogate is not valid Unicode (I-JSON forbids
+                            // it) and cannot be read as text, so the value is rejected as invalid input.
+                            throw McpProtocolException.ValidationError($"{path} contains a string with an unpaired UTF-16 surrogate, which is not valid Unicode.");
+                        }
                     }
                 }
+
+            }
+            finally
+            {
+                _PatternStepsLeft = previousSteps;
+                _PatternPoolActive = previousActive;
             }
 
             if (budget < 0)
@@ -291,6 +313,12 @@ namespace Voltaic.Mcp
 
             error = CheckType(schema, instance, path);
             if (error != null) return error;
+
+            // A number whose exponent is too long to compare exactly is rejected rather than let past numeric keywords.
+            if (instance.ValueKind == JsonValueKind.Number && McpJsonNumber.Parse(instance.GetRawText()) == null)
+            {
+                return $"{path} is a number with an exponent longer than {McpJsonNumber.MaxExponentDigits} digits, which is not supported.";
+            }
 
             error = CheckEnumAndConst(schema, instance, path);
             if (error != null) return error;
@@ -1126,7 +1154,16 @@ namespace Voltaic.Mcp
                 return null;
             }
 
-            bool? matched = regex.IsMatch(input);
+            long limit = McpEcmaRegex.Budget(input.Length);
+            if (_PatternPoolActive) limit = Math.Min(limit, _PatternStepsLeft);
+            if (limit <= 0)
+            {
+                timedOut = true;
+                return null;
+            }
+
+            bool? matched = regex.IsMatch(input, limit, out long used);
+            if (_PatternPoolActive) _PatternStepsLeft -= used;
             if (matched == null)
             {
                 timedOut = true;

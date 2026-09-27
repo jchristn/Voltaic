@@ -41,7 +41,7 @@ namespace Test.Shared
                     TestAssert.True(versions.Contains(McpProtocol.ProtocolVersion20260728) && versions.Contains(McpProtocol.ProtocolVersion20251125), $"Both eras are advertised on {t}.");
                     TestAssert.Equal("complete", result.GetProperty("resultType").GetString(), "Discover carries resultType.");
                     TestAssert.True(result.TryGetProperty("ttlMs", out _) && result.TryGetProperty("cacheScope", out _), "Discover is cacheable.");
-                    TestAssert.True(result.GetProperty("capabilities").TryGetProperty("tools", out JsonElement tools) && !tools.TryGetProperty("listChanged", out _), "listChanged is not promised on the stateless surface.");
+                    TestAssert.True(result.GetProperty("capabilities").TryGetProperty("tools", out JsonElement tools) && tools.TryGetProperty("listChanged", out JsonElement listChanged) && listChanged.ValueKind == JsonValueKind.True, "listChanged is advertised on the stateless surface (subscriptions/listen delivers it).");
                 }));
 
                 cases.Add(Case(suiteId, $"StatelessRequestsCarryResultFields_{t}", $"Stateless tools/list and tools/call on {t} carry resultType, and list results carry ttlMs and cacheScope", async ct =>

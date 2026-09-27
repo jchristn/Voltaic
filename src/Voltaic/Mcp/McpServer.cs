@@ -26,6 +26,7 @@ namespace Voltaic.Mcp
         private readonly McpSessionState _Session = new McpSessionState { CanPingClient = true };
         private readonly SemaphoreSlim _WriteLock = new SemaphoreSlim(1, 1);
         private StreamWriter? _Stdout;
+        private int _MaxMessageSize = 16 * 1024 * 1024;
         private bool _IsDisposed = false;
 
         /// <summary>
@@ -154,6 +155,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets the maximum size in bytes of one message read from stdin. A larger message is skipped and answered
+        /// with an Invalid Request error (<c>-32600</c>, <c>id</c> null). Default is 16 MiB (16777216 bytes). Minimum is
+        /// 4096 bytes.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        public int MaxMessageSize
+        {
+            get => _MaxMessageSize;
+            set
+            {
+                if (value < 4096) throw new ArgumentOutOfRangeException(nameof(value), "Maximum message size must be at least 4096 bytes");
+                _MaxMessageSize = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
         /// check that the connection is healthy (MCP ping utility); a ping that is not answered within
         /// <see cref="PingTimeoutMs"/> is logged. Default is 30000. 0 disables pinging. Maximum is 3600000.
@@ -223,7 +240,7 @@ namespace Voltaic.Mcp
             _Endpoint.ListChanged = kind =>
             {
                 if (!_Endpoint.SupportsListChangedNotifications) return;
-                _ = McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/" + kind + "/list_changed", CancellationToken.None);
+                _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, new[] { _Session }, "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
             _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogToStderr);
             _Session.Push = WriteLineAsync;
@@ -585,17 +602,28 @@ namespace Voltaic.Mcp
             // A read from redirected console input does not observe cancellation, so each read is raced against the run
             // token: cancellation, or a failed ping, ends the run even while a read is pending.
             Task stopped = Task.Delay(Timeout.Infinite, run.Token);
+            BoundedLineReader lines = new BoundedLineReader(stdin, () => _MaxMessageSize);
             try
             {
                 while (!run.Token.IsCancellationRequested)
                 {
-                    Task<string?> read = stdin.ReadLineAsync(run.Token).AsTask();
+                    Task<string?> read = lines.ReadLineAsync(run.Token);
                     if (await Task.WhenAny(read, stopped).ConfigureAwait(false) != read) break;
                     string? line = await read.ConfigureAwait(false);
                     if (line == null)
                     {
                         LogToStderr("stdin closed, shutting down");
                         break;
+                    }
+
+                    if (lines.LastLineTooLarge)
+                    {
+                        // The message was skipped; its ID cannot be read, so the error carries a null id.
+                        LogToStderr($"Skipped a message larger than MaxMessageSize ({_MaxMessageSize} bytes)");
+                        JsonRpcError tooLarge = JsonRpcError.InvalidRequest();
+                        tooLarge.Message = $"Invalid Request: the message exceeds the maximum message size of {_MaxMessageSize} bytes.";
+                        await WriteLineAsync(McpMessageProcessor.SerializeError(new JsonRpcResponse { Id = null, Error = tooLarge }, _Session.NegotiatedVersion), run.Token).ConfigureAwait(false);
+                        continue;
                     }
 
                     if (String.IsNullOrWhiteSpace(line)) continue;
@@ -628,7 +656,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyToolsChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/tools/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, new[] { _Session }, "notifications/tools/list_changed", token);
         }
 
         /// <summary>
@@ -638,7 +666,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyResourcesChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/resources/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, new[] { _Session }, "notifications/resources/list_changed", token);
         }
 
         /// <summary>
@@ -648,7 +676,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation.</returns>
         public Task NotifyPromptsChangedAsync(CancellationToken token = default)
         {
-            return McpServerNotifications.ListChangedAsync(new[] { _Session }, "notifications/prompts/list_changed", token);
+            return McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, new[] { _Session }, "notifications/prompts/list_changed", token);
         }
 
         /// <summary>
@@ -661,7 +689,7 @@ namespace Voltaic.Mcp
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="uri"/> is null or empty.</exception>
         public Task NotifyResourceUpdatedAsync(string uri, CancellationToken token = default)
         {
-            return McpServerNotifications.ResourceUpdatedAsync(new[] { _Session }, uri, token);
+            return McpServerNotifications.ResourceUpdatedAsync(_Endpoint.Subscriptions, new[] { _Session }, uri, token);
         }
 
         /// <summary>
@@ -792,6 +820,7 @@ namespace Voltaic.Mcp
             RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
             RegisterMethod("ping", (args) => _Endpoint.Ping(args));
             RegisterMethod("server/discover", (args) => _Endpoint.Discover(args));
+            RegisterMethod("subscriptions/listen", (RpcParameters? args, CancellationToken token) => _Endpoint.Subscriptions.ListenAsync(args, token));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));

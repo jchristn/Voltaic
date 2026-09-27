@@ -78,17 +78,17 @@ namespace Test.Shared
                         TestAssert.True(list.Result.Get("tools").EnumerateArray().Any(tool => tool.Get("name").String() == "echo-tool"), "tools/list returns the registered tools.");
                     }),
 
-                    Case(suiteId, "DiscoverOmitsUndeliverableChangeNotifications", "server/discover does not advertise listChanged or subscribe, which need subscriptions/listen", async ct =>
+                    Case(suiteId, "DiscoverAdvertisesChangeNotifications", "server/discover advertises listChanged and subscribe, delivered through subscriptions/listen", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, RegisterSurface, ct).ConfigureAwait(false);
 
                         RpcResult discover = await McpHttpTestRequests.SendStatelessAsync(fixture, "server/discover", "d", null, null, null, ct).ConfigureAwait(false);
                         JsonProbe capabilities = discover.Result.Get("capabilities");
                         TestAssert.True(capabilities.Has("tools") && capabilities.Has("resources") && capabilities.Has("prompts"), "Registered features are still advertised.");
-                        TestAssert.False(capabilities.Get("tools").Has("listChanged"), "tools.listChanged is not advertised on the stateless surface.");
-                        TestAssert.False(capabilities.Get("prompts").Has("listChanged"), "prompts.listChanged is not advertised on the stateless surface.");
-                        TestAssert.False(capabilities.Get("resources").Has("listChanged"), "resources.listChanged is not advertised on the stateless surface.");
-                        TestAssert.False(capabilities.Get("resources").Has("subscribe"), "resources.subscribe is not advertised on the stateless surface.");
+                        TestAssert.True(capabilities.Get("tools").Get("listChanged").Bool(), "tools.listChanged is advertised on the stateless surface.");
+                        TestAssert.True(capabilities.Get("prompts").Get("listChanged").Bool(), "prompts.listChanged is advertised on the stateless surface.");
+                        TestAssert.True(capabilities.Get("resources").Get("listChanged").Bool(), "resources.listChanged is advertised on the stateless surface.");
+                        TestAssert.True(capabilities.Get("resources").Get("subscribe").Bool(), "resources.subscribe is advertised on the stateless surface.");
 
                         RpcResult initialize = await McpHttpTestRequests.InitializeAsync(fixture, McpProtocol.ProtocolVersion20251125, null, ct).ConfigureAwait(false);
                         TestAssert.True(initialize.Result.Get("capabilities").Get("tools").Get("listChanged").Bool(), "The handshake surface still advertises listChanged.");
@@ -196,14 +196,22 @@ namespace Test.Shared
                         TestAssert.Equal("input_required", response.Result.Get("resultType").String(), "input_required must not be replaced by complete.");
                     }),
 
-                    Case(suiteId, "TaskResultNotOverwritten", "A task result from a custom method keeps resultType task", async ct =>
+                    Case(suiteId, "TaskResultNotOverwritten", "A task result from a custom method keeps resultType task when the tasks extension is advertised, and is refused otherwise", async ct =>
                     {
                         await using HttpMcpTestServerFixture fixture = await McpHttpTestRequests.StartAsync(false, server =>
-                            server.RegisterMethod("tasks/start", _ => new McpCreateTaskResult { TaskId = "task-1", Status = McpTaskStatus.Working }), ct).ConfigureAwait(false);
+                        {
+                            server.AdvertiseTasksExtension = true;
+                            server.RegisterMethod("tasks/start", _ => new McpCreateTaskResult { TaskId = "task-1", Status = McpTaskStatus.Working });
+                        }, ct).ConfigureAwait(false);
 
                         RpcResult response = await McpHttpTestRequests.SendStatelessAsync(fixture, "tasks/start", 1, null, null, null, ct).ConfigureAwait(false);
                         TestAssert.Equal("task", response.Result.Get("resultType").String(), "task must not be replaced by complete.");
                         TestAssert.Equal("task-1", response.Result.Get("taskId").String(), "The task payload is intact.");
+
+                        await using HttpMcpTestServerFixture plain = await McpHttpTestRequests.StartAsync(false, server =>
+                            server.RegisterMethod("tasks/start", _ => new McpCreateTaskResult { TaskId = "task-1", Status = McpTaskStatus.Working }), ct).ConfigureAwait(false);
+                        RpcResult refused = await McpHttpTestRequests.SendStatelessAsync(plain, "tasks/start", 1, null, null, null, ct).ConfigureAwait(false);
+                        TestAssert.Equal(-32603, refused.Error.Get("code").Int(), "Without the extension, a task result type is not supported.");
                     }),
 
                     Case(suiteId, "CustomMcpResultIsStamped", "A custom method returning an McpResult subclass is stamped", async ct =>

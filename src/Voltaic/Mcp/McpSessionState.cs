@@ -19,24 +19,16 @@ namespace Voltaic.Mcp
         private readonly object _Lock = new object();
         private readonly HashSet<string> _Subscriptions = new HashSet<string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, McpInFlightRequest> _InFlight = new ConcurrentDictionary<string, McpInFlightRequest>(StringComparer.Ordinal);
-        // Cancellations that arrived before their request started (requests start on the thread pool, notifications
-        // are handled in order), kept briefly so the request is cancelled when it begins.
-        private readonly ConcurrentDictionary<string, DateTime> _EarlyCancels = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
-        private static readonly TimeSpan _EarlyCancelLifetime = TimeSpan.FromSeconds(30);
-        // IDs of requests that finished recently: a cancellation for one of them arrived too late and is ignored, so
-        // it can never cancel a later request that reuses the ID (allowed once the response was sent).
-        private readonly ConcurrentDictionary<string, DateTime> _Completed = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         // Requests read from the connection but not yet started (they start on the thread pool), by ID, with whether a
         // cancellation already arrived for them. Reserved in message order, so a cancellation that follows its request
-        // always finds it, even when the ID was used before.
+        // always finds it, even when the ID was used before. A cancellation for any other ID is ignored (MCP: unknown
+        // request IDs), so it can never affect a later request.
         private readonly Dictionary<string, bool> _Reserved = new Dictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _RequestLock = new object();
         // Pings this server sent to the client, by request ID JSON, completed by the client's response.
         private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _PendingPings = new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.Ordinal);
         private McpPinger? _Pinger;
         private readonly CancellationTokenSource _Closed = new CancellationTokenSource();
-        private const int _MaxEarlyCancels = 256;
-        private const int _MaxFinished = 4096;
         private string? _NegotiatedVersion;
         private JsonElement? _ClientCapabilities;
         private string? _LogLevel;
@@ -165,11 +157,9 @@ namespace Voltaic.Mcp
             {
                 if (_InFlight.TryAdd(idKey, request))
                 {
-                    _Completed.TryRemove(idKey, out DateTime _);
                     bool cancelledWhileReserved = _Reserved.TryGetValue(idKey, out bool reservedCancel) && reservedCancel;
                     _Reserved.Remove(idKey);
-                    bool cancelledEarly = _EarlyCancels.TryRemove(idKey, out DateTime _);
-                    if (method != "initialize" && (cancelledWhileReserved || cancelledEarly)) request.Cancel();
+                    if (method != "initialize" && cancelledWhileReserved) request.Cancel();
                     return request;
                 }
             }
@@ -178,11 +168,6 @@ namespace Voltaic.Mcp
             return null;
         }
 
-        /// <summary>
-        /// Reserves a request ID when the request is read, before it starts on the thread pool, so a cancellation that
-        /// arrives in between applies to it. A reused ID (allowed once its earlier request was answered, and on
-        /// 2026-07-28) is no longer treated as finished.
-        /// </summary>
         // True when a cancellation arrived for a reserved request that never started (it was rejected before running):
         // nothing may be sent for it.
         internal bool WasCancelledBeforeStart(string idKey)
@@ -193,15 +178,17 @@ namespace Voltaic.Mcp
             }
         }
 
+        /// <summary>
+        /// Reserves a request ID when the request is read, before it starts on the thread pool, so a cancellation read
+        /// after it applies to it, also when the ID was used before (allowed once its earlier request was answered, and
+        /// on 2026-07-28).
+        /// </summary>
         internal void ReserveRequest(string idKey)
         {
             lock (_RequestLock)
             {
                 if (_InFlight.ContainsKey(idKey)) return;
-                _Completed.TryRemove(idKey, out DateTime _);
-
-                // A cancellation that arrived before the request (kept as an early cancel) still applies to it.
-                _Reserved[idKey] = _EarlyCancels.TryRemove(idKey, out DateTime _);
+                _Reserved[idKey] = false;
             }
         }
 
@@ -261,7 +248,7 @@ namespace Voltaic.Mcp
                     return true;
                 }
 
-                if (!_Completed.ContainsKey(idKey)) RememberEarlyCancel(idKey);
+                // Unknown or already answered: ignored, as MCP asks of invalid cancellations.
                 return false;
             }
         }
@@ -273,45 +260,6 @@ namespace Voltaic.Mcp
             {
                 _Reserved.Remove(idKey);
             }
-
-            if (_InFlight.ContainsKey(idKey)) return;
-
-            // A cancellation that arrived for this ID before it was rejected is spent; it must not cancel a later
-            // request that reuses the ID.
-            _EarlyCancels.TryRemove(idKey, out DateTime _);
-            _Completed[idKey] = DateTime.UtcNow;
-            Prune(_Completed, _MaxFinished);
-        }
-
-        private static void Prune(ConcurrentDictionary<string, DateTime> entries, int limit)
-        {
-            if (entries.Count < limit) return;
-            DateTime now = DateTime.UtcNow;
-            foreach (KeyValuePair<string, DateTime> entry in entries)
-            {
-                if (now - entry.Value > _EarlyCancelLifetime) entries.TryRemove(entry.Key, out DateTime _);
-            }
-
-            // Keep the set bounded even when many requests finish within the lifetime: drop the oldest entries.
-            if (entries.Count >= limit * 2)
-            {
-                foreach (KeyValuePair<string, DateTime> oldest in entries.OrderBy(entry => entry.Value).Take(entries.Count - limit).ToList())
-                {
-                    entries.TryRemove(oldest.Key, out DateTime _);
-                }
-            }
-        }
-
-        private void RememberEarlyCancel(string idKey)
-        {
-            DateTime now = DateTime.UtcNow;
-            foreach (KeyValuePair<string, DateTime> entry in _EarlyCancels)
-            {
-                if (now - entry.Value > _EarlyCancelLifetime) _EarlyCancels.TryRemove(entry.Key, out DateTime _);
-            }
-
-            if (_EarlyCancels.Count >= _MaxEarlyCancels) return;
-            _EarlyCancels[idKey] = now;
         }
 
         /// <summary>
@@ -323,9 +271,6 @@ namespace Voltaic.Mcp
                 request.IsActive && request.ProgressToken.HasValue && StringComparer.Ordinal.Equals(request.ProgressToken.Value.GetRawText(), progressTokenJson));
         }
 
-        /// <summary>
-        /// Cancels every in-flight request, for example when the connection closes.
-        /// </summary>
         // Starts periodic pings to the client (stream transports, after initialize).
         internal void StartPinging(int intervalMs, int timeoutMs, int failureThreshold, Action<string> log)
         {
@@ -382,6 +327,7 @@ namespace Voltaic.Mcp
         // Cancelled when the session ends, so work tied to it (such as an open GET stream) stops.
         internal CancellationToken Closed => _Closed.Token;
 
+        // Cancels every in-flight request, for example when the connection closes.
         internal void CancelAll()
         {
             try

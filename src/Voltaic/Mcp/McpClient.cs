@@ -83,6 +83,7 @@ namespace Voltaic.Mcp
         private int _ShutdownGracePeriodMs = 5000;
         private int _InitializeTimeoutMs = 30000;
         private int _PingIntervalMs = 30000;
+        private int _MaxMessageSize = 16 * 1024 * 1024;
         private int _PingTimeoutMs = 10000;
         private int _PingFailureThreshold = 1;
         private McpPinger? _Pinger;
@@ -150,6 +151,7 @@ namespace Voltaic.Mcp
                 _StderrTask = Task.Run(() => StderrLoop(_CancellationTokenSource.Token));
 
                 Interlocked.Increment(ref _ConnectionGeneration);
+                _InitializeResult = null;
                 _IsConnected = true;
                 _Endpoint = $"{executable} {string.Join(" ", arguments)}";
                 _ConnectedUtc = DateTime.UtcNow;
@@ -395,6 +397,22 @@ namespace Voltaic.Mcp
         }
 
         /// <summary>
+        /// Gets or sets the maximum size in bytes of one message read from the server's stdout. A larger message ends the
+        /// connection: the server process is shut down and calls waiting for a response fail. Default is 16 MiB
+        /// (16777216 bytes). Minimum is 4096 bytes.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        public int MaxMessageSize
+        {
+            get => _MaxMessageSize;
+            set
+            {
+                if (value < 4096) throw new ArgumentOutOfRangeException(nameof(value), "Maximum message size must be at least 4096 bytes");
+                _MaxMessageSize = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets how often the client pings the server after <c>initialize</c>, in milliseconds, to check that
         /// the connection is healthy (MCP ping utility); a ping that is not answered within <see cref="PingTimeoutMs"/>
         /// is logged. Default is 30000. 0 disables pinging. Maximum is 3600000. Takes effect at the next
@@ -502,6 +520,8 @@ namespace Voltaic.Mcp
             McpInitializeOutcome outcome;
             try
             {
+                // The previous connection's result no longer describes this server.
+                _InitializeResult = null;
                 outcome = await McpClientHandshake.RunAsync(
                     async (parameters, ct) => McpClientHandshake.ToElement(await CallAsync<object?>("initialize", parameters, timeoutMs, ct).ConfigureAwait(false)),
                     ct => NotifyAsync("notifications/initialized", null, ct),
@@ -716,19 +736,10 @@ namespace Voltaic.Mcp
                 return;
             }
 
-            List<JsonRpcRequest> requests = new List<JsonRpcRequest>();
+            ClientBatch batch;
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(batchJson))
-                {
-                    foreach (JsonElement element in document.RootElement.EnumerateArray())
-                    {
-                        string raw = element.GetRawText();
-                        JsonRpcRequest? request = ClientRequestDispatcher.ParseRequest(raw);
-                        if (request != null) requests.Add(request);
-                        else ProcessResponse(raw);
-                    }
-                }
+                batch = ClientBatch.Parse(batchJson, _RequestDispatcher);
             }
             catch (JsonException ex)
             {
@@ -736,15 +747,17 @@ namespace Voltaic.Mcp
                 return;
             }
 
-            if (requests.Count == 0) return;
+            foreach (string raw in batch.Others) ProcessResponse(raw);
+            if (batch.Requests.Count == 0 && batch.Errors.Count == 0) return;
             _ = Task.Run(async () =>
             {
                 CancellationToken token = _CancellationTokenSource?.Token ?? CancellationToken.None;
                 try
                 {
-                    JsonRpcResponse?[] answered = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
                     // Requests the server cancelled get no response; a batch with nothing left is not answered.
-                    List<JsonRpcResponse> responses = answered.Where(response => response != null).Select(response => response!).ToList();
+                    // Invalid elements (and an empty batch) are answered with Invalid Request errors, as JSON-RPC 2.0 requires.
+                    List<JsonRpcResponse> responses = new List<JsonRpcResponse>(batch.Errors);
+                    responses.AddRange(await _RequestDispatcher.DispatchBatchAsync(batch.Requests, token).ConfigureAwait(false));
                     if (responses.Count > 0) await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -795,12 +808,22 @@ namespace Voltaic.Mcp
         {
             try
             {
-                while (!token.IsCancellationRequested && _StdoutReader != null)
+                StreamReader? stdout = _StdoutReader;
+                if (stdout == null) return;
+                BoundedLineReader lines = new BoundedLineReader(stdout, () => _MaxMessageSize);
+                while (!token.IsCancellationRequested)
                 {
-                    string? line = await _StdoutReader.ReadLineAsync().ConfigureAwait(false);
+                    string? line = await lines.ReadLineAsync(token).ConfigureAwait(false);
                     if (line == null)
                     {
                         LogMessage("MCP server stdout closed");
+                        break;
+                    }
+
+                    if (lines.LastLineTooLarge)
+                    {
+                        LogMessage($"Closing: a message from the server exceeded MaxMessageSize ({_MaxMessageSize} bytes)");
+                        _ = Task.Run(() => Shutdown());
                         break;
                     }
 
@@ -893,7 +916,7 @@ namespace Voltaic.Mcp
                     return;
                 }
 
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString);
+                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString, JsonLimits.Serializer);
                 if (response != null && response.Id != null)
                 {
                     object lookupKey = response.Id;
@@ -914,7 +937,7 @@ namespace Voltaic.Mcp
                 }
                 else
                 {
-                    JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString);
+                    JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString, JsonLimits.Serializer);
                     if (notification != null && notification.Id == null)
                     {
                         // A cancellation of a request the server sent stops its handler; the notification is still raised.

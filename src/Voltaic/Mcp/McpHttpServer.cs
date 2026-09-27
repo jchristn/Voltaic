@@ -20,6 +20,62 @@ namespace Voltaic.Mcp
     public class McpHttpServer : IDisposable
     {
         /// <summary>
+        /// Gets or sets the maximum size in bytes of one request body. A larger body gets HTTP 413 with an Invalid Request
+        /// error (<c>-32600</c>, no <c>id</c>); a body that declares a larger <c>Content-Length</c> is rejected before it is
+        /// read. Default is 16 MiB (16777216 bytes). Minimum is 4096 bytes.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        public int MaxMessageSize
+        {
+            get => _MaxMessageSize;
+            set
+            {
+                if (value < 4096) throw new ArgumentOutOfRangeException(nameof(value), "Maximum message size must be at least 4096 bytes");
+                _MaxMessageSize = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets a function that names the client of a request, for the rate limits and
+        /// <see cref="MaxSessionsPerClient"/>. By default a client is its authenticated principal and remote address; behind
+        /// a reverse proxy every request has the proxy's address, so set this to read the client's address from a header
+        /// the proxy sets (and that clients cannot forge). Null or an empty result uses the remote address. Default is null.
+        /// </summary>
+        public Func<HttpListenerRequest, string?>? ClientIdentifier { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of sessions the server holds. An <c>initialize</c> that would open one more
+        /// gets HTTP 503 with an internal error (<c>-32603</c>); existing sessions are never evicted for it. Default is
+        /// 10000. Minimum is 1.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 1.</exception>
+        public int MaxSessions
+        {
+            get => _MaxSessions;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "MaxSessions must be at least 1");
+                _MaxSessions = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the maximum number of sessions one client (its authenticated principal and remote address) may
+        /// hold. When a client opens one more, its least recently active session is ended, so the client keeps working
+        /// but cannot accumulate sessions. Default is 100. Minimum is 1.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 1.</exception>
+        public int MaxSessionsPerClient
+        {
+            get => _MaxSessionsPerClient;
+            set
+            {
+                if (value < 1) throw new ArgumentOutOfRangeException(nameof(value), "MaxSessionsPerClient must be at least 1");
+                _MaxSessionsPerClient = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets the session timeout in seconds. A session with no request, open stream, or other activity for
         /// longer than this, and no request still running, is expired (checked every half timeout, between 5 and 60
         /// seconds); a long-running request
@@ -494,7 +550,6 @@ namespace Voltaic.Mcp
         private HttpListener? _Listener;
         private CancellationTokenSource? _TokenSource;
         private readonly ConcurrentDictionary<string, ClientConnection> _Sessions;
-        private readonly ConcurrentDictionary<string, byte> _TerminatedSessions;
         private readonly ConcurrentDictionary<string, string> _SessionVersions = new ConcurrentDictionary<string, string>();
         private readonly Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly McpEndpoint _Endpoint;
@@ -503,6 +558,9 @@ namespace Voltaic.Mcp
         private volatile bool _EnableLegacyEndpoints = true;
         private Task? _CleanupTask;
         private int _SessionTimeoutSeconds = 300; // 5 minutes
+        private int _MaxMessageSize = 16 * 1024 * 1024;
+        private int _MaxSessions = 10000;
+        private int _MaxSessionsPerClient = 100;
         private int _MaxQueueSize = 100;
         private int _SseReplayBufferSize = 100;
         private int _SseRetryIntervalMs = 1000;
@@ -556,7 +614,6 @@ namespace Voltaic.Mcp
             _EventsPath = String.IsNullOrEmpty(eventsPath) ? "/events" : eventsPath;
             _McpPath = mcpPath ?? "";
             _Sessions = new ConcurrentDictionary<string, ClientConnection>();
-            _TerminatedSessions = new ConcurrentDictionary<string, byte>();
             _Methods = new Dictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>>();
             _Endpoint = new McpEndpoint("Voltaic.Mcp.HttpServer");
             _Endpoint.ErrorLog = LogMessage;
@@ -564,7 +621,7 @@ namespace Voltaic.Mcp
             _Endpoint.ListChanged = kind =>
             {
                 if (!_Endpoint.SupportsListChangedNotifications) return;
-                _ = McpServerNotifications.ListChangedAsync(Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
+                _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
             _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage)
             {
@@ -1052,7 +1109,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public void NotifyToolsChanged()
         {
-            McpServerNotifications.ListChangedAsync(Sessions(), "notifications/tools/list_changed", CancellationToken.None).GetAwaiter().GetResult();
+            McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/tools/list_changed", CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -1060,7 +1117,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public void NotifyResourcesChanged()
         {
-            McpServerNotifications.ListChangedAsync(Sessions(), "notifications/resources/list_changed", CancellationToken.None).GetAwaiter().GetResult();
+            McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/resources/list_changed", CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -1071,7 +1128,7 @@ namespace Voltaic.Mcp
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="uri"/> is null or empty.</exception>
         public void NotifyResourceUpdated(string uri)
         {
-            McpServerNotifications.ResourceUpdatedAsync(Sessions(), uri, CancellationToken.None).GetAwaiter().GetResult();
+            McpServerNotifications.ResourceUpdatedAsync(_Endpoint.Subscriptions, Sessions(), uri, CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -1079,7 +1136,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public void NotifyPromptsChanged()
         {
-            McpServerNotifications.ListChangedAsync(Sessions(), "notifications/prompts/list_changed", CancellationToken.None).GetAwaiter().GetResult();
+            McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/prompts/list_changed", CancellationToken.None).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -1158,14 +1215,12 @@ namespace Voltaic.Mcp
         /// <returns>True if the client was found and kicked; otherwise, false.</returns>
         public bool KickClient(string clientId)
         {
-            if (_Sessions.TryRemove(clientId, out ClientConnection? connection))
+            if (RemoveSession(clientId))
             {
-                _SessionVersions.TryRemove(clientId, out string? _);
-                RaiseClientDisconnected(connection);
-                connection.Dispose();
                 LogMessage($"Kicked client: {clientId}");
                 return true;
             }
+
             return false;
         }
 
@@ -1197,6 +1252,8 @@ namespace Voltaic.Mcp
             if (_IsStopping) return;
             _IsStopping = true;
 
+            // Open subscriptions/listen streams end gracefully, with their completion results, before the connections close.
+            _Endpoint.Subscriptions.CloseAllAndWait(TimeSpan.FromSeconds(1));
             _TokenSource?.Cancel();
 
             foreach (ClientConnection connection in _Sessions.Values)
@@ -1323,6 +1380,7 @@ namespace Voltaic.Mcp
             RegisterMethod("initialize", (args) => _Endpoint.Initialize(args));
             RegisterMethod("ping", (args) => _Endpoint.Ping(args));
             RegisterMethod("server/discover", (args) => _Endpoint.Discover(args));
+            RegisterMethod("subscriptions/listen", (RpcParameters? args, CancellationToken token) => _Endpoint.Subscriptions.ListenAsync(args, token));
             RegisterMethod("tools/list", (args) => _Endpoint.ListTools(args));
             RegisterMethod("tools/call", _Endpoint.CallToolAsync);
             RegisterMethod("resources/list", (args) => _Endpoint.ListResources(args));
@@ -1506,6 +1564,18 @@ namespace Voltaic.Mcp
                     }
                 }
             }
+            catch (MessageTooLargeException tooLarge)
+            {
+                LogMessage($"Rejected a request body larger than MaxMessageSize ({tooLarge.Limit} bytes)");
+                try
+                {
+                    await WriteJsonRpcErrorAsync(context, 413, null, new McpProtocolException(-32600, "Invalid Request: " + tooLarge.Message), token).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Ignore errors while sending error response
+                }
+            }
             catch (Exception ex)
             {
                 LogMessage($"Error handling request: {ex.Message}");
@@ -1557,7 +1627,6 @@ namespace Voltaic.Mcp
         private bool TryGetActiveSession(string sessionId, out ClientConnection? connection)
         {
             connection = null;
-            if (_TerminatedSessions.ContainsKey(sessionId)) return false;
             if (!_Sessions.TryGetValue(sessionId, out ClientConnection? found)) return false;
 
             string? owner = found.Caller?.Principal;
@@ -1578,9 +1647,25 @@ namespace Voltaic.Mcp
         /// <see cref="RegisterSession"/> is called after the request succeeds.
         /// </summary>
         // The rate-limit client of a request without a session: the authenticated principal and the remote address.
-        private static string RateLimitClientFor(HttpListenerContext context)
+        private string RateLimitClientFor(HttpListenerContext context)
         {
-            string address = context.Request.RemoteEndPoint?.Address.ToString() ?? "unknown";
+            // Behind a reverse proxy every request comes from the proxy's address; the application can name the client
+            // (for example from a header the proxy sets).
+            string? identified = null;
+            Func<HttpListenerRequest, string?>? identify = ClientIdentifier;
+            if (identify != null)
+            {
+                try
+                {
+                    identified = identify(context.Request);
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"ClientIdentifier failed: {ex.Message}");
+                }
+            }
+
+            string address = !String.IsNullOrEmpty(identified) ? identified! : context.Request.RemoteEndPoint?.Address.ToString() ?? "unknown";
             string principal = RpcCallContext.Current?.Principal ?? String.Empty;
             return "http|" + principal + "|" + address;
         }
@@ -1592,7 +1677,7 @@ namespace Voltaic.Mcp
             McpSessionState state = new McpSessionState(requireInitialize) { Owner = connection };
             state.Push = (json, token) =>
             {
-                JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(json);
+                JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(json, JsonLimits.Serializer);
                 if (notification != null) connection.Enqueue(notification);
                 return Task.CompletedTask;
             };
@@ -1624,7 +1709,7 @@ namespace Voltaic.Mcp
             JsonElement root;
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(requestBody))
+                using (JsonDocument document = JsonDocument.Parse(requestBody, JsonLimits.Document))
                 {
                     root = document.RootElement.Clone();
                 }
@@ -1643,7 +1728,7 @@ namespace Voltaic.Mcp
                 McpProtocolException rejection = envelope.Error != null
                     ? new McpProtocolException(envelope.Error.Code, envelope.Error.Message ?? "Invalid notification.")
                     : new McpProtocolException(-32600, $"Invalid Request: '{envelope.Method}' is a request and must include a string or integer id.");
-                await WriteJsonRpcErrorAsync(context, 400, null, rejection, token, omitId: !envelope.Message.TryGetProperty("id", out JsonElement _)).ConfigureAwait(false);
+                await WriteJsonRpcErrorAsync(context, 400, null, rejection, token).ConfigureAwait(false);
                 return;
             }
 
@@ -1664,7 +1749,10 @@ namespace Voltaic.Mcp
             if (hasSession && statelessVersion == null)
             {
                 string streamSessionId = connection.SessionId;
-                openLog = () => _SseStreams.GetOrAdd(streamSessionId, _ => new SseSessionStreams(_MaxResumableStreamsPerSession)).OpenRequestStream(_SseReplayBufferSize);
+                // A session removed while its request ran gets a stream that is not retained, so nothing is kept for it.
+                openLog = () => _Sessions.ContainsKey(streamSessionId)
+                    ? _SseStreams.GetOrAdd(streamSessionId, _ => new SseSessionStreams(_MaxResumableStreamsPerSession)).OpenRequestStream(_SseReplayBufferSize)
+                    : new SseSessionStreams(1).OpenRequestStream(_SseReplayBufferSize);
                 string? negotiated = state.NegotiatedVersion;
                 prime = negotiated != null && String.CompareOrdinal(negotiated, McpProtocol.ProtocolVersion20251125) >= 0;
             }
@@ -1789,7 +1877,8 @@ namespace Voltaic.Mcp
         {
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
             if (sessionId != null) SetSessionIdHeaders(context.Response, sessionId);
-            string challenge = "Bearer error=\"insufficient_scope\", scope=\"" + scope.Replace("\"", "") + "\"";
+            // RFC 6750 scope tokens exclude the quote and the backslash, so neither may reach the quoted string.
+            string challenge = "Bearer error=\"insufficient_scope\", scope=\"" + new string(scope.Where(character => character >= 0x20 && character <= 0x7E && character != '"' && character != '\\').ToArray()) + "\"";
             string? metadataUrl = ResourceMetadataUrl(context);
             if (metadataUrl != null) challenge += ", resource_metadata=\"" + metadataUrl + "\"";
             context.Response.AddHeader("WWW-Authenticate", challenge);
@@ -1838,8 +1927,20 @@ namespace Voltaic.Mcp
         {
             connection.Caller = RpcCallContext.Current;
 
-            // A session is its own client for the rate limits.
-            StateOf(connection).RateLimitKey = "session|" + connection.SessionId;
+            // The session keeps the rate-limit client of its initialize (principal and remote address), so opening more
+            // sessions never multiplies a client's limit. A client over MaxSessionsPerClient loses its least recently
+            // active sessions.
+            string? client = StateOf(connection).RateLimitKey;
+            if (client != null)
+            {
+                List<ClientConnection> owned = _Sessions.Values.Where(existing => StringComparer.Ordinal.Equals(StateOf(existing).RateLimitKey, client)).OrderBy(existing => existing.LastActivity).ToList();
+                for (int i = 0; i <= owned.Count - _MaxSessionsPerClient; i++)
+                {
+                    RemoveSession(owned[i].SessionId);
+                    LogMessage($"Removed session {owned[i].SessionId}: its client opened more than MaxSessionsPerClient ({_MaxSessionsPerClient}) sessions");
+                }
+            }
+
             if (_Sessions.TryAdd(connection.SessionId, connection))
             {
                 // The client learns the session ID from the initialize response, and only then can open a stream that
@@ -1911,7 +2012,7 @@ namespace Voltaic.Mcp
                 JsonRpcRequest? incomingRequest = null;
                 try
                 {
-                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody, JsonLimits.Serializer);
                 }
                 catch (JsonException)
                 {
@@ -1942,19 +2043,26 @@ namespace Voltaic.Mcp
                 {
                     if (!TryGetActiveSession(requestedSessionId!, out connection) || connection == null)
                     {
-                        await WriteJsonRpcErrorAsync(context, 404, isBatch ? null : incomingRequest?.Id, McpProtocolException.SessionNotFound(), token).ConfigureAwait(false);
+                        await WriteJsonRpcErrorAsync(context, 404, isBatch ? null : RequestIdOf(incomingRequest), McpProtocolException.SessionNotFound(), token).ConfigureAwait(false);
                         return;
                     }
                 }
                 else if (!isBatch && IsInitializeRequest(incomingRequest))
                 {
+                    if (_Sessions.Count >= _MaxSessions)
+                    {
+                        LogMessage($"Refused a new session: the server holds MaxSessions ({_MaxSessions}) sessions");
+                        await WriteJsonRpcErrorAsync(context, 503, RequestIdOf(incomingRequest), new McpProtocolException(-32603, "The server cannot open more sessions now; try again later."), token).ConfigureAwait(false);
+                        return;
+                    }
+
                     connection = CreateProvisionalConnection();
                     StateOf(connection).RateLimitKey = RateLimitClientFor(context);
                     isProvisional = true;
                 }
                 else
                 {
-                    await WriteJsonRpcErrorAsync(context, 400, isBatch ? null : incomingRequest?.Id, McpProtocolException.SessionRequired(), token).ConfigureAwait(false);
+                    await WriteJsonRpcErrorAsync(context, 400, isBatch ? null : RequestIdOf(incomingRequest), McpProtocolException.SessionRequired(), token).ConfigureAwait(false);
                     return;
                 }
 
@@ -2171,7 +2279,6 @@ namespace Voltaic.Mcp
                 if (!String.IsNullOrEmpty(sessionId))
                 {
                     RemoveSession(sessionId);
-                    _TerminatedSessions[sessionId] = 0;
                     LogMessage($"MCP session terminated: {sessionId}");
                 }
 
@@ -2180,7 +2287,9 @@ namespace Voltaic.Mcp
             }
             else
             {
+                // RFC 9110: a 405 lists the methods the resource supports.
                 context.Response.StatusCode = 405;
+                context.Response.Headers["Allow"] = "GET, POST, DELETE, OPTIONS";
                 context.Response.Close();
             }
         }
@@ -2217,7 +2326,7 @@ namespace Voltaic.Mcp
                 McpProtocolException reported = resolveError.Code == -32022
                     ? McpProtocolException.UnsupportedProtocolVersion(metaProtocolVersion ?? context.Request.Headers[McpProtocol.ProtocolVersionHeader] ?? String.Empty, _Endpoint.SupportedVersions())
                     : resolveError;
-                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, reported, token, omitId: incomingRequest != null && incomingRequest.Id == null).ConfigureAwait(false);
+                await WriteJsonRpcErrorAsync(context, 400, RequestIdOf(incomingRequest), reported, token).ConfigureAwait(false);
                 return true;
             }
 
@@ -2255,7 +2364,7 @@ namespace Voltaic.Mcp
             // A body that is not JSON is a parse error.
             try
             {
-                using (JsonDocument.Parse(requestBody))
+                using (JsonDocument.Parse(requestBody, JsonLimits.Document))
                 {
                 }
             }
@@ -2275,7 +2384,7 @@ namespace Voltaic.Mcp
 
             if (String.IsNullOrEmpty(bodyMethod))
             {
-                await WriteJsonRpcErrorAsync(context, 400, incomingRequest?.Id, new McpProtocolException(-32600, $"Invalid Request: the body must be a single JSON-RPC request or notification; clients must not send responses in protocol version {protocolVersion}."), token).ConfigureAwait(false);
+                await WriteJsonRpcErrorAsync(context, 400, RequestIdOf(incomingRequest), new McpProtocolException(-32600, $"Invalid Request: the body must be a single JSON-RPC request or notification; clients must not send responses in protocol version {protocolVersion}."), token).ConfigureAwait(false);
                 return;
             }
 
@@ -2390,7 +2499,7 @@ namespace Voltaic.Mcp
             bool hasArguments = false;
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(requestBody))
+                using (JsonDocument document = JsonDocument.Parse(requestBody, JsonLimits.Document))
                 {
                     if (document.RootElement.ValueKind == JsonValueKind.Object
                         && document.RootElement.TryGetProperty("params", out JsonElement parameterObject)
@@ -2481,7 +2590,7 @@ namespace Voltaic.Mcp
 
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(requestBody))
+                using (JsonDocument document = JsonDocument.Parse(requestBody, JsonLimits.Document))
                 {
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("params", out JsonElement parameters) || parameters.ValueKind != JsonValueKind.Object) return;
@@ -2537,28 +2646,56 @@ namespace Voltaic.Mcp
             public string? ProtocolVersion { get; set; }
         }
 
-        // omitId: the rejected message was a notification (it has no ID), so the error response carries none, as the
-        // transport allows ("a JSON-RPC error response that has no id").
-        private async Task WriteJsonRpcErrorAsync(HttpListenerContext context, int statusCode, object? id, McpProtocolException error, CancellationToken token, bool omitId = false)
+        // The id to echo in an error: only a request's (a message with a method and an id).
+        private static object? RequestIdOf(JsonRpcRequest? request)
+        {
+            if (request == null || String.IsNullOrEmpty(request.Method)) return null;
+            return IsValidRequestId(request.Id) ? request.Id : null;
+        }
+
+        // The revision that governs an HTTP request: its MCP-Protocol-Version header, else its session's negotiated
+        // version, else the header-less default (2025-03-26).
+        private string RevisionOfRequest(HttpListenerContext context)
+        {
+            string? header = context.Request.Headers[McpProtocol.ProtocolVersionHeader];
+            if (!String.IsNullOrWhiteSpace(header)) return header.Trim();
+            string? sessionId = context.Request.Headers[McpProtocol.SessionIdHeader];
+            if (!String.IsNullOrEmpty(sessionId) && _Sessions.TryGetValue(sessionId, out ClientConnection? connection))
+            {
+                string? negotiated = (connection.ProtocolState as McpSessionState)?.NegotiatedVersion;
+                if (negotiated != null) return negotiated;
+            }
+
+            return McpProtocol.HeaderlessProtocolVersion;
+        }
+
+        // An MCP request ID is a string or an integer; any other value is answered as unreadable.
+        private static bool IsValidRequestId(object? id)
+        {
+            if (id is JsonElement element)
+            {
+                return element.ValueKind == JsonValueKind.String
+                    || (element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out long _));
+            }
+
+            return id is string || id is int || id is long;
+        }
+
+        // An error that answers no identifiable request (a notification, a client response, a body that could not be
+        // read, a batch, or a GET or DELETE) has no id: pass the id only when the body was a request. Without one, the id
+        // is omitted under 2025-11-25 and later, whose schemas make it optional, and is null under earlier revisions, as
+        // JSON-RPC 2.0 requires; an id that is not a string or an integer is never echoed.
+        private async Task WriteJsonRpcErrorAsync(HttpListenerContext context, int statusCode, object? id, McpProtocolException error, CancellationToken token)
         {
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
 
             JsonRpcResponse response = new JsonRpcResponse
             {
                 Error = error.ToJsonRpcError(),
-                Id = id
+                Id = IsValidRequestId(id) ? id : null
             };
 
-            string json = JsonSerializer.Serialize(response);
-            if (omitId && id == null)
-            {
-                System.Text.Json.Nodes.JsonObject? withoutId = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject;
-                if (withoutId != null)
-                {
-                    withoutId.Remove("id");
-                    json = withoutId.ToJsonString();
-                }
-            }
+            string json = McpMessageProcessor.SerializeError(response, RevisionOfRequest(context));
 
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "application/json";
@@ -2589,7 +2726,7 @@ namespace Voltaic.Mcp
 
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(body))
+                using (JsonDocument document = JsonDocument.Parse(body, JsonLimits.Document))
                 {
                     return IsJsonRpcResponseElement(document.RootElement);
                 }
@@ -2651,7 +2788,7 @@ namespace Voltaic.Mcp
             List<JsonElement> elements;
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(body))
+                using (JsonDocument document = JsonDocument.Parse(body, JsonLimits.Document))
                 {
                     elements = document.RootElement.EnumerateArray().Select(element => element.Clone()).ToList();
                 }
@@ -2910,11 +3047,26 @@ namespace Voltaic.Mcp
             context.Response.Close();
         }
 
-        private static async Task<string> ReadRequestBodyAsync(HttpListenerContext context)
+        // Reads the body up to MaxMessageSize bytes; a larger body (declared or actual) throws MessageTooLargeException.
+        private async Task<string> ReadRequestBodyAsync(HttpListenerContext context)
         {
-            using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
+            int limit = _MaxMessageSize;
+            if (context.Request.ContentLength64 > limit) throw new MessageTooLargeException(limit);
+            using (MemoryStream body = new MemoryStream())
             {
-                return await reader.ReadToEndAsync().ConfigureAwait(false);
+                byte[] chunk = new byte[16384];
+                while (true)
+                {
+                    int read = await context.Request.InputStream.ReadAsync(chunk, 0, chunk.Length).ConfigureAwait(false);
+                    if (read == 0) break;
+                    if (body.Length + read > limit) throw new MessageTooLargeException(limit);
+                    body.Write(chunk, 0, read);
+                }
+
+                using (StreamReader reader = new StreamReader(new MemoryStream(body.GetBuffer(), 0, (int)body.Length), Encoding.UTF8))
+                {
+                    return await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
             }
         }
 
@@ -2923,6 +3075,7 @@ namespace Voltaic.Mcp
             if (context.Request.HttpMethod != "POST")
             {
                 context.Response.StatusCode = 405;
+                context.Response.Headers["Allow"] = "POST, OPTIONS";
                 context.Response.Close();
                 return;
             }
@@ -2935,7 +3088,7 @@ namespace Voltaic.Mcp
             JsonRpcRequest? incomingRequest = null;
             try
             {
-                incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody);
+                incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody, JsonLimits.Serializer);
             }
             catch (JsonException)
             {
@@ -2957,7 +3110,7 @@ namespace Voltaic.Mcp
             {
                 if (!TryGetActiveSession(requestedSessionId!, out connection) || connection == null)
                 {
-                    await WriteJsonRpcErrorAsync(context, 404, incomingRequest?.Id, McpProtocolException.SessionNotFound(), token).ConfigureAwait(false);
+                    await WriteJsonRpcErrorAsync(context, 404, RequestIdOf(incomingRequest), McpProtocolException.SessionNotFound(), token).ConfigureAwait(false);
                     return;
                 }
             }
@@ -2985,6 +3138,7 @@ namespace Voltaic.Mcp
             if (context.Request.HttpMethod != "GET")
             {
                 context.Response.StatusCode = 405;
+                context.Response.Headers["Allow"] = "GET, OPTIONS";
                 context.Response.Close();
                 return;
             }
@@ -3118,6 +3272,12 @@ namespace Voltaic.Mcp
 
                         RemoveSession(sessionId);
                         LogMessage($"Expired session: {sessionId}");
+                    }
+
+                    // Stream logs whose session ended while a stream was being opened.
+                    foreach (string orphan in _SseStreams.Keys.Where(id => !_Sessions.ContainsKey(id)).ToList())
+                    {
+                        _SseStreams.TryRemove(orphan, out SseSessionStreams? _);
                     }
                 }
                 catch (OperationCanceledException)

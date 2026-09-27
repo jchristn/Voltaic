@@ -21,16 +21,11 @@ namespace Voltaic.Core
 
         // Requests from the server that are running, by ID, so notifications/cancelled can stop them.
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _Running = new ConcurrentDictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
-        // Cancellations that arrived before their request started, kept briefly.
-        private readonly ConcurrentDictionary<string, DateTime> _EarlyCancels = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
-        // IDs of requests answered recently: a cancellation for one of them arrived too late and is ignored, so it can
-        // never cancel a later request that reuses the ID.
-        private readonly ConcurrentDictionary<string, DateTime> _Finished = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         // Requests read from the connection but not yet dispatched, by ID, with whether a cancellation arrived for them.
+        // Reserved in message order, so a cancellation read after its request always finds it; a cancellation for any
+        // other ID is ignored (MCP: unknown request IDs).
         private readonly Dictionary<string, bool> _Reserved = new Dictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _RequestLock = new object();
-        private static readonly TimeSpan _EntryLifetime = TimeSpan.FromSeconds(30);
-        private const int _MaxFinished = 4096;
 
         /// <summary>
         /// Gets or sets whether MCP rules apply: <c>ping</c> is answered with an empty object (<c>{}</c>) and reserved,
@@ -81,12 +76,7 @@ namespace Voltaic.Core
                 }
             }
 
-            if (_Finished.ContainsKey(idKey) && !_Running.ContainsKey(idKey))
-            {
-                // Already answered: the cancellation crossed the response and is ignored.
-                return true;
-            }
-
+            // A running request stops; an unknown or already answered one is ignored.
             if (_Running.TryGetValue(idKey, out CancellationTokenSource? running))
             {
                 try
@@ -96,16 +86,6 @@ namespace Voltaic.Core
                 catch (ObjectDisposedException)
                 {
                 }
-            }
-            else
-            {
-                DateTime now = DateTime.UtcNow;
-                foreach (KeyValuePair<string, DateTime> entry in _EarlyCancels)
-                {
-                    if (now - entry.Value > TimeSpan.FromSeconds(30)) _EarlyCancels.TryRemove(entry.Key, out DateTime _);
-                }
-
-                if (_EarlyCancels.Count < 256) _EarlyCancels[idKey] = now;
             }
 
             return true;
@@ -175,7 +155,7 @@ namespace Voltaic.Core
 
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(json))
+                using (JsonDocument document = JsonDocument.Parse(json, JsonLimits.Document))
                 {
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object) return null;
@@ -183,7 +163,7 @@ namespace Voltaic.Core
                     if (!root.TryGetProperty("id", out JsonElement _)) return null;
                 }
 
-                return JsonSerializer.Deserialize<JsonRpcRequest>(json);
+                return JsonSerializer.Deserialize<JsonRpcRequest>(json, JsonLimits.Serializer);
             }
             catch (JsonException)
             {
@@ -201,10 +181,7 @@ namespace Voltaic.Core
             if (idKey == null) return;
             lock (_RequestLock)
             {
-                _Finished.TryRemove(idKey, out DateTime _);
-
-                // A cancellation that arrived before the request still applies to it.
-                _Reserved[idKey] = _EarlyCancels.TryRemove(idKey, out DateTime _);
+                if (!_Running.ContainsKey(idKey)) _Reserved[idKey] = false;
             }
         }
 
@@ -226,11 +203,32 @@ namespace Voltaic.Core
         /// <c>-32601</c>; a handler exception that implements <see cref="IJsonRpcErrorProvider"/> supplies its own
         /// error; any other exception becomes <c>-32603</c> without its details.
         /// </summary>
+        // Answers a batch of server requests. The elements are finished together when the batch response is assembled:
+        // until then no element's response has been sent, so a cancellation read meanwhile drops that element's response.
+        internal async Task<List<JsonRpcResponse>> DispatchBatchAsync(List<JsonRpcRequest> requests, CancellationToken token)
+        {
+            List<string?> keys = requests.Select(request => IdKey(request.Id)).ToList();
+            JsonRpcResponse?[] answered = await Task.WhenAll(requests.Select((request, index) => DispatchCoreAsync(request, keys[index], token))).ConfigureAwait(false);
+            List<JsonRpcResponse> responses = new List<JsonRpcResponse>();
+            lock (_RequestLock)
+            {
+                for (int i = 0; i < answered.Length; i++)
+                {
+                    string? idKey = keys[i];
+                    bool cancelled = idKey != null && _Reserved.TryGetValue(idKey, out bool reservedCancel) && reservedCancel;
+                    if (idKey != null) _Reserved.Remove(idKey);
+                    JsonRpcResponse? response = answered[i];
+                    if (response != null && !cancelled) responses.Add(response);
+                }
+            }
+
+            return responses;
+        }
+
         internal async Task<JsonRpcResponse?> DispatchAsync(JsonRpcRequest request, CancellationToken token)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
             string? idKey = IdKey(request.Id);
-            if (idKey != null) _Finished.TryRemove(idKey, out DateTime _);
             try
             {
                 JsonRpcResponse? response = await DispatchCoreAsync(request, idKey, token).ConfigureAwait(false);
@@ -258,24 +256,6 @@ namespace Voltaic.Core
             lock (_RequestLock)
             {
                 _Reserved.Remove(idKey);
-            }
-
-            if (_Running.ContainsKey(idKey)) return;
-            _EarlyCancels.TryRemove(idKey, out DateTime _);
-            DateTime now = DateTime.UtcNow;
-            _Finished[idKey] = now;
-            if (_Finished.Count < _MaxFinished) return;
-            foreach (KeyValuePair<string, DateTime> entry in _Finished)
-            {
-                if (now - entry.Value > _EntryLifetime) _Finished.TryRemove(entry.Key, out DateTime _);
-            }
-
-            if (_Finished.Count >= _MaxFinished * 2)
-            {
-                foreach (KeyValuePair<string, DateTime> oldest in _Finished.OrderBy(entry => entry.Value).Take(_Finished.Count - _MaxFinished).ToList())
-                {
-                    _Finished.TryRemove(oldest.Key, out DateTime _);
-                }
             }
         }
 
@@ -310,7 +290,6 @@ namespace Voltaic.Core
                     _Running[idKey] = running;
                     cancelled = _Reserved.TryGetValue(idKey, out bool reservedCancel) && reservedCancel;
                     _Reserved.Remove(idKey);
-                    if (_EarlyCancels.TryRemove(idKey, out DateTime _)) cancelled = true;
                 }
 
                 if (cancelled) running.Cancel();

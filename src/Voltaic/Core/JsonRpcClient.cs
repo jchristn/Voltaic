@@ -54,6 +54,21 @@ namespace Voltaic.Core
         }
 
         /// <summary>
+        /// Gets or sets the maximum size in bytes of one message received from the server. A larger message closes the
+        /// connection, and calls waiting for a response fail. Default is 16 MiB (16777216 bytes). Minimum is 4096 bytes.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        public int MaxMessageSize
+        {
+            get => _MaxMessageSize;
+            set
+            {
+                if (value < 4096) throw new ArgumentOutOfRangeException(nameof(value), "Maximum message size must be at least 4096 bytes");
+                _MaxMessageSize = value;
+            }
+        }
+
+        /// <summary>
         /// Occurs when a log message is generated.
         /// </summary>
         public event EventHandler<string>? Log;
@@ -93,6 +108,7 @@ namespace Voltaic.Core
         private int _ConnectionGeneration;
         private bool _IsDisposed = false;
         private string _DefaultContentType = "application/json; charset=utf-8";
+        private int _MaxMessageSize = 16 * 1024 * 1024;
         private string? _Endpoint;
         private DateTime _ConnectedUtc;
         private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher();
@@ -382,7 +398,7 @@ namespace Voltaic.Core
                 {
                     // Read a complete message using LSP-style framing
                     (string? message, byte[] newBuffer, int newOffset, int newCount) = await MessageFraming.ReadMessageAsync(
-                        _Stream, buffer, bufferOffset, bufferCount, token);
+                        _Stream, buffer, bufferOffset, bufferCount, token, _MaxMessageSize).ConfigureAwait(false);
 
                     // Update buffer reference in case it was resized
                     buffer = newBuffer;
@@ -444,12 +460,20 @@ namespace Voltaic.Core
             {
                 using (StreamReader reader = new StreamReader(stream, new UTF8Encoding(false), false, 8192, leaveOpen: true))
                 {
+                    BoundedLineReader lines = new BoundedLineReader(reader, () => _MaxMessageSize);
                     while (!token.IsCancellationRequested)
                     {
-                        string? line = await reader.ReadLineAsync(token).ConfigureAwait(false);
+                        string? line = await lines.ReadLineAsync(token).ConfigureAwait(false);
                         if (line == null)
                         {
                             LogMessage("Server disconnected");
+                            break;
+                        }
+
+                        if (lines.LastLineTooLarge)
+                        {
+                            LogMessage($"Closing: a message from the server exceeded MaxMessageSize ({_MaxMessageSize} bytes)");
+                            _TcpClient?.Close();
                             break;
                         }
 
@@ -522,19 +546,10 @@ namespace Voltaic.Core
                 return;
             }
 
-            List<JsonRpcRequest> requests = new List<JsonRpcRequest>();
+            ClientBatch batch;
             try
             {
-                using (JsonDocument document = JsonDocument.Parse(batchJson))
-                {
-                    foreach (JsonElement element in document.RootElement.EnumerateArray())
-                    {
-                        string raw = element.GetRawText();
-                        JsonRpcRequest? request = ClientRequestDispatcher.ParseRequest(raw);
-                        if (request != null) requests.Add(request);
-                        else ProcessResponse(raw);
-                    }
-                }
+                batch = ClientBatch.Parse(batchJson, _RequestDispatcher);
             }
             catch (JsonException ex)
             {
@@ -542,15 +557,17 @@ namespace Voltaic.Core
                 return;
             }
 
-            if (requests.Count == 0) return;
+            foreach (string raw in batch.Others) ProcessResponse(raw);
+            if (batch.Requests.Count == 0 && batch.Errors.Count == 0) return;
             _ = Task.Run(async () =>
             {
                 CancellationToken token = _TokenSource?.Token ?? CancellationToken.None;
                 try
                 {
-                    JsonRpcResponse?[] answered = await Task.WhenAll(requests.Select(request => _RequestDispatcher.DispatchAsync(request, token))).ConfigureAwait(false);
                     // Requests the server cancelled get no response; a batch with nothing left is not answered.
-                    List<JsonRpcResponse> responses = answered.Where(response => response != null).Select(response => response!).ToList();
+                    // Invalid elements (and an empty batch) are answered with Invalid Request errors, as JSON-RPC 2.0 requires.
+                    List<JsonRpcResponse> responses = new List<JsonRpcResponse>(batch.Errors);
+                    responses.AddRange(await _RequestDispatcher.DispatchBatchAsync(batch.Requests, token).ConfigureAwait(false));
                     if (responses.Count > 0) await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -663,7 +680,7 @@ namespace Voltaic.Core
                 }
 
                 // Try to parse as response first
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString);
+                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString, JsonLimits.Serializer);
                 if (response != null && response.Id != null)
                 {
                     // Extract the numeric id value when the response id is a JSON number.
@@ -686,7 +703,7 @@ namespace Voltaic.Core
                 else
                 {
                     // Try to parse as notification (request without ID)
-                    JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString);
+                    JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString, JsonLimits.Serializer);
                     if (notification != null && notification.Id == null)
                     {
                         // A cancellation of a request the server sent stops its handler; the notification is still raised.

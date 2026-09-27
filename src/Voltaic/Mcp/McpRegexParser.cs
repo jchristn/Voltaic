@@ -11,18 +11,29 @@ namespace Voltaic.Mcp
     /// non-Unicode syntax) allows are also accepted, because they are common and unambiguous: an identity escape of any
     /// character that is not an ASCII letter or digit (such as <c>\_</c>), a literal <c>{</c>, <c>}</c>, or <c>]</c>
     /// outside a quantifier or class, and a class escape at either end of a class range (<c>[\w-.]</c>, where the hyphen
-    /// is literal). Anything else that is not valid ECMA-262 throws <see cref="ArgumentException"/>.
+    /// is literal). The ES2025 additions are supported: duplicate named groups in different alternatives, and pattern
+    /// modifiers (<c>(?ims-ims:...)</c>), which the parser resolves into case-folded sets and flagged assertions and
+    /// backreferences. Anything else that is not valid ECMA-262 throws <see cref="ArgumentException"/>.
     /// </summary>
     internal sealed class McpRegexParser
     {
         private readonly string _Pattern;
         private readonly List<int> _CodePoints = new List<int>();
-        private readonly Dictionary<string, int> _GroupNames = new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<int>> _GroupNames = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        private readonly Dictionary<int, int[]> _GroupPaths = new Dictionary<int, int[]>();
+        private readonly List<int> _AlternativePath = new List<int>();
         private readonly List<McpRegexNode> _Backreferences = new List<McpRegexNode>();
         private const int _MaxNesting = 500;
+        private const int _ModifierIgnoreCase = 1;
+        private const int _ModifierMultiline = 2;
+        private const int _ModifierDotAll = 4;
         private int _Position;
         private int _CaptureCount;
         private int _Nesting;
+        private int _Disjunctions;
+        private bool _IgnoreCase;
+        private bool _Multiline;
+        private bool _DotAll;
 
         private McpRegexParser(string pattern)
         {
@@ -49,7 +60,7 @@ namespace Voltaic.Mcp
         /// <summary>
         /// Parses a pattern. Returns the root node and the capture count through <paramref name="captureCount"/>.
         /// </summary>
-        /// <exception cref="ArgumentException">Thrown when the pattern is not a valid ECMA-262 regular expression, or uses a construct this engine does not support (a Unicode property other than a general category, Any, ASCII, or Assigned).</exception>
+        /// <exception cref="ArgumentException">Thrown when the pattern is not a valid ECMA-262 regular expression, uses a construct this engine does not support (a Unicode property other than a general category, Any, ASCII, or Assigned), or nests groups more than 500 deep.</exception>
         internal static McpRegexNode Parse(string pattern, out int captureCount)
         {
             McpRegexParser parser = new McpRegexParser(pattern);
@@ -60,8 +71,9 @@ namespace Voltaic.Mcp
             {
                 if (reference.GroupName != null)
                 {
-                    if (!parser._GroupNames.TryGetValue(reference.GroupName, out int index)) throw parser.Error($"no group named '{reference.GroupName}'");
-                    reference.CaptureIndex = index;
+                    if (!parser._GroupNames.TryGetValue(reference.GroupName, out List<int>? indexes)) throw parser.Error($"no group named '{reference.GroupName}'");
+                    reference.CaptureIndex = indexes[0];
+                    if (indexes.Count > 1) reference.CaptureIndexes = indexes.ToArray();
                 }
                 else if (reference.CaptureIndex > parser._CaptureCount)
                 {
@@ -98,13 +110,14 @@ namespace Voltaic.Mcp
             return new ArgumentException($"Invalid regular expression '{_Pattern}': {reason}.");
         }
 
-        private McpRegexNode ParseDisjunction()
+        // The disjunction inside a group or lookaround; the pattern's own disjunction does not count toward the limit.
+        private McpRegexNode ParseNestedDisjunction()
         {
             // Groups nest through recursion; a bound keeps a hostile pattern from exhausting the stack.
             if (++_Nesting > _MaxNesting) throw Error($"groups are nested more than {_MaxNesting} deep");
             try
             {
-                return ParseDisjunctionCore();
+                return ParseDisjunction();
             }
             finally
             {
@@ -112,15 +125,31 @@ namespace Voltaic.Mcp
             }
         }
 
-        private McpRegexNode ParseDisjunctionCore()
+        private McpRegexNode ParseDisjunction()
         {
-            McpRegexNode first = ParseAlternative();
-            if (Peek() != '|') return first;
+            // _AlternativePath holds, for every enclosing disjunction, its number and the alternative being parsed, so
+            // named groups can tell whether they might both participate.
+            _AlternativePath.Add(_Disjunctions++);
+            _AlternativePath.Add(0);
+            try
+            {
+                McpRegexNode first = ParseAlternative();
+                if (Peek() != '|') return first;
 
-            McpRegexNode alternation = new McpRegexNode(McpRegexNodeKind.Alternation);
-            alternation.Children.Add(first);
-            while (Accept('|')) alternation.Children.Add(ParseAlternative());
-            return alternation;
+                McpRegexNode alternation = new McpRegexNode(McpRegexNodeKind.Alternation);
+                alternation.Children.Add(first);
+                while (Accept('|'))
+                {
+                    _AlternativePath[_AlternativePath.Count - 1]++;
+                    alternation.Children.Add(ParseAlternative());
+                }
+
+                return alternation;
+            }
+            finally
+            {
+                _AlternativePath.RemoveRange(_AlternativePath.Count - 2, 2);
+            }
         }
 
         private McpRegexNode ParseAlternative()
@@ -139,12 +168,13 @@ namespace Voltaic.Mcp
             int start = Peek();
 
             // Assertions, which cannot be quantified with the u flag.
-            if (start == '^') { _Position++; return new McpRegexNode(McpRegexNodeKind.Start); }
-            if (start == '$') { _Position++; return new McpRegexNode(McpRegexNodeKind.End); }
+            if (start == '^') { _Position++; return new McpRegexNode(McpRegexNodeKind.Start) { Multiline = _Multiline }; }
+            if (start == '$') { _Position++; return new McpRegexNode(McpRegexNodeKind.End) { Multiline = _Multiline }; }
             if (start == '\\' && (Peek(1) == 'b' || Peek(1) == 'B'))
             {
                 _Position += 2;
-                return RejectQuantifier(new McpRegexNode(Peek(-1) == 'b' ? McpRegexNodeKind.WordBoundary : McpRegexNodeKind.NotWordBoundary));
+                McpRegexNodeKind kind = Peek(-1) == 'b' ? McpRegexNodeKind.WordBoundary : McpRegexNodeKind.NotWordBoundary;
+                return RejectQuantifier(new McpRegexNode(kind) { IgnoreCase = _IgnoreCase });
             }
 
             if (start == '(' && Peek(1) == '?' && (Peek(2) == '=' || Peek(2) == '!' || (Peek(2) == '<' && (Peek(3) == '=' || Peek(3) == '!'))))
@@ -153,7 +183,7 @@ namespace Voltaic.Mcp
                 bool behind = Accept('<');
                 bool negated = Next() == '!';
                 McpRegexNode look = new McpRegexNode(McpRegexNodeKind.Lookaround) { Behind = behind, Negated = negated };
-                look.Children.Add(ParseDisjunction());
+                look.Children.Add(ParseNestedDisjunction());
                 if (!Accept(')')) throw Error("unterminated group");
                 return RejectQuantifier(look);
             }
@@ -253,11 +283,16 @@ namespace Voltaic.Mcp
             switch (current)
             {
                 case '.':
-                    return Set(McpRegexCharSet.LineTerminators.Complement());
+                    // Line terminators have no case variants, so i never changes what . matches; s makes it match all.
+                    return Set(_DotAll ? McpRegexCharSet.All : McpRegexCharSet.LineTerminators.Complement());
                 case '(':
                     return ParseGroup();
                 case '[':
-                    return Set(ParseClass());
+                    // Under i a class matches every character that canonicalizes like a member; a negated class matches
+                    // the rest (ECMA-262 CharacterSetMatcher with invert).
+                    McpRegexCharSet members = ParseClass(out bool negated);
+                    if (_IgnoreCase) members = members.CaseClosure();
+                    return Set(negated ? members.Complement() : members);
                 case '\\':
                     return ParseAtomEscape();
                 case '*':
@@ -278,13 +313,16 @@ namespace Voltaic.Mcp
                         if (quantifier) throw Error("nothing to repeat");
                     }
 
-                    return Set(McpRegexCharSet.Single(current));
+                    return Set(Folded(McpRegexCharSet.Single(current)));
             }
         }
 
         private McpRegexNode ParseGroup()
         {
             McpRegexNode group = new McpRegexNode(McpRegexNodeKind.Group);
+            bool ignoreCase = _IgnoreCase;
+            bool multiline = _Multiline;
+            bool dotAll = _DotAll;
             if (Accept('?'))
             {
                 if (Accept(':'))
@@ -295,12 +333,12 @@ namespace Voltaic.Mcp
                 {
                     string name = ParseGroupName();
                     group.CaptureIndex = ++_CaptureCount;
-                    if (_GroupNames.ContainsKey(name)) throw Error($"duplicate group name '{name}'");
-                    _GroupNames[name] = group.CaptureIndex;
+                    AddGroupName(name, group.CaptureIndex);
                 }
                 else
                 {
-                    throw Error("invalid group");
+                    group.CaptureIndex = 0;
+                    ParseModifiers();
                 }
             }
             else
@@ -308,9 +346,92 @@ namespace Voltaic.Mcp
                 group.CaptureIndex = ++_CaptureCount;
             }
 
-            group.Children.Add(ParseDisjunction());
+            try
+            {
+                group.Children.Add(ParseNestedDisjunction());
+            }
+            finally
+            {
+                // Modifiers apply to the group's contents only.
+                _IgnoreCase = ignoreCase;
+                _Multiline = multiline;
+                _DotAll = dotAll;
+            }
+
             if (!Accept(')')) throw Error("unterminated group");
             return group;
+        }
+
+        // ES2025: a name may repeat only in groups that can never both participate, which is when some disjunction holds
+        // them in different alternatives.
+        private void AddGroupName(string name, int captureIndex)
+        {
+            int[] path = _AlternativePath.ToArray();
+            if (_GroupNames.TryGetValue(name, out List<int>? existing))
+            {
+                foreach (int other in existing)
+                {
+                    if (MightBothParticipate(_GroupPaths[other], path)) throw Error($"duplicate group name '{name}'");
+                }
+
+                existing.Add(captureIndex);
+            }
+            else
+            {
+                _GroupNames[name] = new List<int> { captureIndex };
+            }
+
+            _GroupPaths[captureIndex] = path;
+        }
+
+        // Paths list (disjunction number, alternative index) pairs from the outermost disjunction inward. Two groups are
+        // exclusive when a shared disjunction holds them in different alternatives; once the disjunction numbers differ
+        // the paths share nothing deeper.
+        private static bool MightBothParticipate(int[] first, int[] second)
+        {
+            int length = Math.Min(first.Length, second.Length);
+            for (int i = 0; i + 1 < length; i += 2)
+            {
+                if (first[i] != second[i]) return true;
+                if (first[i + 1] != second[i + 1]) return false;
+            }
+
+            return true;
+        }
+
+        // Pattern modifiers (ES2025): the flags after "(?" up to ':', as (?ims:...) or (?ims-ims:...). Each flag may
+        // appear once and not on both sides, and a group with '-' needs at least one flag.
+        private void ParseModifiers()
+        {
+            int add = ReadModifierFlags();
+            int remove = 0;
+            bool dash = Accept('-');
+            if (dash) remove = ReadModifierFlags();
+            if (!Accept(':')) throw Error("invalid group");
+            if (dash && add == 0 && remove == 0) throw Error("a modifier group needs at least one flag");
+            if ((add & remove) != 0) throw Error("a flag cannot be both added and removed");
+
+            if ((add & _ModifierIgnoreCase) != 0) _IgnoreCase = true;
+            if ((add & _ModifierMultiline) != 0) _Multiline = true;
+            if ((add & _ModifierDotAll) != 0) _DotAll = true;
+            if ((remove & _ModifierIgnoreCase) != 0) _IgnoreCase = false;
+            if ((remove & _ModifierMultiline) != 0) _Multiline = false;
+            if ((remove & _ModifierDotAll) != 0) _DotAll = false;
+        }
+
+        private int ReadModifierFlags()
+        {
+            int flags = 0;
+            while (!AtEnd && Peek() != ':' && Peek() != '-')
+            {
+                int flag = Peek() == 'i' ? _ModifierIgnoreCase : Peek() == 'm' ? _ModifierMultiline : Peek() == 's' ? _ModifierDotAll : 0;
+                if (flag == 0) throw Error("invalid group");
+                if ((flags & flag) != 0) throw Error("repeated flag in a modifier group");
+                flags |= flag;
+                _Position++;
+            }
+
+            return flags;
         }
 
         // Reads a group name up to and including '>' (ECMA-262 RegExpIdentifierName): an ID_Start character, '$', or '_',
@@ -347,7 +468,7 @@ namespace Voltaic.Mcp
                 int index = 0;
                 TryReadNumber(ref index, out int number);
                 _Position += index;
-                McpRegexNode reference = new McpRegexNode(McpRegexNodeKind.Backreference) { CaptureIndex = number };
+                McpRegexNode reference = new McpRegexNode(McpRegexNodeKind.Backreference) { CaptureIndex = number, IgnoreCase = _IgnoreCase };
                 _Backreferences.Add(reference);
                 return reference;
             }
@@ -357,14 +478,14 @@ namespace Voltaic.Mcp
                 _Position++;
                 if (!Accept('<')) throw Error("invalid named reference");
                 string name = ParseGroupName();
-                McpRegexNode reference = new McpRegexNode(McpRegexNodeKind.Backreference) { GroupName = name };
+                McpRegexNode reference = new McpRegexNode(McpRegexNodeKind.Backreference) { GroupName = name, IgnoreCase = _IgnoreCase };
                 _Backreferences.Add(reference);
                 return reference;
             }
 
             McpRegexCharSet? classEscape = TryParseClassEscape();
-            if (classEscape != null) return Set(classEscape);
-            return Set(McpRegexCharSet.Single(ParseCharacterEscape(false)));
+            if (classEscape != null) return Set(Folded(classEscape));
+            return Set(Folded(McpRegexCharSet.Single(ParseCharacterEscape(false))));
         }
 
         // \d \D \s \S \w \W \p{...} \P{...}, or null (nothing consumed).
@@ -377,8 +498,8 @@ namespace Voltaic.Mcp
                 case 'D': _Position++; return McpRegexCharSet.Digits.Complement();
                 case 's': _Position++; return McpRegexCharSet.Whitespace;
                 case 'S': _Position++; return McpRegexCharSet.Whitespace.Complement();
-                case 'w': _Position++; return McpRegexCharSet.WordCharacters;
-                case 'W': _Position++; return McpRegexCharSet.WordCharacters.Complement();
+                case 'w': _Position++; return WordCharacters();
+                case 'W': _Position++; return WordCharacters().Complement();
                 case 'p':
                 case 'P':
                     _Position++;
@@ -579,10 +700,22 @@ namespace Voltaic.Mcp
             return -1;
         }
 
-        // A character class (the '[' already consumed).
-        private McpRegexCharSet ParseClass()
+        // ECMA-262 WordCharacters, which under i with the u flag also holds U+017F and U+212A.
+        private McpRegexCharSet WordCharacters()
         {
-            bool negated = Accept('^');
+            return _IgnoreCase ? McpRegexCharSet.WordCharactersIgnoreCase : McpRegexCharSet.WordCharacters;
+        }
+
+        // A set as an atom matches under i: closed over case folding.
+        private McpRegexCharSet Folded(McpRegexCharSet set)
+        {
+            return _IgnoreCase ? set.CaseClosure() : set;
+        }
+
+        // A character class (the '[' already consumed): its members, before case folding and negation.
+        private McpRegexCharSet ParseClass(out bool negated)
+        {
+            negated = Accept('^');
             McpRegexCharSet members = McpRegexCharSet.Empty;
             while (true)
             {
@@ -609,7 +742,7 @@ namespace Voltaic.Mcp
                 members = members.Union(first.ToSet());
             }
 
-            return negated ? members.Complement() : members;
+            return members;
         }
 
         private McpRegexClassAtom ParseClassAtom()

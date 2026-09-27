@@ -32,16 +32,18 @@ namespace Voltaic.Core
         /// <param name="bufferOffset">Current offset in the buffer containing unprocessed data.</param>
         /// <param name="bufferCount">Number of unprocessed bytes in the buffer.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="maxMessageSize">The largest body accepted, in bytes; a larger Content-Length throws <see cref="InvalidDataException"/> before the body is read.</param>
         /// <returns>A tuple containing the message string, updated buffer (may be resized), and buffer state (offset, count).</returns>
         public static async Task<(string? message, byte[] buffer, int newOffset, int newCount)> ReadMessageAsync(
             Stream stream,
             byte[] buffer,
             int bufferOffset,
             int bufferCount,
-            CancellationToken token)
+            CancellationToken token,
+            int maxMessageSize = Int32.MaxValue)
         {
             // Try to find a complete message in the current buffer first
-            (bool success, string? message, int newOffset, int newCount) result = TryExtractMessage(buffer, bufferOffset, bufferCount);
+            (bool success, string? message, int newOffset, int newCount) result = TryExtractMessage(buffer, bufferOffset, bufferCount, maxMessageSize);
             if (result.success)
             {
                 return (result.message, buffer, result.newOffset, result.newCount);
@@ -75,7 +77,7 @@ namespace Voltaic.Core
             bufferCount += bytesRead;
 
             // Try to extract message again
-            result = TryExtractMessage(buffer, 0, bufferCount);
+            result = TryExtractMessage(buffer, 0, bufferCount, maxMessageSize);
             if (result.success)
             {
                 return (result.message, buffer, result.newOffset, result.newCount);
@@ -91,7 +93,8 @@ namespace Voltaic.Core
         private static (bool success, string? message, int newOffset, int newCount) TryExtractMessage(
             byte[] buffer,
             int offset,
-            int count)
+            int count,
+            int maxMessageSize)
         {
             if (count < 4) // Minimum: "C\r\n\r\n" is not realistic, but at least need something
             {
@@ -123,6 +126,10 @@ namespace Voltaic.Core
 
             string header = Encoding.ASCII.GetString(buffer, offset, headerLength);
             int contentLength = ParseContentLength(header);
+            if (contentLength > maxMessageSize)
+            {
+                throw new InvalidDataException($"Message body of {contentLength} bytes exceeds the maximum message size of {maxMessageSize} bytes");
+            }
 
             // Check if we have the complete body
             int bodyStart = headerEnd + 4; // Skip past "\r\n\r\n"

@@ -3858,6 +3858,60 @@
             <returns>A failed authentication result with status 403.</returns>
             <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="scope"/> is null or whitespace.</exception>
         </member>
+        <member name="T:Voltaic.Core.BoundedLineReader">
+            <summary>
+            Reads newline-delimited lines from a <see cref="T:System.IO.TextReader"/> with a bound on the UTF-8 size of each line, so a
+            peer that never sends a newline cannot grow memory without limit. A line over the bound is skipped up to its
+            newline and reported through <see cref="P:Voltaic.Core.BoundedLineReader.LastLineTooLarge"/>. Not thread-safe; one reader per stream.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.BoundedLineReader.#ctor(System.IO.TextReader,System.Func{System.Int64},System.Boolean)">
+            <summary>
+            Creates a reader.
+            </summary>
+            <param name="reader">The source.</param>
+            <param name="maxBytes">Returns the current limit in UTF-8 bytes per line; read for every line, so a changed setting applies to the next one.</param>
+            <param name="carriageReturnEndsLine">True to end lines at CR, LF, or CRLF (the event stream rules); false to end them at LF only, dropping a CR before it (JSON lines).</param>
+        </member>
+        <member name="P:Voltaic.Core.BoundedLineReader.LastLineTooLarge">
+            <summary>
+            Gets whether the last line returned was over the limit: it was skipped and returned as an empty string.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.BoundedLineReader.ReadLineAsync(System.Threading.CancellationToken)">
+            <summary>
+            Reads the next line without its line terminator, or returns null at the end of the stream. A line over the
+            limit is returned as an empty string with <see cref="P:Voltaic.Core.BoundedLineReader.LastLineTooLarge"/> set.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.ClientBatch">
+            <summary>
+            A JSON-RPC batch a client received from a server, sorted into its requests (reserved with the dispatcher in
+            message order), the responses and notifications to process one by one, and the error responses JSON-RPC 2.0
+            requires for an empty batch (one Invalid Request) and for each element that is not a valid message.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.ClientBatch.Requests">
+            <summary>
+            Gets the requests to answer.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.ClientBatch.Others">
+            <summary>
+            Gets the raw responses and notifications, to process individually.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.ClientBatch.Errors">
+            <summary>
+            Gets the Invalid Request errors to include in the batch response.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.ClientBatch.Parse(System.String,Voltaic.Core.ClientRequestDispatcher)">
+            <summary>
+            Sorts a batch.
+            </summary>
+            <exception cref="T:System.Text.Json.JsonException">Thrown when the text is not JSON.</exception>
+        </member>
         <member name="T:Voltaic.Core.ClientConnectedEventArgs">
             <summary>
             Provides data for client connection events.
@@ -4209,7 +4263,7 @@
             (MCP 2025-06-18 and later), or null when the batch is to be processed.
             </summary>
         </member>
-        <member name="M:Voltaic.Core.ClientRequestDispatcher.DispatchAsync(Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Core.ClientRequestDispatcher.DispatchBatchAsync(System.Collections.Generic.List{Voltaic.Core.JsonRpcRequest},System.Threading.CancellationToken)">
             <summary>
             Runs the handler for a request and returns the response to send back. Unknown methods get
             <c>-32601</c>; a handler exception that implements <see cref="T:Voltaic.Core.IJsonRpcErrorProvider"/> supplies its own
@@ -4278,6 +4332,28 @@
             </summary>
             <returns>JSON-RPC error.</returns>
         </member>
+        <member name="T:Voltaic.Core.JsonLimits">
+            <summary>
+            JSON reader settings for received messages: nesting up to 256 levels, the depth JSON Schema validation allows,
+            instead of the .NET default of 64, so valid arguments nested deeper than 64 levels are not mistaken for parse
+            errors. Thread-safe.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.JsonLimits.MaxDepth">
+            <summary>
+            The deepest nesting a received message may have.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.JsonLimits.Document">
+            <summary>
+            Options for <see cref="M:System.Text.Json.JsonDocument.Parse(System.String,System.Text.Json.JsonDocumentOptions)"/>.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.JsonLimits.Serializer">
+            <summary>
+            Options for <see cref="T:System.Text.Json.JsonSerializer"/> reads and writes of message content.
+            </summary>
+        </member>
         <member name="T:Voltaic.Core.JsonRpcClient">
             <summary>
             Provides a TCP-based JSON-RPC 2.0 client implementation for making remote procedure calls.
@@ -4307,6 +4383,13 @@
             Gets or sets the default Content-Type header value used when sending messages.
             This will default to application/json; charset=utf-8 if the supplied value is null.
             </summary>
+        </member>
+        <member name="P:Voltaic.Core.JsonRpcClient.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum size in bytes of one message received from the server. A larger message closes the
+            connection, and calls waiting for a response fail. Default is 16 MiB (16777216 bytes). Minimum is 4096 bytes.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
         </member>
         <member name="E:Voltaic.Core.JsonRpcClient.Log">
             <summary>
@@ -4680,6 +4763,15 @@
             Cancellation token source.
             </summary>
         </member>
+        <member name="P:Voltaic.Core.JsonRpcServer.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum size in bytes of one received message. A newline-delimited message over the limit is
+            skipped and answered with an Invalid Request error (<c>-32600</c>, <c>id</c> null); a Content-Length framed
+            message over the limit closes the connection, since its body is not read. Default is 16 MiB (16777216 bytes).
+            Minimum is 4096 bytes. Applies to messages read after the change.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        </member>
         <member name="P:Voltaic.Core.JsonRpcServer.MaxQueueSize">
             <summary>
             Gets or sets the maximum number of notifications that can be queued per client connection.
@@ -4871,7 +4963,7 @@
             cannot drive a TCP server with a cross-protocol <c>fetch()</c>.
             </summary>
         </member>
-        <member name="M:Voltaic.Core.MessageFraming.ReadMessageAsync(System.IO.Stream,System.Byte[],System.Int32,System.Int32,System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Core.MessageFraming.ReadMessageAsync(System.IO.Stream,System.Byte[],System.Int32,System.Int32,System.Threading.CancellationToken,System.Int32)">
             <summary>
             Reads a complete LSP-framed message from a stream.
             Handles partial reads, buffering, and multiple messages in the buffer.
@@ -4881,9 +4973,10 @@
             <param name="bufferOffset">Current offset in the buffer containing unprocessed data.</param>
             <param name="bufferCount">Number of unprocessed bytes in the buffer.</param>
             <param name="token">Cancellation token.</param>
+            <param name="maxMessageSize">The largest body accepted, in bytes; a larger Content-Length throws <see cref="T:System.IO.InvalidDataException"/> before the body is read.</param>
             <returns>A tuple containing the message string, updated buffer (may be resized), and buffer state (offset, count).</returns>
         </member>
-        <member name="M:Voltaic.Core.MessageFraming.TryExtractMessage(System.Byte[],System.Int32,System.Int32)">
+        <member name="M:Voltaic.Core.MessageFraming.TryExtractMessage(System.Byte[],System.Int32,System.Int32,System.Int32)">
             <summary>
             Attempts to extract a complete LSP-framed message from a buffer.
             </summary>
@@ -4917,6 +5010,21 @@
         <member name="M:Voltaic.Core.MessageFraming.CreateBuffer">
             <summary>
             Creates a buffer for message reading operations.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.MessageTooLargeException">
+            <summary>
+            Thrown internally when a received message or request body exceeds the configured maximum message size.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.MessageTooLargeException.#ctor(System.Int64)">
+            <summary>
+            Creates the exception for a limit.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.MessageTooLargeException.Limit">
+            <summary>
+            Gets the limit that was exceeded, in bytes.
             </summary>
         </member>
         <member name="T:Voltaic.Core.OriginPolicy">
@@ -5396,7 +5504,8 @@
             Parses a Server-Sent Events stream following the WHATWG event stream interpretation rules: <c>data</c> lines
             are joined with line feeds, an optional single space after the colon is removed, comment lines (starting
             with a colon) are ignored, <c>id</c> updates the last event ID even for events without data (as an MCP
-            priming event does), and <c>retry</c> records the reconnection time. Not thread-safe.
+            priming event does), and <c>retry</c> records the reconnection time. Lines end at CR, LF, or CRLF. A line or an
+            event's data larger than the size limit throws <see cref="T:Voltaic.Core.MessageTooLargeException"/>. Not thread-safe.
             </summary>
         </member>
         <member name="P:Voltaic.Core.SseEventReader.LastEventId">
@@ -5716,6 +5825,14 @@
             every update. Maximum is 60000.
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpClient.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum size in bytes of one message read from the server's stdout. A larger message ends the
+            connection: the server process is shut down and calls waiting for a response fail. Default is 16 MiB
+            (16777216 bytes). Minimum is 4096 bytes.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpClient.PingIntervalMs">
             <summary>
@@ -6354,20 +6471,44 @@
             semantics of the <c>u</c> (Unicode) flag that JSON Schema recommends: matching works on code points, <c>.</c>
             excludes line terminators, <c>^</c> and <c>$</c> are the input's ends, <c>\d</c> and <c>\w</c> are ASCII,
             <c>\s</c> is the ECMA-262 white space set, <c>\p{...}</c> takes general categories (short or long names) and
-            <c>Any</c>, <c>ASCII</c>, and <c>Assigned</c>, and captures are reset on every repetition. The pattern is
-            searched for anywhere in the input, as <c>pattern</c> requires. Immutable and thread-safe.
+            <c>Any</c>, <c>ASCII</c>, and <c>Assigned</c>, and captures are reset on every repetition. The ES2025 syntax is
+            supported: duplicate named groups in different alternatives (<c>\k&lt;name&gt;</c> refers to the one that
+            participated) and pattern modifiers <c>(?ims-ims:...)</c>, where <c>i</c> compares by Unicode simple case
+            folding (and adds U+017F and U+212A to <c>\w</c>, <c>\b</c>, and <c>\B</c>), <c>m</c> lets <c>^</c> and
+            <c>$</c> match at line terminators, and <c>s</c> lets <c>.</c> match every code point. The pattern is searched
+            for anywhere in the input, as <c>pattern</c> requires. Immutable and thread-safe.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpEcmaRegex.MaxSteps">
             <summary>
-            Gets the base step budget of one match. The budget of a match is this plus
-            <see cref="P:Voltaic.Mcp.McpEcmaRegex.StepsPerInputCharacter"/> per input character, so linear work on long inputs always fits and only
-            catastrophic backtracking runs out. Default is 10,000,000.
+            Gets or sets the base step budget of one match. The budget of a match on an input of n UTF-16 code units is
+            this, plus <see cref="P:Voltaic.Mcp.McpEcmaRegex.StepsPerInputCharacter"/> times n, plus the smaller of
+            <see cref="P:Voltaic.Mcp.McpEcmaRegex.QuadraticStepsPerInputCharacter"/> times n squared and <see cref="P:Voltaic.Mcp.McpEcmaRegex.MaxQuadraticSteps"/>. Linear work
+            always fits, quadratic work (such as <c>[a-z]+\d</c> searched through a long run of letters) fits for inputs
+            up to about 7,000 characters, and exponential backtracking runs out. A step is one instruction, one code
+            point scanned by a character-set loop or compared by a backreference, or one capture slot a lookaround copies
+            or a repetition resets, so the budget bounds the running time (measured on a desktop CPU, an exhausted match
+            took up to about 1.7 seconds at 7,000 characters and 3.5 seconds at 1 MB). An exhausted match fails
+            validation. Default is 10,000,000.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpEcmaRegex.StepsPerInputCharacter">
             <summary>
-            Gets the step budget added per input character. Default is 200.
+            Gets or sets the step budget added per input character (UTF-16 code unit). Default is 200.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpEcmaRegex.QuadraticStepsPerInputCharacter">
+            <summary>
+            Gets or sets the step budget added per squared input character count, which lets a search do quadratic work
+            on moderate inputs; the addition is capped at <see cref="P:Voltaic.Mcp.McpEcmaRegex.MaxQuadraticSteps"/>. Default is 4, about twice what a
+            search such as <c>(\w)\w*\1\d</c> spends on each pair of input positions.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpEcmaRegex.MaxQuadraticSteps">
+            <summary>
+            Gets or sets the cap on the quadratic part of the step budget, reached at about 7,071 input characters with
+            the default <see cref="P:Voltaic.Mcp.McpEcmaRegex.QuadraticStepsPerInputCharacter"/>. With the other defaults, a match on a 1 MB input
+            may take at most 410,000,000 steps. Default is 200,000,000.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpEcmaRegex.Compile(System.String)">
@@ -6380,6 +6521,18 @@
             <summary>
             Returns true when the pattern matches somewhere in <paramref name="input"/>, false when it does not, and null
             when the step budget ran out before an answer.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpEcmaRegex.IsMatch(System.String,System.Int64,System.Int64@)">
+            <summary>
+            Returns true when the pattern matches somewhere in <paramref name="input"/>, false when it does not, and null
+            when <paramref name="maxSteps"/> ran out first; <paramref name="stepsUsed"/> reports the steps spent.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpEcmaRegex.Budget(System.Int32)">
+            <summary>
+            Returns the step budget of a match on an input of <paramref name="length"/> UTF-16 code units (see
+            <see cref="P:Voltaic.Mcp.McpEcmaRegex.MaxSteps"/>).
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpEmptyResult">
@@ -6696,6 +6849,14 @@
             stream is not resumed.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpHttpClient.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum size in bytes of one message received from the server: a JSON response body, or one
+            SSE line or event. A larger message fails the call (or ends the stream) with an <see cref="T:System.IO.IOException"/>.
+            Default is 16 MiB (16777216 bytes). Minimum is 4096 bytes.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpHttpClient.SseReconnectDelayMs">
             <summary>
             Gets or sets the delay in milliseconds before reopening an SSE stream when the server has not sent a
@@ -6889,6 +7050,22 @@
             <exception cref="T:System.InvalidOperationException">Thrown when the client has not been initialized.</exception>
             <exception cref="T:System.Exception">Thrown when the HTTP response body cannot be parsed as JSON-RPC.</exception>
         </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.ListenAsync(Voltaic.Mcp.McpSubscriptionFilter,System.Threading.CancellationToken)">
+            <summary>
+            Opens a <c>subscriptions/listen</c> stream (2026-07-28 subscribe and notify; stateless mode only) and keeps it
+            open until <paramref name="token"/> is cancelled or the server ends it. The server's
+            <c>notifications/subscriptions/acknowledged</c> (the types it agreed to send) and every notification on the
+            stream are raised through <see cref="E:Voltaic.Mcp.McpHttpClient.NotificationReceived"/>, each carrying the subscription ID in
+            <c>params._meta["io.modelcontextprotocol/subscriptionId"]</c>. Cancelling the token closes the stream, which
+            ends the subscription.
+            </summary>
+            <param name="filter">The notification types to receive. Must not be null.</param>
+            <param name="token">Cancels the subscription.</param>
+            <returns>The server's response when it ended the subscription gracefully (for example when it stops).</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="filter"/> is null.</exception>
+            <exception cref="T:System.InvalidOperationException">Thrown when the client is not in stateless mode (see <see cref="M:Voltaic.Mcp.McpHttpClient.ConnectStatelessAsync(System.String,System.String,System.String,System.Boolean,System.Threading.CancellationToken)"/>).</exception>
+            <exception cref="T:System.OperationCanceledException">Thrown when <paramref name="token"/> ends the subscription.</exception>
+        </member>
         <member name="M:Voltaic.Mcp.McpHttpClient.ConnectStatelessAsync(System.String,System.String,System.String,System.Boolean,System.Threading.CancellationToken)">
             <summary>
             Connects to a server using the stateless Streamable HTTP transport (2026-07-28). No session
@@ -7055,6 +7232,38 @@
             Provides an HTTP-based MCP (Model Context Protocol) server implementation.
             Supports JSON-RPC 2.0 over HTTP POST with Server-Sent Events (SSE) for server-to-client notifications.
             </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum size in bytes of one request body. A larger body gets HTTP 413 with an Invalid Request
+            error (<c>-32600</c>, no <c>id</c>); a body that declares a larger <c>Content-Length</c> is rejected before it is
+            read. Default is 16 MiB (16777216 bytes). Minimum is 4096 bytes.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.ClientIdentifier">
+            <summary>
+            Gets or sets a function that names the client of a request, for the rate limits and
+            <see cref="P:Voltaic.Mcp.McpHttpServer.MaxSessionsPerClient"/>. By default a client is its authenticated principal and remote address; behind
+            a reverse proxy every request has the proxy's address, so set this to read the client's address from a header
+            the proxy sets (and that clients cannot forge). Null or an empty result uses the remote address. Default is null.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.MaxSessions">
+            <summary>
+            Gets or sets the maximum number of sessions the server holds. An <c>initialize</c> that would open one more
+            gets HTTP 503 with an internal error (<c>-32603</c>); existing sessions are never evicted for it. Default is
+            10000. Minimum is 1.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 1.</exception>
+        </member>
+        <member name="P:Voltaic.Mcp.McpHttpServer.MaxSessionsPerClient">
+            <summary>
+            Gets or sets the maximum number of sessions one client (its authenticated principal and remote address) may
+            hold. When a client opens one more, its least recently active session is ended, so the client keeps working
+            but cannot accumulate sessions. Default is 100. Minimum is 1.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 1.</exception>
         </member>
         <member name="P:Voltaic.Mcp.McpHttpServer.SessionTimeoutSeconds">
             <summary>
@@ -8022,9 +8231,22 @@
         </member>
         <member name="T:Voltaic.Mcp.McpJsonNumber">
             <summary>
-            An exact JSON number: sign, digits, and a decimal exponent, parsed from the number's text so no precision is
-            lost (JSON numbers have arbitrary precision and range). Used by JSON Schema's numeric keywords. Immutable and
-            thread-safe.
+            An exact JSON number: sign, significant digits, and a decimal exponent, parsed from the number's text so no
+            precision is lost. Used by JSON Schema's numeric keywords. The significant digits are kept as text, so parsing,
+            comparing, and the canonical form take time linear in the number's length, and any number of digits is exact.
+            The written exponent may have at most <see cref="F:Voltaic.Mcp.McpJsonNumber.MaxExponentDigits"/> digits (a magnitude beyond 10 to the
+            power 10^1000 is not supported): <see cref="M:Voltaic.Mcp.McpJsonNumber.Parse(System.String)"/> returns null for a larger one, which validation rejects.
+            Immutable and thread-safe.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonNumber.MaxExponentDigits">
+            <summary>
+            The most digits a number's written exponent may have (after leading zeros). 1000.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpJsonNumber.MaxDivisorDigits">
+            <summary>
+            The most significant digits a <c>multipleOf</c> divisor may have. 1000.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpJsonNumber.Parse(System.String)">
@@ -8056,7 +8278,8 @@
         </member>
         <member name="P:Voltaic.Mcp.McpJsonNumber.Canonical">
             <summary>
-            Gets a canonical text for the value (equal numbers, such as 1, 1.0, and 10e-1, give the same text).
+            Gets a canonical text for the value (equal numbers, such as 1, 1.0, and 10e-1, give the same text). The
+            exponent is written in hexadecimal, which takes linear time for any size.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpJsonNumber.ToCount">
@@ -8176,7 +8399,7 @@
             <paramref name="send"/>, which must serialize writes.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAndSerializeAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task})">
+        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAndSerializeAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Boolean)">
             <summary>
             Handles one validated message and returns its serialized response, or null when there is nothing to send
             (a notification, a client response, or a request the client cancelled).
@@ -8188,8 +8411,9 @@
             <param name="notify">The channel for notifications related to this request, or null.</param>
             <param name="token">The transport's cancellation token.</param>
             <param name="rawSend">The stream transport's writer, used unchanged for a stateless request's notifications, or null.</param>
+            <param name="deferFinish">True for a batch element: the caller decides whether it is answered and finishes its ID when the batch response is assembled.</param>
         </member>
-        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task})">
+        <member name="M:Voltaic.Mcp.McpMessageProcessor.HandleAsync(Voltaic.Mcp.McpEnvelope,Voltaic.Mcp.McpSessionState,System.String,System.Boolean,System.Func{Voltaic.Core.JsonRpcRequest,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken,System.Func{System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Boolean)">
             <summary>
             Handles one validated message and returns the response and the era it was served under, or null when
             nothing is sent.
@@ -8200,6 +8424,19 @@
             Serializes a response for the protocol version that governs it: stateless-era results get
             <c>resultType</c>, cache fields, and <c>serverInfo</c>; handshake-era results are reduced to what the
             negotiated revision defines.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpMessageProcessor.OmitsUnreadableErrorId(System.String)">
+            <summary>
+            True when the revision's schema makes an error response's <c>id</c> optional (2025-11-25 and later), so an
+            error whose request ID cannot be read omits it; earlier revisions follow JSON-RPC 2.0, which requires
+            <c>"id": null</c>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpMessageProcessor.SerializeError(Voltaic.Core.JsonRpcResponse,System.String)">
+            <summary>
+            Serializes an error response for a revision: a null <c>id</c> is written as <c>"id": null</c> or omitted, as
+            <see cref="M:Voltaic.Mcp.McpMessageProcessor.OmitsUnreadableErrorId(System.String)"/> decides.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpMessageProcessor.SerializeNotification(Voltaic.Core.JsonRpcRequest,Voltaic.Mcp.McpSessionState)">
@@ -8542,6 +8779,12 @@
             The <c>_meta</c> key carrying server identity in discovery results (2026-07-28+).
             </summary>
         </member>
+        <member name="F:Voltaic.Mcp.McpProtocol.MetaSubscriptionIdKey">
+            <summary>
+            The <c>_meta</c> key carrying the subscription ID (the JSON-RPC ID of the <c>subscriptions/listen</c> request)
+            on every message of a subscription stream (2026-07-28+).
+            </summary>
+        </member>
         <member name="F:Voltaic.Mcp.McpProtocol.MetaLogLevelKey">
             <summary>
             The <c>_meta</c> key carrying the minimum log level for one request (2026-07-28+). Without it, a server sends
@@ -8684,7 +8927,9 @@
             </summary>
             <param name="code">JSON-RPC error code.</param>
             <param name="message">Error message.</param>
-            <param name="data">Optional error data.</param>
+            <param name="data">Optional error data. For <c>-32021</c> (missing required client capability) the data must
+            carry <c>requiredCapabilities</c>; when it is null, <c>{"requiredCapabilities":{}}</c> is used. Prefer
+            <see cref="M:Voltaic.Mcp.McpProtocolException.MissingRequiredClientCapability(System.String,System.Object)"/>.</param>
         </member>
         <member name="M:Voltaic.Mcp.McpProtocolException.InvalidParams(System.String,System.Object)">
             <summary>
@@ -8861,8 +9106,10 @@
         <member name="T:Voltaic.Mcp.McpRateLimits">
             <summary>
             The rate limits an MCP server applies per client (MCP: servers must rate-limit tool invocations, and should
-            rate-limit completions and log messages). A client is a session, or, for HTTP requests without a
-            session, the authenticated principal and remote address. Each limit allows that many operations per second, with
+            rate-limit completions and log messages). A client is identified by its authenticated principal and remote
+            address (every HTTP session and request, and every WebSocket connection, of that client shares the limits), by
+            its remote address on TCP, and by the process on stdio, so opening more sessions or connections never raises a
+            client's limit. Each limit allows that many operations per second, with
             a burst of the same size. A tool call over the limit gets a tool result with <c>isError: true</c> (so the model
             can back off), a completion request gets no suggestions, and a log message is not sent. Changes take effect
             immediately. Thread-safe.
@@ -8914,10 +9161,37 @@
         <member name="F:Voltaic.Mcp.McpRegexBacktrackKind.LazyStep">
             <summary>A lazy character-set loop takes one more code point.</summary>
         </member>
+        <member name="T:Voltaic.Mcp.McpRegexCaseFolding">
+            <summary>
+            The ECMA-262 case folding table of the <c>u</c> flag with <c>i</c> (Unicode simple case folding). Every code
+            point maps to the smallest member of its simple case folding class; two code points are equal under
+            Canonicalize exactly when they map to the same value.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Mcp.McpRegexCaseFolding.Runs">
+            <summary>
+            The mapping as runs of four integers: first code point, last code point, stride (1 or 2), and the delta
+            to add. A code point from first to last whose offset from first is a multiple of the stride maps to itself
+            plus the delta; every other code point maps to itself. Runs are sorted and do not overlap.
+            </summary>
+        </member>
         <member name="T:Voltaic.Mcp.McpRegexCharSet">
             <summary>
             An immutable set of Unicode code points (0 to U+10FFFF), stored as sorted, non-overlapping ranges. Used by the
             ECMA-262 regular expression engine for character classes, escapes, and Unicode properties. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpRegexCharSet.Canonicalize(System.Int32)">
+            <summary>
+            Returns the ECMA-262 Canonicalize value of a code point for the <c>u</c> and <c>i</c> flags (Unicode simple
+            case folding), expressed as the smallest member of its case folding class: two code points are equal
+            ignoring case exactly when their values are equal.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpRegexCharSet.CaseClosure">
+            <summary>
+            Returns this set closed under case folding: every code point whose Canonicalize value equals that of a
+            member. A character matches a set under the <c>i</c> flag exactly when it is in this closure.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpRegexCharSet.Category(System.String)">
@@ -8956,8 +9230,15 @@
             Runs a compiled ECMA-262 regular expression against one input. A backtracking virtual machine with an explicit
             stack, so the input length never limits the call stack; captures and repetition registers are restored through
             undo entries on the same stack. Matching works on code points (the <c>u</c> flag): a surrogate pair is one
-            character. A step budget bounds the work (catastrophic backtracking stops instead of running away). Not
+            character. A step budget bounds the work (catastrophic backtracking stops instead of running away): every
+            instruction is a step, and so is every code point a character-set loop scans or a backreference compares and
+            every capture slot a lookaround copies or a repetition resets, so the budget bounds the running time. Not
             thread-safe; create one per match.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpRegexMatcher.StepsUsed">
+            <summary>
+            Gets the steps the matcher has used.
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpRegexMatcher.Search(Voltaic.Mcp.McpRegexProgram,System.Boolean)">
@@ -9072,7 +9353,9 @@
             non-Unicode syntax) allows are also accepted, because they are common and unambiguous: an identity escape of any
             character that is not an ASCII letter or digit (such as <c>\_</c>), a literal <c>{</c>, <c>}</c>, or <c>]</c>
             outside a quantifier or class, and a class escape at either end of a class range (<c>[\w-.]</c>, where the hyphen
-            is literal). Anything else that is not valid ECMA-262 throws <see cref="T:System.ArgumentException"/>.
+            is literal). The ES2025 additions are supported: duplicate named groups in different alternatives, and pattern
+            modifiers (<c>(?ims-ims:...)</c>), which the parser resolves into case-folded sets and flagged assertions and
+            backreferences. Anything else that is not valid ECMA-262 throws <see cref="T:System.ArgumentException"/>.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpRegexParser.CaptureCount">
@@ -9084,7 +9367,7 @@
             <summary>
             Parses a pattern. Returns the root node and the capture count through <paramref name="captureCount"/>.
             </summary>
-            <exception cref="T:System.ArgumentException">Thrown when the pattern is not a valid ECMA-262 regular expression, or uses a construct this engine does not support (a Unicode property other than a general category, Any, ASCII, or Assigned).</exception>
+            <exception cref="T:System.ArgumentException">Thrown when the pattern is not a valid ECMA-262 regular expression, uses a construct this engine does not support (a Unicode property other than a general category, Any, ASCII, or Assigned), or nests groups more than 500 deep.</exception>
         </member>
         <member name="T:Voltaic.Mcp.McpRegexProgram">
             <summary>
@@ -9655,6 +9938,14 @@
             </summary>
             <exception cref="T:System.ArgumentOutOfRangeException">Thrown when set outside 0 to 60000.</exception>
         </member>
+        <member name="P:Voltaic.Mcp.McpServer.MaxMessageSize">
+            <summary>
+            Gets or sets the maximum size in bytes of one message read from stdin. A larger message is skipped and answered
+            with an Invalid Request error (<c>-32600</c>, <c>id</c> null). Default is 16 MiB (16777216 bytes). Minimum is
+            4096 bytes.
+            </summary>
+            <exception cref="T:System.ArgumentOutOfRangeException">Thrown when the value is below 4096.</exception>
+        </member>
         <member name="P:Voltaic.Mcp.McpServer.PingIntervalMs">
             <summary>
             Gets or sets how often the server pings each client that completed <c>initialize</c>, in milliseconds, to
@@ -10003,17 +10294,18 @@
         <member name="T:Voltaic.Mcp.McpServerNotifications">
             <summary>
             Sends server-initiated MCP notifications with the specification's targeting rules, shared by every transport:
-            list changes go to sessions that completed the handshake (stateless-era clients receive them only through
-            <c>subscriptions/listen</c>), resource updates only to sessions subscribed to the resource, log messages only
+            list changes go to sessions that completed the handshake and to the <c>subscriptions/listen</c> streams that asked
+            for them (stateless-era clients receive them only there), resource updates only to sessions and streams subscribed
+            to the resource, log messages only
             at or above each session's level, and progress only to the request that carries the progress token.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpServerNotifications.ListChangedAsync(System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpSessionState},System.String,System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Mcp.McpServerNotifications.ListChangedAsync(Voltaic.Mcp.McpSubscriptions,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpSessionState},System.String,System.Threading.CancellationToken)">
             <summary>
             Sends a list-changed notification to every initialized session.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpServerNotifications.ResourceUpdatedAsync(System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpSessionState},System.String,System.Threading.CancellationToken)">
+        <member name="M:Voltaic.Mcp.McpServerNotifications.ResourceUpdatedAsync(Voltaic.Mcp.McpSubscriptions,System.Collections.Generic.IEnumerable{Voltaic.Mcp.McpSessionState},System.String,System.Threading.CancellationToken)">
             <summary>
             Sends <c>notifications/resources/updated</c> to sessions subscribed to <paramref name="uri"/>.
             </summary>
@@ -10072,11 +10364,11 @@
             Registers a request. Returns null when a request with the same ID is already in flight (IDs must be unique).
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpSessionState.WasCancelledBeforeStart(System.String)">
+        <member name="M:Voltaic.Mcp.McpSessionState.ReserveRequest(System.String)">
             <summary>
-            Reserves a request ID when the request is read, before it starts on the thread pool, so a cancellation that
-            arrives in between applies to it. A reused ID (allowed once its earlier request was answered, and on
-            2026-07-28) is no longer treated as finished.
+            Reserves a request ID when the request is read, before it starts on the thread pool, so a cancellation read
+            after it applies to it, also when the ID was used before (allowed once its earlier request was answered, and
+            on 2026-07-28).
             </summary>
         </member>
         <member name="M:Voltaic.Mcp.McpSessionState.Cancel(System.String)">
@@ -10088,11 +10380,6 @@
         <member name="M:Voltaic.Mcp.McpSessionState.FindByProgressToken(System.String)">
             <summary>
             Returns the in-flight request that carries the progress token, or null.
-            </summary>
-        </member>
-        <member name="M:Voltaic.Mcp.McpSessionState.StartPinging(System.Int32,System.Int32,System.Int32,System.Action{System.String})">
-            <summary>
-            Cancels every in-flight request, for example when the connection closes.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpStatelessDispatcher">
@@ -10132,6 +10419,102 @@
         <member name="M:Voltaic.Mcp.McpStatelessResultStamper.Stamp(System.Text.Json.Nodes.JsonObject,System.String)">
             <summary>
             Stamps the result object of a stateless response for the method that produced it.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpSubscription">
+            <summary>
+            One active <c>subscriptions/listen</c> stream (2026-07-28): the notification types the server agreed to send, the
+            channel of the request that opened it, and its subscription ID (the request's JSON-RPC ID). Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSubscription.SubscriptionId">
+            <summary>
+            Gets the subscription ID: the JSON-RPC ID of the <c>subscriptions/listen</c> request.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscription.Wants(System.String,System.String)">
+            <summary>
+            Gets whether the subscription asked for this notification: a list change of the kind, or an update of a
+            resource it names.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscription.Filter">
+            <summary>
+            The <c>notifications</c> filter the server agreed to honor, for the acknowledgment.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscription.SendAsync(System.String,System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Sends a notification on the subscription's stream, tagged with its subscription ID.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpSubscriptionFilter">
+            <summary>
+            The notification types a <c>subscriptions/listen</c> stream asks for (2026-07-28). Omitted or false fields are
+            not subscribed. Not thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSubscriptionFilter.ToolsListChanged">
+            <summary>
+            Gets or sets whether to receive <c>notifications/tools/list_changed</c>. Default is false.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSubscriptionFilter.PromptsListChanged">
+            <summary>
+            Gets or sets whether to receive <c>notifications/prompts/list_changed</c>. Default is false.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSubscriptionFilter.ResourcesListChanged">
+            <summary>
+            Gets or sets whether to receive <c>notifications/resources/list_changed</c>. Default is false.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSubscriptionFilter.ResourceSubscriptions">
+            <summary>
+            Gets or sets the resource URIs to receive <c>notifications/resources/updated</c> for. Null or empty subscribes
+            to none. Default is null.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpSubscriptions">
+            <summary>
+            The server's <c>subscriptions/listen</c> streams (2026-07-28 subscribe and notify). A stream starts with
+            <c>notifications/subscriptions/acknowledged</c> carrying the notification types the server agreed to honor, then
+            delivers only those, each tagged with the subscription ID. It ends without a response when the client cancels it
+            or the transport closes, and with a completion result when the server stops (graceful closure). Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpSubscriptions.Count">
+            <summary>
+            Gets the number of open subscriptions.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscriptions.ListenAsync(Voltaic.Core.RpcParameters,System.Threading.CancellationToken)">
+            <summary>
+            Handles <c>subscriptions/listen</c>: acknowledges, then streams notifications until the request is cancelled
+            (no response) or the server closes the subscriptions (a completion result).
+            </summary>
+            <exception cref="T:Voltaic.Mcp.McpProtocolException">Thrown with <c>-32601</c> outside 2026-07-28, and <c>-32602</c> for an invalid filter.</exception>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscriptions.ListChangedAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Sends a list-changed notification to the subscriptions that asked for it.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscriptions.ResourceUpdatedAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Sends <c>notifications/resources/updated</c> to the subscriptions that name the resource.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscriptions.CloseAll">
+            <summary>
+            Ends every open subscription gracefully (each gets its completion result), for example when the server stops.
+            Later subscriptions work normally.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscriptions.CloseAllAndWait(System.TimeSpan)">
+            <summary>
+            Closes every subscription gracefully and waits up to <paramref name="timeout"/> for their completion results to
+            be handed to the transport, so a server that is stopping sends them before it closes its connections.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpTaskStatus">
@@ -11228,8 +11611,8 @@
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.MaxMessageSize">
             <summary>
-            Gets or sets the maximum message size in bytes that can be received.
-            Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
+            Gets or sets the maximum size in bytes of one received message, however it is fragmented; a larger message
+            closes the connection with status 1009 (message too big). Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsClient.IsConnected">
@@ -11484,8 +11867,8 @@
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsServer.MaxMessageSize">
             <summary>
-            Gets or sets the maximum message size in bytes that can be received.
-            Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
+            Gets or sets the maximum size in bytes of one received message, however it is fragmented; a larger message
+            closes the connection with status 1009 (message too big). Default is 1 MB (1048576 bytes). Minimum is 4096 bytes.
             </summary>
         </member>
         <member name="P:Voltaic.Mcp.McpWebsocketsServer.KeepAliveIntervalSeconds">
@@ -12051,7 +12434,8 @@
         <member name="T:Voltaic.Mcp.SseSessionStreams">
             <summary>
             The SSE streams of one Streamable HTTP session, so a client can resume a stream with <c>Last-Event-ID</c>. Only
-            the most recent streams are kept. Streams are looked up within the session only, so an event ID from another
+            the most recent streams are kept; when the limit is reached the oldest POST response stream goes first, so a
+            long-lived GET stream stays resumable. Streams are looked up within the session only, so an event ID from another
             session never replays anything. Thread-safe.
             </summary>
         </member>
