@@ -2,7 +2,7 @@
 
 Behavior changes that may need action when upgrading, newest first. Each table lists the change, who is affected, and what to do. [CHANGELOG.md](CHANGELOG.md) has the full release history, [COMPATIBILITY.md](COMPATIBILITY.md) the per-revision MCP conformance matrix, and [MIGRATE_V1_TO_V2.md](MIGRATE_V1_TO_V2.md) before-and-after code for v1.x to v2.0.0.
 
-v2.1.1 needs no action (see the README's [Specification conformance](README.md#specification-conformance) section).
+v2.1.1 and v2.2.1 need no action (see the README's [Specification conformance](README.md#specification-conformance) section).
 
 ## Upgrading to v2.2.0
 

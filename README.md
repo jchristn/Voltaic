@@ -10,7 +10,7 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v2.2.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Voltaic v2.2.1 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 An `initialize` handshake negotiates at most the newest handshake-era revision, `2025-11-25` (configurable with `MaximumHandshakeProtocolVersion`), because the stateless `2026-07-28` revision defines no `initialize` and no sessions. Clients reach `2026-07-28` through the stateless request path instead: `server/discover` followed by per-request `MCP-Protocol-Version`, `Mcp-Method`, and `_meta` signals. That is how current clients such as Claude Code 2.1.x connect, and Voltaic's stateless responses carry the `resultType`, `ttlMs`, and `cacheScope` fields the revision requires. Version selection is driven by the `McpProtocol` registry and `McpVersionResolver`, and it behaves identically with or without an `AuthenticationHandler`. See [Protocol version negotiation](#protocol-version-negotiation).
 

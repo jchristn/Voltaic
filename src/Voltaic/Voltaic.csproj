@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>2.2.0</Version>
+		<Version>2.2.1</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -21,7 +21,7 @@
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
-		<PackageReleaseNotes>v2.2.0: Built-in OpenTelemetry-compatible metrics and traces on the Voltaic Meter and ActivitySource (BCL only, no new dependencies), W3C trace propagation across every transport, and a stack-safe regex matcher for deeply nested lookarounds. See TELEMETRY.md and CHANGELOG.md.</PackageReleaseNotes>
+		<PackageReleaseNotes>v2.2.1: Dependency update (Google.Protobuf 3.36.2, Grpc.Tools 2.84.0, Watson 7.2.2); no API or behavior changes. See CHANGELOG.md.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -32,9 +32,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Google.Protobuf" Version="3.35.1" />
-		<PackageReference Include="Grpc.Tools" Version="2.83.0" PrivateAssets="All" />
-		<PackageReference Include="Watson" Version="7.1.0" />
+		<PackageReference Include="Google.Protobuf" Version="3.36.2" />
+		<PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="All" />
+		<PackageReference Include="Watson" Version="7.2.2" />
 	</ItemGroup>
 
 	<ItemGroup>

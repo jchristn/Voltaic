@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.2.1
+Dependency update. No public API or behavior changes.
+
+### Dependencies
+- `Google.Protobuf` 3.35.1 -> 3.36.2
+- `Grpc.Tools` 2.83.0 -> 2.84.0 (build-time only)
+- `Watson` 7.1.0 -> 7.2.2
+
+### Tests
+- `Touchstone.Core`, `Touchstone.Cli`, `Touchstone.XunitAdapter`, `Touchstone.NunitAdapter` 0.1.12 -> 0.2.0
+- `Microsoft.NET.Test.Sdk` 18.9.0 -> 18.10.1, `NUnit3TestAdapter` 6.2.0 -> 6.3.0
+- The existing 853 cases (including the gRPC, A2A, and telemetry suites that exercise Protobuf and Watson) pass on net8.0 and net10.0 through the console, xUnit, and NUnit runners.
+
 ## v2.2.0
 Adds built-in observability: metrics and traces for every server, client, and protocol, with no new package dependencies. See [TELEMETRY.md](TELEMETRY.md).
 
