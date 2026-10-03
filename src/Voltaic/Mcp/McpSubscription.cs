@@ -15,6 +15,7 @@ namespace Voltaic.Mcp
     {
         private readonly Func<JsonRpcRequest, CancellationToken, Task> _Notify;
         private readonly HashSet<string> _ResourceUris;
+        private readonly TaskCompletionSource<bool> _Acknowledged = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal McpSubscription(JsonElement subscriptionId, bool toolsListChanged, bool promptsListChanged, bool resourcesListChanged, IEnumerable<string> resourceUris, Func<JsonRpcRequest, CancellationToken, Task> notify)
         {
@@ -38,6 +39,20 @@ namespace Voltaic.Mcp
         internal bool ResourcesListChanged { get; }
 
         internal IReadOnlyCollection<string> ResourceUris => _ResourceUris;
+
+        /// <summary>
+        /// Gets a task that completes once the acknowledgment was written (or the subscription ended), so notifications
+        /// never overtake it.
+        /// </summary>
+        internal Task Acknowledged => _Acknowledged.Task;
+
+        /// <summary>
+        /// Releases notifications held back until the acknowledgment was written.
+        /// </summary>
+        internal void MarkAcknowledged()
+        {
+            _Acknowledged.TrySetResult(true);
+        }
 
         /// <summary>
         /// Gets whether the subscription asked for this notification: a list change of the kind, or an update of a
@@ -83,9 +98,11 @@ namespace Voltaic.Mcp
             try
             {
                 await _Notify(new JsonRpcRequest { Method = method, Params = tagged }, token).ConfigureAwait(false);
+                Voltaic.Core.VoltaicInstruments.NotificationSent(method, true);
             }
             catch (Exception ex) when (ex is System.IO.IOException || ex is ObjectDisposedException || ex is InvalidOperationException || ex is OperationCanceledException)
             {
+                Voltaic.Core.VoltaicInstruments.NotificationSent(method, false);
                 // The stream closed; the subscription ends when its request is cancelled.
             }
         }

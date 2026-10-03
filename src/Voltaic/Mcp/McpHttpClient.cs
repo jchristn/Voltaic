@@ -296,7 +296,7 @@ namespace Voltaic.Mcp
         private int _PingFailureThreshold = 1;
         private McpPinger? _Pinger;
         private bool _SseWanted;
-        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true, TelemetryProtocol = VoltaicTelemetryNames.ProtocolMcp, TelemetryTransport = VoltaicTelemetryNames.TransportHttp };
         private readonly ProgressTracker _ProgressTracker = new ProgressTracker { Enabled = true };
         private CancellationTokenSource _ServerRequestTokenSource = new CancellationTokenSource();
         private readonly ConcurrentDictionary<string, List<McpHeaderParameter>> _ToolHeaderParameters = new ConcurrentDictionary<string, List<McpHeaderParameter>>(StringComparer.Ordinal);
@@ -306,6 +306,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public McpHttpClient()
         {
+            VoltaicInstruments.EnsureCreated();
             _HttpClient = new HttpClient();
             _RequestDispatcher.Log = LogMessage;
         }
@@ -390,6 +391,7 @@ namespace Voltaic.Mcp
         {
             if (String.IsNullOrEmpty(baseUrl)) throw new ArgumentNullException(nameof(baseUrl));
 
+            using VoltaicOperation? operation = VoltaicOperation.StartConnect(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp);
             try
             {
                 Disconnect();
@@ -407,6 +409,7 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 LogMessage($"Connection failed: {ex.Message}");
                 TryDeleteSession();
                 SessionId = null;
@@ -431,6 +434,7 @@ namespace Voltaic.Mcp
         {
             if (String.IsNullOrEmpty(baseUrl)) throw new ArgumentNullException(nameof(baseUrl));
 
+            using VoltaicOperation? operation = VoltaicOperation.StartConnect(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp);
             try
             {
                 Disconnect();
@@ -448,6 +452,7 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 LogMessage($"Streamable HTTP connection failed: {ex.Message}");
                 // A session the handshake opened (for example before the version was rejected) is ended on the server.
                 TryDeleteSession();
@@ -477,7 +482,8 @@ namespace Voltaic.Mcp
                 _SseRetryMs = null;
                 _SseWanted = true;
                 _SseTokenSource = new CancellationTokenSource();
-                _SseTask = Task.Run(() => SseLoop(_SseTokenSource.Token));
+                CancellationToken sseToken = _SseTokenSource.Token;
+                _SseTask = VoltaicTraceContext.RunDetached(() => SseLoop(sseToken));
 
                 // Give SSE connection a moment to establish
                 await Task.Delay(100, token).ConfigureAwait(false);
@@ -619,12 +625,19 @@ namespace Voltaic.Mcp
 
         private async Task<JsonRpcResponse> ExchangeAsync(string method, object? parameters, int timeoutMs, CancellationToken token)
         {
+            using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, method);
             _ProgressTracker.Track(parameters);
             try
             {
                 JsonRpcResponse response = await ExchangeCoreAsync(method, parameters, timeoutMs, token).ConfigureAwait(false);
+                RecordResponse(operation, response);
                 RaiseHeldProgress(parameters);
                 return response;
+            }
+            catch (Exception ex)
+            {
+                operation?.FailCall(ex, token);
+                throw;
             }
             finally
             {
@@ -741,6 +754,7 @@ namespace Voltaic.Mcp
         {
             if (String.IsNullOrEmpty(baseUrl)) throw new ArgumentNullException(nameof(baseUrl));
 
+            using VoltaicOperation? operation = VoltaicOperation.StartConnect(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp);
             try
             {
                 Disconnect();
@@ -787,6 +801,7 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 LogMessage($"Stateless connection failed: {ex.Message}");
                 _Stateless = false;
                 return false;
@@ -847,12 +862,19 @@ namespace Voltaic.Mcp
 
         private async Task<JsonRpcResponse> SendStatelessAsync(string method, IReadOnlyDictionary<string, object?>? parameters, string? name, int timeoutMs, CancellationToken token)
         {
+            using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, method);
             _ProgressTracker.Track(parameters);
             try
             {
                 JsonRpcResponse response = await SendStatelessTrackedAsync(method, parameters, name, timeoutMs, token).ConfigureAwait(false);
+                RecordResponse(operation, response);
                 RaiseHeldProgress(parameters);
                 return response;
+            }
+            catch (Exception ex)
+            {
+                operation?.FailCall(ex, token);
+                throw;
             }
             finally
             {
@@ -911,6 +933,7 @@ namespace Voltaic.Mcp
                 cts.CancelAfter(timeoutMs == Timeout.Infinite ? Timeout.Infinite : (timeoutMs > 0 ? timeoutMs : _RequestTimeoutMs));
 
                 using HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
+                VoltaicTraceContext.Inject(httpRequest);
                 httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
                 httpRequest.Headers.Accept.ParseAdd("application/json");
                 httpRequest.Headers.Accept.ParseAdd("text/event-stream");
@@ -1808,12 +1831,28 @@ namespace Voltaic.Mcp
                 if (!StringComparer.Ordinal.Equals(SessionId, lostSessionId)) return !String.IsNullOrEmpty(SessionId);
 
                 LogMessage($"Session {lostSessionId} was not found; starting a new session");
-                SessionId = null;
-                _HandshakeComplete = false;
-                _SseLastEventId = null;
-                await PerformHandshakeAsync(token).ConfigureAwait(false);
-                if (_SseWanted) await StartSseAsync(token).ConfigureAwait(false);
-                return !String.IsNullOrEmpty(SessionId) || _HandshakeComplete;
+                using (System.Diagnostics.Activity? recover = VoltaicOperation.StartSpan(VoltaicTelemetryNames.SpanMcpSessionRecover))
+                {
+                    try
+                    {
+                        SessionId = null;
+                        _HandshakeComplete = false;
+                        _SseLastEventId = null;
+                        await PerformHandshakeAsync(token).ConfigureAwait(false);
+                        if (_SseWanted) await StartSseAsync(token).ConfigureAwait(false);
+                        bool recovered = !String.IsNullOrEmpty(SessionId) || _HandshakeComplete;
+                        VoltaicInstruments.SessionRecovery(recovered);
+                        if (!recovered) recover?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, "not_recovered");
+                        return recovered;
+                    }
+                    catch (Exception ex)
+                    {
+                        VoltaicInstruments.SessionRecovery(false);
+                        recover?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.GetType().Name);
+                        VoltaicOperation.RecordException(recover, ex);
+                        throw;
+                    }
+                }
             }
             finally
             {
@@ -1852,9 +1891,18 @@ namespace Voltaic.Mcp
             }
         }
 
+        // Records a JSON-RPC error response on a client call operation.
+        private static void RecordResponse(VoltaicOperation? operation, JsonRpcResponse response)
+        {
+            if (operation == null || response.Error == null) return;
+            operation.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcErrorCode, response.Error.Code);
+            operation.SetError(VoltaicInstruments.CodeLabel(response.Error.Code));
+        }
+
         private HttpRequestMessage CreatePostRequest(string requestJson)
         {
             HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Post, _RpcUrl);
+            VoltaicTraceContext.Inject(httpRequest);
             httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
             httpRequest.Headers.Accept.ParseAdd("application/json");
             httpRequest.Headers.Accept.ParseAdd("text/event-stream");

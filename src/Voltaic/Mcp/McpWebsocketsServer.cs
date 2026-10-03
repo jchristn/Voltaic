@@ -362,7 +362,7 @@ namespace Voltaic.Mcp
                 if (!_Endpoint.SupportsListChangedNotifications) return;
                 _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
-            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage)
+            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage, VoltaicTelemetryNames.TransportWebSocket)
             {
                 RequestReceived = (request, session) =>
                 {
@@ -1071,11 +1071,17 @@ namespace Voltaic.Mcp
         {
             string clientId = $"client_{Interlocked.Increment(ref _ClientIdCounter)}";
             ClientConnection? client = null;
+            long sessionStart = 0;
+            string closeReason = "client_closed";
+
+            // A connection's work never inherits the span that was current when the server started.
+            System.Diagnostics.Activity.Current = null;
 
             try
             {
                 if (!HttpAccessGuard.IsRemoteAllowed(context.Request, _RestrictToLoopbackClients))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket, "loopback_only");
                     LogMessage($"Rejected remote client {context.Request.RemoteEndPoint}: the server accepts loopback clients only");
                     await HttpAccessGuard.RejectAsync(context, 403, "Remote connections are not allowed.", token).ConfigureAwait(false);
                     return;
@@ -1084,6 +1090,7 @@ namespace Voltaic.Mcp
                 string? origin = HttpAccessGuard.GetOrigin(context.Request);
                 if (!_OriginPolicy.IsAllowed(origin))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket, "origin");
                     LogMessage($"Rejected WebSocket upgrade from disallowed origin '{origin}'");
                     await HttpAccessGuard.RejectAsync(context, 403, "Origin not allowed.", token).ConfigureAwait(false);
                     return;
@@ -1104,6 +1111,7 @@ namespace Voltaic.Mcp
                     AuthenticationResult authResult = await authenticationHandler(context.Request).ConfigureAwait(false);
                     if (!authResult.IsAuthenticated)
                     {
+                        VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket, authResult.StatusCode == 403 ? "insufficient_scope" : "authentication");
                         LogMessage($"Authentication failed for WebSocket upgrade from {context.Request.RemoteEndPoint}: {authResult.ErrorMessage ?? "no details"}");
                         await HttpAccessGuard.WriteAuthenticationFailureAsync(context, authResult, false, null, token).ConfigureAwait(false);
                         return;
@@ -1129,16 +1137,24 @@ namespace Voltaic.Mcp
                 _Clients.TryAdd(clientId, client);
 
                 LogMessage($"Client connected: {clientId} from {context.Request.RemoteEndPoint}");
+                sessionStart = VoltaicInstruments.SessionOpened(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket);
                 RaiseClientConnected(client);
 
-                await ReceiveLoopAsync(client, token).ConfigureAwait(false);
+                closeReason = await ReceiveLoopAsync(client, token).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
+                closeReason = "error";
                 LogMessage($"Client {clientId} error: {ex.Message}");
             }
             finally
             {
+                if (sessionStart != 0)
+                {
+                    if (closeReason == "client_closed" && token.IsCancellationRequested) closeReason = "server_stopped";
+                    VoltaicInstruments.SessionClosed(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket, closeReason, sessionStart);
+                }
+
                 if (client != null)
                 {
                     (client.ProtocolState as McpSessionState)?.CancelAll();
@@ -1150,8 +1166,10 @@ namespace Voltaic.Mcp
             }
         }
         
-        private async Task ReceiveLoopAsync(ClientConnection client, CancellationToken token)
+        // Returns the close reason for telemetry.
+        private async Task<string> ReceiveLoopAsync(ClientConnection client, CancellationToken token)
         {
+            string reason = "client_closed";
             byte[] buffer = new byte[Math.Min(_MaxMessageSize, 65536)];
             StringBuilder messageBuilder = new StringBuilder();
             long messageBytes = 0;
@@ -1181,6 +1199,8 @@ namespace Voltaic.Mcp
                             // MCP messages are UTF-8 JSON text; a binary message is refused with 1003 (unsupported data)
                             // rather than dropped, so the peer does not wait for an answer.
                             LogMessage($"Closing {client.SessionId}: binary WebSocket messages are not supported");
+                            VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket, "binary_message");
+                            reason = "protocol_error";
                             await client.WebSocket.CloseAsync(WebSocketCloseStatus.InvalidMessageType, "Binary messages are not supported", token).ConfigureAwait(false);
                             break;
                         }
@@ -1192,6 +1212,8 @@ namespace Voltaic.Mcp
                             if (messageBytes > _MaxMessageSize)
                             {
                                 LogMessage($"Closing {client.SessionId}: a message exceeded MaxMessageSize ({_MaxMessageSize} bytes)");
+                                VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket, "too_large");
+                                reason = "protocol_error";
                                 await client.WebSocket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too big", token).ConfigureAwait(false);
                                 break;
                             }
@@ -1222,9 +1244,12 @@ namespace Voltaic.Mcp
             {
                 if (!token.IsCancellationRequested)
                 {
+                    reason = "error";
                     LogMessage($"Receive error for {client.SessionId}: {ex.Message}");
                 }
             }
+
+            return reason;
         }
 
         private async Task SendToClientAsync(ClientConnection client, string message, CancellationToken token = default)

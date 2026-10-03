@@ -17,6 +17,46 @@ namespace Test.McpServer
         [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "close")]
         private static extern int CloseDescriptor(int descriptor);
 
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "fstat")]
+        private static extern int StatDescriptor(int descriptor, byte[] buffer);
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "fstat$INODE64")]
+        private static extern int StatDescriptorInode64(int descriptor, byte[] buffer);
+
+        // Closes descriptor 1 and, on macOS, every other descriptor open on the same pipe: the .NET host there keeps its
+        // own duplicate of stdout, so closing descriptor 1 alone never shows the client an end of stream.
+        private static void CloseStdoutEverywhere()
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                byte[] stdout = new byte[512];
+                if (MacStat(1, stdout))
+                {
+                    // struct stat on macOS (64-bit inodes): dev_t (int32) at offset 0, ino_t (uint64) at offset 8.
+                    int device = BitConverter.ToInt32(stdout, 0);
+                    long inode = BitConverter.ToInt64(stdout, 8);
+                    for (int descriptor = 3; descriptor < 1024; descriptor++)
+                    {
+                        byte[] other = new byte[512];
+                        if (MacStat(descriptor, other) && BitConverter.ToInt32(other, 0) == device && BitConverter.ToInt64(other, 8) == inode)
+                        {
+                            CloseDescriptor(descriptor);
+                        }
+                    }
+                }
+            }
+
+            CloseDescriptor(1);
+        }
+
+        private static bool MacStat(int descriptor, byte[] buffer)
+        {
+            // Intel macOS exports the 64-bit-inode fstat as fstat$INODE64; Apple silicon exports it as fstat.
+            return System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.X64
+                ? StatDescriptorInode64(descriptor, buffer) == 0
+                : StatDescriptor(descriptor, buffer) == 0;
+        }
+
         static async Task Main(string[] args)
         {
             if (args.Length > 0 && args[0] == "--probe-client")
@@ -46,7 +86,7 @@ namespace Test.McpServer
                 System.IO.File.WriteAllText(args[1], Environment.ProcessId.ToString());
                 // Close the process's own stdout handle (the Console stream does not own it).
                 if (OperatingSystem.IsWindows()) CloseHandle(GetStdHandle(-11));
-                else CloseDescriptor(1);
+                else CloseStdoutEverywhere();
                 await Task.Delay(TimeSpan.FromSeconds(60)).ConfigureAwait(false);
                 return;
             }

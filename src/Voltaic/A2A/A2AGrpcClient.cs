@@ -10,6 +10,7 @@ namespace Voltaic.A2A
     using System.Threading.Tasks;
     using Google.Protobuf;
     using Google.Protobuf.WellKnownTypes;
+    using Voltaic.Core;
     using GrpcWire = Voltaic.A2A.Grpc;
 
     /// <summary>
@@ -50,6 +51,7 @@ namespace Voltaic.A2A
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="endpointUrl"/> is null.</exception>
         public A2AGrpcClient(Uri endpointUrl, HttpClient? httpClient = null)
         {
+            VoltaicInstruments.EnsureCreated();
             _BaseUrl = endpointUrl ?? throw new ArgumentNullException(nameof(endpointUrl));
             _HttpClient = httpClient ?? new HttpClient();
             _OwnsHttpClient = httpClient == null;
@@ -334,6 +336,27 @@ namespace Voltaic.A2A
             where TWireRequest : IMessage
             where TWireResponse : IMessage<TWireResponse>
         {
+            using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AGrpc, A2ATelemetry.GrpcMethodOf(path));
+            try
+            {
+                return await UnaryCoreAsync(path, request, parser, map, token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                operation?.FailCall(ex, token);
+                throw;
+            }
+        }
+
+        private async Task<TResult> UnaryCoreAsync<TWireRequest, TWireResponse, TResult>(
+            string path,
+            TWireRequest request,
+            MessageParser<TWireResponse> parser,
+            Func<TWireResponse, TResult> map,
+            CancellationToken token)
+            where TWireRequest : IMessage
+            where TWireResponse : IMessage<TWireResponse>
+        {
             using HttpRequestMessage httpRequest = CreateRequest(path, request);
             using HttpResponseMessage response = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
@@ -360,9 +383,28 @@ namespace Voltaic.A2A
             where TWireRequest : IMessage
             where TWireResponse : IMessage<TWireResponse>
         {
+            // The operation covers the whole stream; failures before the first message and a failed final status are recorded.
+            using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AGrpc, A2ATelemetry.GrpcMethodOf(path));
             using HttpRequestMessage httpRequest = CreateRequest(path, request);
-            using HttpResponseMessage response = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
+            HttpResponseMessage sent;
+            try
+            {
+                sent = await _HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                if (!sent.IsSuccessStatusCode)
+                {
+                    using (sent)
+                    {
+                        sent.EnsureSuccessStatusCode();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                operation?.FailCall(ex, token);
+                throw;
+            }
+
+            using HttpResponseMessage response = sent;
 
             using Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
             await foreach (byte[] payload in A2AGrpcWire.ReadPayloadsAsync(stream, token).ConfigureAwait(false))
@@ -370,12 +412,21 @@ namespace Voltaic.A2A
                 yield return map(parser.ParseFrom(payload));
             }
 
-            A2AGrpcWire.EnsureGrpcSuccess(response);
+            try
+            {
+                A2AGrpcWire.EnsureGrpcSuccess(response);
+            }
+            catch (Exception ex)
+            {
+                operation?.Fail(ex);
+                throw;
+            }
         }
 
         private HttpRequestMessage CreateRequest(string path, IMessage message)
         {
             HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, new Uri(_BaseUrl, path));
+            VoltaicTraceContext.Inject(request);
             request.Content = new ByteArrayContent(A2AGrpcWire.EncodeMessage(message));
             request.Content.Headers.ContentType = new MediaTypeHeaderValue(A2AGrpcWire.ContentType);
             A2AGrpcWire.ConfigureGrpcRequest(request);

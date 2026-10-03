@@ -3,6 +3,7 @@ namespace Voltaic.A2A
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Net;
@@ -642,6 +643,7 @@ namespace Voltaic.A2A
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="port"/> is outside 0 to 65535.</exception>
         public A2AHttpServer(string hostname, int port, AgentCard agentCard, IA2AAgentHandler? handler = null, IA2ATaskStore? taskStore = null, string rpcPath = "/a2a")
         {
+            VoltaicInstruments.EnsureCreated();
             if (String.IsNullOrWhiteSpace(hostname)) throw new ArgumentNullException(nameof(hostname));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
 
@@ -790,10 +792,42 @@ namespace Voltaic.A2A
 
         private async Task HandleRequestAsync(HttpListenerContext context, CancellationToken token)
         {
+            string path = context.Request.Url?.AbsolutePath ?? "/";
+            VoltaicOperation? operation = HttpListenerTelemetry.StartRequest(context.Request, VoltaicTelemetryNames.ProtocolA2A, RouteOf(context.Request.HttpMethod, path, out string? _));
+            try
+            {
+                await HandleRequestCoreAsync(context, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                HttpListenerTelemetry.Finish(operation, context.Response);
+            }
+        }
+
+        // The route template of a request for telemetry (never the raw path, which carries task IDs), and the A2A method
+        // an HTTP+JSON route serves (null for the Agent Card, the JSON-RPC endpoint, and unmatched paths).
+        private string RouteOf(string httpMethod, string path, out string? restMethod)
+        {
+            restMethod = null;
+            if (StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.AgentCardPath)) return A2AProtocol.AgentCardPath;
+            if (StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.ExtendedAgentCardPath))
+            {
+                restMethod = A2AProtocol.GetExtendedAgentCard;
+                return A2AProtocol.ExtendedAgentCardPath;
+            }
+
+            if (StringComparer.OrdinalIgnoreCase.Equals(path, _RpcPath)) return _RpcPath;
+            return A2ATelemetry.RestRouteOf(httpMethod, path, out restMethod);
+        }
+
+        private async Task HandleRequestCoreAsync(HttpListenerContext context, CancellationToken token)
+        {
+            VoltaicOperation? restOperation = null;
             try
             {
                 if (!HttpAccessGuard.IsRemoteAllowed(context.Request, RestrictToLoopbackClients))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportHttp, "loopback_only");
                     Log?.Invoke(this, $"Rejected remote client {context.Request.RemoteEndPoint}: the server accepts loopback clients only");
                     await HttpAccessGuard.RejectAsync(context, 403, "Remote connections are not allowed.", token).ConfigureAwait(false);
                     return;
@@ -802,6 +836,7 @@ namespace Voltaic.A2A
                 string? origin = HttpAccessGuard.GetOrigin(context.Request);
                 if (!_OriginPolicy.IsAllowed(origin))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportHttp, "origin");
                     Log?.Invoke(this, $"Rejected request from disallowed origin '{origin}'");
                     await HttpAccessGuard.RejectAsync(context, 403, "Origin not allowed.", token).ConfigureAwait(false);
                     return;
@@ -821,6 +856,7 @@ namespace Voltaic.A2A
                     AuthenticationResult auth = await AuthenticationHandler(context.Request).ConfigureAwait(false);
                     if (!auth.IsAuthenticated)
                     {
+                        VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportHttp, auth.StatusCode == 403 ? "insufficient_scope" : "authentication");
                         foreach (KeyValuePair<string, string> header in auth.Headers)
                         {
                             if (String.IsNullOrEmpty(header.Key) || header.Value == null) continue;
@@ -846,6 +882,9 @@ namespace Voltaic.A2A
                         return;
                     }
 
+                    RouteOf(context.Request.HttpMethod, path, out string? restMethod);
+                    if (restMethod != null) restOperation = StartBindingOperation(VoltaicTelemetryNames.TransportA2AHttpJson, restMethod);
+
                     if (context.Request.HttpMethod == "GET" && StringComparer.OrdinalIgnoreCase.Equals(path, A2AProtocol.ExtendedAgentCardPath))
                     {
                         AgentCard extended = GetExtendedAgentCard();
@@ -869,11 +908,50 @@ namespace Voltaic.A2A
             }
             catch (Exception ex)
             {
+                restOperation?.Fail(ex);
                 LogMessage($"A2A request error: {ex.Message}");
                 if (context.Response.OutputStream.CanWrite)
                 {
                     await SendJsonErrorAsync(context, ex, null, token).ConfigureAwait(false);
                 }
+            }
+            finally
+            {
+                restOperation?.Dispose();
+            }
+        }
+
+        // Starts the A2A server operation for one request on a binding (rpc.method is a known A2A method or _OTHER).
+        internal static VoltaicOperation? StartBindingOperation(string transport, string? method)
+        {
+            if (!VoltaicTelemetry.Enabled) return null;
+            string label = method != null && A2AProtocol.IsValidMethod(method) ? method : VoltaicTelemetryNames.OtherValue;
+            TagList tags = new TagList
+            {
+                { VoltaicTelemetryNames.AttrProtocol, VoltaicTelemetryNames.ProtocolA2A },
+                { VoltaicTelemetryNames.AttrTransport, transport },
+                { VoltaicTelemetryNames.AttrRpcMethod, label }
+            };
+
+            VoltaicOperation? operation = VoltaicOperation.Start(VoltaicInstruments.RpcServerDuration, VoltaicInstruments.RpcServerActive, "a2a " + label, ActivityKind.Internal, tags);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrRpcSystem, transport == VoltaicTelemetryNames.TransportA2AGrpc ? "grpc" : "jsonrpc");
+            return operation;
+        }
+
+        // Runs the agent handler for one task as the agent stage: span "a2a.agent execute" and voltaic.a2a.agent.duration.
+        private static async Task ExecuteAgentAsync(IA2AAgentHandler handler, A2ARequestContext context, A2AAgentEventQueue queue, string mode, CancellationToken token)
+        {
+            TagList tags = new TagList { { VoltaicTelemetryNames.AttrKind, mode } };
+            using VoltaicOperation? operation = VoltaicOperation.Start(VoltaicInstruments.A2AAgentDuration, null, VoltaicTelemetryNames.SpanA2AAgentExecute, ActivityKind.Internal, tags);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrA2ATaskId, context.TaskId);
+            try
+            {
+                await handler.ExecuteAsync(context, queue, token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                operation?.Fail(ex);
+                throw;
             }
         }
 
@@ -893,6 +971,7 @@ namespace Voltaic.A2A
             }
             catch (JsonException)
             {
+                VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AJsonRpc, "parse_error");
                 await SendJsonRpcErrorAsync(context, new A2AProtocolException(A2AErrorCode.ParseError, "Parse error"), null, token).ConfigureAwait(false);
                 return;
             }
@@ -905,9 +984,12 @@ namespace Voltaic.A2A
 
             if (!A2AProtocol.IsValidMethod(request.Method))
             {
+                VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AJsonRpc, "method_not_found");
                 await SendJsonRpcErrorAsync(context, new A2AProtocolException(A2AErrorCode.MethodNotFound, $"Method '{request.Method}' was not found."), request.Id, token).ConfigureAwait(false);
                 return;
             }
+
+            using VoltaicOperation? operation = StartBindingOperation(VoltaicTelemetryNames.TransportA2AJsonRpc, request.Method);
 
             if (A2AProtocol.IsStreamingMethod(request.Method))
             {
@@ -927,6 +1009,7 @@ namespace Voltaic.A2A
                 }
                 catch (Exception ex)
                 {
+                    operation?.Fail(ex);
                     JsonRpcResponse response = BuildErrorResponse(ex, request.Id);
                     await SendSseJsonAsync(context.Response, response, token).ConfigureAwait(false);
                 }
@@ -946,6 +1029,7 @@ namespace Voltaic.A2A
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 await SendJsonRpcErrorAsync(context, ex, request.Id, token).ConfigureAwait(false);
             }
         }
@@ -1143,7 +1227,7 @@ namespace Voltaic.A2A
             {
                 try
                 {
-                    await handler.ExecuteAsync(context, queue, token).ConfigureAwait(false);
+                    await ExecuteAgentAsync(handler, context, queue, "blocking", token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -1187,7 +1271,7 @@ namespace Voltaic.A2A
             {
                 try
                 {
-                    await handler.ExecuteAsync(context, queue, token).ConfigureAwait(false);
+                    await ExecuteAgentAsync(handler, context, queue, "background", token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -1275,7 +1359,7 @@ namespace Voltaic.A2A
             {
                 try
                 {
-                    await handler.ExecuteAsync(context, queue, token).ConfigureAwait(false);
+                    await ExecuteAgentAsync(handler, context, queue, "streaming", token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -1527,6 +1611,9 @@ namespace Voltaic.A2A
                 await _TaskStore.SaveTaskAsync(updated.Id, updated, token).ConfigureAwait(false);
             }
 
+            TaskStatus? status = response.StatusUpdate?.Status ?? response.Task?.Status;
+            if (status != null) VoltaicInstruments.TaskTransition(status.State.ToString());
+
             _Notifier.Notify(context.TaskId, response);
             QueuePushNotifications(context.TaskId, response);
         }
@@ -1575,6 +1662,7 @@ namespace Voltaic.A2A
         {
             if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
             {
+                VoltaicInstruments.PushUrlRejected("invalid_url");
                 throw A2AProtocolException.InvalidParams("The push notification url must be an absolute URL.");
             }
 
@@ -1591,12 +1679,21 @@ namespace Voltaic.A2A
                     allowed = false;
                 }
 
-                if (!allowed) throw A2AProtocolException.InvalidParams("The push notification url is not allowed by this server.");
+                if (!allowed)
+                {
+                    VoltaicInstruments.PushUrlRejected("validator");
+                    throw A2AProtocolException.InvalidParams("The push notification url is not allowed by this server.");
+                }
+
                 return;
             }
 
             string? reason = A2AWebhookAddressPolicy.ValidateUrl(uri);
-            if (reason != null) throw A2AProtocolException.InvalidParams(reason);
+            if (reason != null)
+            {
+                VoltaicInstruments.PushUrlRejected("address_policy");
+                throw A2AProtocolException.InvalidParams(reason);
+            }
         }
 
         private void QueuePushNotifications(string taskId, StreamResponse response)
@@ -1607,15 +1704,21 @@ namespace Voltaic.A2A
             }
 
             string payload = JsonSerializer.Serialize(response, A2AJson.DefaultOptions);
+
+            // The delivery continues the trace of the event that queued it (a background hand-off), and its time in the
+            // queue is the "queued" stage.
+            ActivityContext origin = Activity.Current?.Context ?? default;
             foreach (TaskPushNotificationConfig config in configs.Values)
             {
                 // Deliveries to one webhook are sent in order: each waits for the previous one to finish.
                 string key = taskId + "\n" + config.Id;
+                long queuedAt = Stopwatch.GetTimestamp();
+                VoltaicInstruments.PushPending(1);
                 lock (_PushLock)
                 {
                     Task previous = _PushTails.TryGetValue(key, out Task? tail) ? tail : Task.CompletedTask;
                     _PushTails[key] = previous.ContinueWith(
-                        _ => DeliverPushNotificationAsync(config, payload),
+                        _ => DeliverPushNotificationTracedAsync(config, payload, origin, queuedAt),
                         CancellationToken.None,
                         TaskContinuationOptions.None,
                         TaskScheduler.Default).Unwrap();
@@ -1623,14 +1726,60 @@ namespace Voltaic.A2A
             }
         }
 
-        private async Task DeliverPushNotificationAsync(TaskPushNotificationConfig config, string payload)
+        private async Task DeliverPushNotificationTracedAsync(TaskPushNotificationConfig config, string payload, ActivityContext origin, long queuedAt)
+        {
+            VoltaicInstruments.PushStage("queued", VoltaicInstruments.SecondsSince(queuedAt));
+            long started = Stopwatch.GetTimestamp();
+            Activity? deliver = null;
+            if (VoltaicTelemetry.Enabled && VoltaicInstruments.Source.HasListeners())
+            {
+                // A delivery runs on a continuation; it never inherits whatever span is current there.
+                Activity.Current = null;
+                deliver = VoltaicOperation.StartSpan(VoltaicTelemetryNames.SpanA2APushDeliver, ActivityKind.Consumer, origin);
+                if (deliver != null && deliver.IsAllDataRequested) deliver.SetTag(VoltaicTelemetryNames.AttrA2ATaskId, config.TaskId);
+            }
+
+            string outcome = VoltaicTelemetryNames.OutcomeError;
+            try
+            {
+                outcome = await DeliverPushNotificationAsync(config, payload).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                VoltaicOperation.RecordException(deliver, ex);
+                throw;
+            }
+            finally
+            {
+                VoltaicInstruments.PushPending(-1);
+                VoltaicInstruments.PushStage("deliver", VoltaicInstruments.SecondsSince(started));
+                VoltaicInstruments.PushDelivery(outcome);
+                if (deliver != null)
+                {
+                    if (outcome != VoltaicTelemetryNames.OutcomeSuccess) deliver.SetStatus(ActivityStatusCode.Error, outcome);
+                    if (deliver.IsAllDataRequested) deliver.SetTag(VoltaicTelemetryNames.AttrOutcome, outcome);
+                    deliver.Dispose();
+                }
+            }
+        }
+
+        // Delivers one push notification with retries; returns the telemetry outcome (success, error, cancelled).
+        private async Task<string> DeliverPushNotificationAsync(TaskPushNotificationConfig config, string payload)
         {
             PushNotificationConfig target = config.PushNotificationConfig;
-            if (!Uri.TryCreate(target.Url, UriKind.Absolute, out Uri? uri)) return;
+            if (!Uri.TryCreate(target.Url, UriKind.Absolute, out Uri? uri)) return VoltaicTelemetryNames.OutcomeError;
 
             for (int attempt = 1; attempt <= _PushNotificationMaxAttempts; attempt++)
             {
-                if (_PushShutdown.IsCancellationRequested) return;
+                if (_PushShutdown.IsCancellationRequested) return VoltaicTelemetryNames.OutcomeCancelled;
+
+                long attemptStart = Stopwatch.GetTimestamp();
+                Activity? attemptSpan = VoltaicOperation.StartSpan(VoltaicTelemetryNames.SpanA2APushAttempt, ActivityKind.Client);
+                if (attemptSpan != null && attemptSpan.IsAllDataRequested)
+                {
+                    attemptSpan.SetTag(VoltaicTelemetryNames.AttrServerAddress, uri.Host);
+                    attemptSpan.SetTag(VoltaicTelemetryNames.AttrAttempt, attempt);
+                }
 
                 try
                 {
@@ -1655,18 +1804,35 @@ namespace Voltaic.A2A
                         request.Headers.TryAddWithoutValidation(A2AProtocol.NotificationTokenHeader, target.Token);
                     }
 
+                    VoltaicTraceContext.Inject(request, attemptSpan);
                     using HttpResponseMessage response = await _PushClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
-                    if (response.IsSuccessStatusCode) return;
+                    int status = (int)response.StatusCode;
+                    attemptSpan?.SetTag(VoltaicTelemetryNames.AttrHttpStatusCode, status);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        VoltaicInstruments.PushAttempt(VoltaicTelemetryNames.OutcomeSuccess, null, VoltaicInstruments.SecondsSince(attemptStart));
+                        attemptSpan?.SetStatus(ActivityStatusCode.Ok);
+                        return VoltaicTelemetryNames.OutcomeSuccess;
+                    }
 
+                    VoltaicInstruments.PushAttempt("http_error", VoltaicInstruments.CodeLabel(status), VoltaicInstruments.SecondsSince(attemptStart));
+                    attemptSpan?.SetStatus(ActivityStatusCode.Error, VoltaicInstruments.CodeLabel(status));
                     LogMessage($"Push notification to {uri.GetLeftPart(UriPartial.Path)} for task {config.TaskId} returned HTTP {(int)response.StatusCode} (attempt {attempt} of {_PushNotificationMaxAttempts})");
                 }
                 catch (Exception ex) when (!_PushShutdown.IsCancellationRequested)
                 {
+                    VoltaicInstruments.PushAttempt("exception", ex is OperationCanceledException ? "timeout" : ex.GetType().Name, VoltaicInstruments.SecondsSince(attemptStart));
+                    attemptSpan?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+                    VoltaicOperation.RecordException(attemptSpan, ex);
                     LogMessage($"Push notification to {uri.GetLeftPart(UriPartial.Path)} for task {config.TaskId} failed: {ex.Message} (attempt {attempt} of {_PushNotificationMaxAttempts})");
                 }
                 catch
                 {
-                    return;
+                    return VoltaicTelemetryNames.OutcomeCancelled;
+                }
+                finally
+                {
+                    attemptSpan?.Dispose();
                 }
 
                 if (attempt < _PushNotificationMaxAttempts)
@@ -1677,10 +1843,12 @@ namespace Voltaic.A2A
                     }
                     catch (OperationCanceledException)
                     {
-                        return;
+                        return VoltaicTelemetryNames.OutcomeCancelled;
                     }
                 }
             }
+
+            return VoltaicTelemetryNames.OutcomeError;
         }
 
         private async ValueTask<Stream> ConnectToWebhookAsync(SocketsHttpConnectionContext context, CancellationToken token)
@@ -1692,6 +1860,7 @@ namespace Voltaic.A2A
             List<IPAddress> candidates = addresses.Where(address => !enforcePolicy || A2AWebhookAddressPolicy.IsPublic(address)).ToList();
             if (candidates.Count == 0)
             {
+                VoltaicInstruments.PushUrlRejected("address_policy");
                 throw new HttpRequestException($"Webhook host '{context.DnsEndPoint.Host}' resolves only to addresses this server does not call (loopback, private, or link-local).");
             }
 

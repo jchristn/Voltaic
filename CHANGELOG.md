@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased
+## v2.2.0
+Adds built-in observability: metrics and traces for every server, client, and protocol, with no new package dependencies. See [TELEMETRY.md](TELEMETRY.md).
+
+### Telemetry
+- Voltaic emits on a `System.Diagnostics.Metrics.Meter` and an `ActivitySource`, both named `Voltaic` (`VoltaicTelemetryNames.MeterName`, `ActivitySourceName`). A host subscribes with the OpenTelemetry SDK (`AddMeter("Voltaic")`, `AddSource("Voltaic")`) or Radiant (`settings.Sources.AddMeter`, `AddActivitySource`). Nothing is recorded until a collector subscribes, and a failing listener never affects a request.
+- New public types: `VoltaicTelemetry` (`Enabled`, `PropagateTraceContext`, `Version`) and `VoltaicTelemetryNames` (every meter, instrument, span, and attribute name).
+- Metrics:
+  - Every inbound request and outbound call, on every protocol and transport: `voltaic.rpc.server.duration`, `voltaic.rpc.client.duration`, in-flight counts, and rejected messages, labeled by protocol, transport, method, outcome, and `error.type`.
+  - Client connects (including the MCP handshake), connection losses, HTTP session recoveries, and stdio process starts.
+  - The HTTP layer of `McpHttpServer` and `A2AHttpServer` by route template and status, and access-gate denials by reason.
+  - Connections and sessions opened, closed (by reason), refused, and their lifetime; `voltaic.server.sessions.limit` reports `MaxSessions`.
+  - MCP tool calls by tool and outcome, per stage (`validate_input`, `execute`, `validate_output`), schema validations, rate-limit decisions, notifications, pings, SSE streams and replays, `subscriptions/listen` streams, and notification queue depth and drops.
+  - A2A agent runs, task transitions, and the push notification pipeline (`queued` and `deliver` stages, attempts, outcomes, pending, last success, webhook URL refusals).
+  - `voltaic.build.info` with the version and runtime.
+- Spans: a `Server` span per inbound request (`tools/call {tool}` and `prompts/get {prompt}` once known), a `Client` span per outbound call and connect, `stage:*` spans for tool calls, `{METHOD} {route}` for the HTTP layer, `a2a {method}`, `a2a.agent execute`, `a2a.push deliver`, and `a2a.push POST`. Status is set explicitly; failures add an `exception` event with the type and stack trace, never the message.
+- W3C trace context crosses every boundary: HTTP clients send `traceparent`, MCP stream clients put it in `params._meta`, servers continue it, and push deliveries and background agent runs keep the trace. Plain `JsonRpcClient` calls never alter parameters.
+- `A2AGrpcServer` sets Watson's telemetry settings on explicitly; its per-method spans nest under Watson's server span.
+- Labels are bounded: unknown methods and tools are `_OTHER`, routes are templates, and no IDs, paths, payloads, or credentials reach metric labels.
+
+### Fixes
+- `subscriptions/listen` no longer misses a change made right after its acknowledgment: the subscription is active before the acknowledgment is written, and its notifications wait until the acknowledgment is out, so it is still the first message.
+- `pattern` matching no longer overflows the stack on deeply nested lookarounds (up to the 500 levels the parser accepts) on platforms with small thread-pool stacks, such as macOS: when the stack runs low, the nested match continues on a dedicated thread.
+
+### Tests
+- New `Telemetry` suite (15 cases): each instrumented area, failure paths, trace propagation over TCP, HTTP, and gRPC, and the no-listener, disabled, and throwing-listener paths.
+- Test portability on macOS: raw-socket requests to a `localhost` listener retry the other loopback family when refused, and the stdio test server's `--close-stdout` mode also closes the .NET host's duplicate of stdout.
 
 ### Documentation
 - New `UPGRADING.md` holds the per-version upgrade tables (v1.x to v2.1.13) that were in the README. The README keeps a short "Upgrading" summary and one upgrade note in place of four per-release callouts.

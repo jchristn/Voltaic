@@ -23,13 +23,11 @@ namespace Test.Shared
         /// </summary>
         public static async Task<string?> SendAsync(IPAddress address, int port, string request, bool stopAtHeaders, CancellationToken token, int timeoutMs = 3000)
         {
-            using TcpClient client = new TcpClient(address.AddressFamily);
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(timeoutMs);
-
             try
             {
-                await client.ConnectAsync(address, port, timeout.Token).ConfigureAwait(false);
+                using TcpClient client = await ConnectAsync(address, port, timeout.Token).ConfigureAwait(false);
                 NetworkStream stream = client.GetStream();
                 byte[] payload = Encoding.UTF8.GetBytes(request);
                 await stream.WriteAsync(payload, 0, payload.Length, timeout.Token).ConfigureAwait(false);
@@ -131,6 +129,35 @@ namespace Test.Shared
             builder.Append("Connection: close\r\n\r\n");
             builder.Append(body);
             return builder.ToString();
+        }
+
+        // Connects to the address; a refused loopback connect is retried on the other loopback family, because a
+        // listener bound to "localhost" may listen on only one of them (the managed HttpListener on macOS binds ::1).
+        private static async Task<TcpClient> ConnectAsync(IPAddress address, int port, CancellationToken token)
+        {
+            TcpClient client = new TcpClient(address.AddressFamily);
+            try
+            {
+                await client.ConnectAsync(address, port, token).ConfigureAwait(false);
+                return client;
+            }
+            catch (SocketException refused) when (refused.SocketErrorCode == SocketError.ConnectionRefused && IPAddress.IsLoopback(address))
+            {
+                client.Dispose();
+            }
+
+            IPAddress other = address.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.Loopback : IPAddress.IPv6Loopback;
+            TcpClient fallback = new TcpClient(other.AddressFamily);
+            try
+            {
+                await fallback.ConnectAsync(other, port, token).ConfigureAwait(false);
+                return fallback;
+            }
+            catch
+            {
+                fallback.Dispose();
+                throw;
+            }
         }
     }
 }

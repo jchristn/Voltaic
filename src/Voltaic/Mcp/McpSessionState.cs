@@ -213,7 +213,11 @@ namespace Voltaic.Mcp
         {
             int rate = Limits?.LogMessagesPerSecond ?? LogRatePerSecond;
             McpRateLimiter? limiter = Limiter;
-            return limiter != null ? limiter.TryAcquire(RateLimitKey, "logs", rate) : _LogBucket.TryTake(rate);
+            if (limiter != null) return limiter.TryAcquire(RateLimitKey, "logs", rate);
+            if (rate <= 0) return true;
+            bool allowed = _LogBucket.TryTake(rate);
+            Voltaic.Core.VoltaicInstruments.RateLimitDecision("logs", allowed);
+            return allowed;
         }
 
         // True while any request of this session is running (a running request keeps the session alive).
@@ -275,7 +279,7 @@ namespace Voltaic.Mcp
         internal void StartPinging(int intervalMs, int timeoutMs, int failureThreshold, Action<string> log)
         {
             if (Push == null || !CanPingClient) return;
-            McpPinger? pinger = McpPinger.Start(intervalMs, token => PingAsync(timeoutMs, token), log, () => Terminate?.Invoke(), failureThreshold);
+            McpPinger? pinger = McpPinger.Start(intervalMs, token => PingAsync(timeoutMs, token), log, () => Terminate?.Invoke(), failureThreshold, "server");
             Interlocked.Exchange(ref _Pinger, pinger)?.Dispose();
         }
 

@@ -3087,6 +3087,29 @@
             Returns null when the body is neither.
             </summary>
         </member>
+        <member name="T:Voltaic.A2A.A2ATelemetry">
+            <summary>
+            Maps A2A HTTP+JSON routes and gRPC paths to bounded telemetry labels: the route template (never the raw path,
+            which carries task and configuration IDs) and the A2A method it serves. Thread-safe (stateless).
+            </summary>
+        </member>
+        <member name="M:Voltaic.A2A.A2ATelemetry.RestRouteOf(System.String,System.String,System.String@)">
+            <summary>
+            Returns the route template of an HTTP+JSON task or message path and sets <paramref name="method"/> to the A2A
+            method it serves; <see cref="F:Voltaic.Core.VoltaicTelemetryNames.SpanHttpUnmatchedRoute"/> and null when it is not one.
+            </summary>
+        </member>
+        <member name="M:Voltaic.A2A.A2ATelemetry.RestMethodOf(System.String,System.String)">
+            <summary>
+            Returns the A2A method an HTTP+JSON request path (with or without a query) calls, or <c>_OTHER</c>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.A2A.A2ATelemetry.GrpcMethodOf(System.String)">
+            <summary>
+            Returns the A2A method of a gRPC path (<c>/lf.a2a.v1.A2AService/SendMessage</c> is <c>SendMessage</c>), or
+            <c>_OTHER</c>.
+            </summary>
+        </member>
         <member name="T:Voltaic.A2A.A2AWebhookAddressPolicy">
             <summary>
             Decides whether a push notification webhook may be called, following the A2A security guidance: reject
@@ -4017,6 +4040,12 @@
             Gets or sets protocol state a server keeps for this connection (for example the MCP session state).
             </summary>
         </member>
+        <member name="P:Voltaic.Core.ClientConnection.TelemetryStart">
+            <summary>
+            Gets or sets the <see cref="T:System.Diagnostics.Stopwatch"/> timestamp at which telemetry counted this connection
+            or session as opened, or 0 when it was not counted.
+            </summary>
+        </member>
         <member name="M:Voltaic.Core.ClientConnection.#ctor(System.String,System.Net.Sockets.TcpClient)">
             <summary>
             Initializes a new instance of the <see cref="T:Voltaic.Core.ClientConnection"/> class for TCP connections.
@@ -4319,6 +4348,33 @@
             <summary>
             Writes an authentication failure: the result's status code, its headers (for example
             WWW-Authenticate), CORS for an allowed origin, and the error message as text/plain.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.HttpListenerTelemetry">
+            <summary>
+            The HTTP layer of Voltaic's <see cref="T:System.Net.HttpListener"/>-based servers (MCP HTTP and A2A HTTP), which have no
+            framework telemetry of their own: one <c>Server</c> span per request named <c>{method} {route}</c> that continues
+            an inbound <c>traceparent</c>, and the <see cref="F:Voltaic.Core.VoltaicTelemetryNames.HttpServerRequestDuration"/> histogram
+            labeled with the method, the route template (a configured endpoint path, never the raw path), and the status code.
+            Best-effort; never throws. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.HttpListenerTelemetry.StartRequest(System.Net.HttpListenerRequest,System.String,System.String)">
+            <summary>
+            Starts the request operation, or returns null when nothing listens.
+            </summary>
+            <param name="request">The request.</param>
+            <param name="protocol">The protocol label (<c>mcp</c> or <c>a2a</c>).</param>
+            <param name="route">The route template the request matched, or <see cref="F:Voltaic.Core.VoltaicTelemetryNames.SpanHttpUnmatchedRoute"/>.</param>
+        </member>
+        <member name="M:Voltaic.Core.HttpListenerTelemetry.Finish(Voltaic.Core.VoltaicOperation,System.Net.HttpListenerResponse)">
+            <summary>
+            Records the response status on the operation and ends it. A 5xx status marks the span as an error.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.HttpListenerTelemetry.MethodLabel(System.String)">
+            <summary>
+            The bounded HTTP method label: a standard method, or <c>_OTHER</c>.
             </summary>
         </member>
         <member name="T:Voltaic.Core.IJsonRpcErrorProvider">
@@ -5523,6 +5579,469 @@
             <summary>
             Reads the next dispatched event (one with at least one <c>data</c> field, possibly empty). Returns null when
             the stream ends; an incomplete event at the end of the stream is discarded, as the event stream rules require.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicInstruments">
+            <summary>
+            The meter, activity source, and every instrument Voltaic records on, with best-effort recording helpers. A
+            listener that throws never reaches the caller. Labels passed here must be bounded (see
+            <see cref="T:Voltaic.Core.VoltaicTelemetryNames"/>). Thread-safe.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicOperation">
+            <summary>
+            One instrumented unit of work: a span on the Voltaic activity source, a duration histogram measurement with an
+            outcome, and an optional in-flight counter. <see cref="M:Voltaic.Core.VoltaicOperation.Start(System.Diagnostics.Metrics.Histogram{System.Double},System.Diagnostics.Metrics.UpDownCounter{System.Int64},System.String,System.Diagnostics.ActivityKind,System.Diagnostics.TagList@,System.Diagnostics.ActivityContext)"/> returns null when nothing listens, so callers use
+            the null-conditional operator and pay only the listener check. The outcome is <c>success</c> unless
+            <see cref="M:Voltaic.Core.VoltaicOperation.Fail(System.Exception)"/> or <see cref="M:Voltaic.Core.VoltaicOperation.SetError(System.String,System.String)"/> changes it. Recording is best-effort and never throws.
+            Not thread-safe: one operation belongs to one logical flow.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicOperation.Activity">
+            <summary>
+            Gets the span, or null when no listener samples it.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicOperation.Outcome">
+            <summary>
+            Gets the outcome recorded so far.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.Start(System.Diagnostics.Metrics.Histogram{System.Double},System.Diagnostics.Metrics.UpDownCounter{System.Int64},System.String,System.Diagnostics.ActivityKind,System.Diagnostics.TagList@,System.Diagnostics.ActivityContext)">
+            <summary>
+            Starts an operation, or returns null when telemetry is off or neither the histogram nor the activity source
+            has a listener. The metric labels are <paramref name="tags"/> (bounded values only); they are also set on the
+            span. A <paramref name="parent"/> of default continues <see cref="P:System.Diagnostics.Activity.Current"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.AddMetricTag(System.String,System.String)">
+            <summary>
+            Adds a bounded label to the duration measurement and the span (not to the in-flight counter).
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.SetSpanTag(System.String,System.Object)">
+            <summary>
+            Sets a span attribute only; use for high-cardinality detail such as IDs.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.SetSpanName(System.String)">
+            <summary>
+            Renames the span, for example once the tool name of a <c>tools/call</c> is known.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.SetOutcome(System.String)">
+            <summary>
+            Sets the outcome without marking an error (for example <c>tool_error</c> for a tool result with isError, or
+            <c>rejected</c>).
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.SetError(System.String,System.String)">
+            <summary>
+            Marks the operation failed with an error class (a JSON-RPC error code, an HTTP status code, or an exception
+            type name) and an outcome (default <c>error</c>); the span status becomes Error.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.Fail(System.Exception)">
+            <summary>
+            Marks the operation failed by an exception: <c>cancelled</c> for a cancellation, otherwise <c>error</c>, with
+            <c>error.type</c> from <see cref="M:Voltaic.Core.VoltaicInstruments.ErrorTypeOf(System.Exception)"/>. The span gets an <c>exception</c> event
+            carrying the exception type and stack trace; the message is not recorded, since it may contain caller data.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.Timeout">
+            <summary>
+            Marks the operation timed out.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.Dispose">
+            <summary>
+            Records the duration measurement, releases the in-flight count, and stops the span. Idempotent.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.RecordException(System.Diagnostics.Activity,System.Exception)">
+            <summary>
+            Adds an OpenTelemetry <c>exception</c> event (type and stack trace, no message) to a span.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.FailCall(System.Exception,System.Threading.CancellationToken)">
+            <summary>
+            Marks a failed client call: a cancellation the caller did not request is a timeout; anything else as
+            <see cref="M:Voltaic.Core.VoltaicOperation.Fail(System.Exception)"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.StartClientCall(System.String,System.String,System.String)">
+            <summary>
+            Starts an outbound call operation (span kind Client named after the method, the client duration histogram,
+            and the client in-flight counter), or null when nothing listens.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.StartConnect(System.String,System.String)">
+            <summary>
+            Starts a client connect operation (span <c>{protocol}.{transport} connect</c> and the connect duration
+            histogram), or null when nothing listens.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicOperation.StartSpan(System.String,System.Diagnostics.ActivityKind,System.Diagnostics.ActivityContext)">
+            <summary>
+            Starts a plain internal span (no metrics) for a workflow stage, or returns null when nothing samples it.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicTelemetry">
+            <summary>
+            Process-wide switches for Voltaic's built-in telemetry. Voltaic emits metrics on the
+            <see cref="T:System.Diagnostics.Metrics.Meter"/> named <see cref="F:Voltaic.Core.VoltaicTelemetryNames.MeterName"/> and spans on the
+            <see cref="T:System.Diagnostics.ActivitySource"/> named <see cref="F:Voltaic.Core.VoltaicTelemetryNames.ActivitySourceName"/> (both
+            <c>Voltaic</c>), using only the .NET base class library: it references no OpenTelemetry SDK or exporter and opens no
+            connection. A host collects the data by subscribing to those two names (for example with the OpenTelemetry SDK's
+            <c>AddMeter("Voltaic")</c> and <c>AddSource("Voltaic")</c>, or Radiant's <c>settings.Sources.AddMeter</c> and
+            <c>AddActivitySource</c>). With nothing subscribed, instrumentation costs a listener check per operation and
+            allocates nothing. Telemetry is best-effort: a failure while recording never affects request handling.
+            Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicTelemetry.Enabled">
+            <summary>
+            Gets or sets whether Voltaic records metrics and starts spans. Default is true. When false, no measurement
+            is recorded and no span is started, even when a collector is subscribed; it does not affect protocol
+            behavior. Changes apply to operations that start afterwards. Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicTelemetry.PropagateTraceContext">
+            <summary>
+            Gets or sets whether Voltaic propagates W3C trace context across process boundaries. Default is true. When
+            true and a span is being recorded, Voltaic's HTTP-based clients send the <c>traceparent</c> and
+            <c>tracestate</c> headers, MCP stream clients (stdio, TCP, WebSocket) add them to the request's
+            <c>params._meta</c> (as the OpenTelemetry MCP conventions describe), and A2A push notifications carry the
+            headers to the webhook; servers continue an inbound trace from the same carriers. Plain JSON-RPC clients never
+            alter request parameters. Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicTelemetry.Version">
+            <summary>
+            Gets the Voltaic version reported as the meter and activity source version and on
+            <see cref="F:Voltaic.Core.VoltaicTelemetryNames.BuildInfo"/>, for example <c>2.2.0</c>. Never null.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicTelemetryNames">
+            <summary>
+            Every telemetry name Voltaic emits: the meter and activity source names a host subscribes to, the metric
+            instrument names, the span names, and the attribute (label) keys and well-known values. These strings are a
+            public contract: dashboards and alerts are written against them, so they change only in a major release.
+            See <c>TELEMETRY.md</c> for the full catalog. Thread-safe (constants only).
+            </summary>
+            <remarks>
+            Instrument names are dotted OpenTelemetry-style names. A Prometheus exporter rewrites them to snake case and adds
+            unit and type suffixes, so <c>voltaic.rpc.server.duration</c> (unit <c>s</c>) becomes
+            <c>voltaic_rpc_server_duration_seconds</c> and the counter <c>voltaic.server.sessions.opened</c> becomes
+            <c>voltaic_server_sessions_opened_total</c>.
+            </remarks>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.MeterName">
+            <summary>
+            The name of the <see cref="T:System.Diagnostics.Metrics.Meter"/> every Voltaic metric is recorded on: <c>Voltaic</c>.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ActivitySourceName">
+            <summary>
+            The name of the <see cref="T:System.Diagnostics.ActivitySource"/> every Voltaic span is started on: <c>Voltaic</c>.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.RpcServerDuration">
+            <summary>Histogram (s): duration of one inbound JSON-RPC, MCP, or A2A request or notification, by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.RpcServerActiveRequests">
+            <summary>UpDownCounter ({request}): inbound requests currently being handled.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.RpcServerRejectedMessages">
+            <summary>Counter ({message}): inbound messages rejected before dispatch (parse errors, oversize, invalid framing).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.RpcClientDuration">
+            <summary>Histogram (s): duration of one outbound JSON-RPC, MCP, or A2A call made by a Voltaic client, by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.RpcClientActiveRequests">
+            <summary>UpDownCounter ({request}): outbound calls currently waiting for their response.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ClientConnectDuration">
+            <summary>Histogram (s): duration of a client connect (and, for MCP clients, the initialize handshake), by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ClientConnectionLosses">
+            <summary>Counter ({connection}): client connections lost while calls may have been in flight.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ClientSessionRecoveries">
+            <summary>Counter ({recovery}): MCP Streamable HTTP client session recoveries after a 404, by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ServerSessionsActive">
+            <summary>UpDownCounter ({session}): server-side connections (TCP, stdio, WebSocket) and MCP HTTP sessions currently open.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ServerSessionsOpened">
+            <summary>Counter ({session}): server-side connections and sessions opened.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ServerSessionsClosed">
+            <summary>Counter ({session}): server-side connections and sessions closed, by reason.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ServerSessionsRejected">
+            <summary>Counter ({session}): session requests refused (limit reached, unknown session, missing session, wrong owner), by reason.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ServerSessionDuration">
+            <summary>Histogram (s): lifetime of a server-side connection or session, by close reason.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ServerSessionsLimit">
+            <summary>ObservableGauge ({session}): configured session capacity (<c>MaxSessions</c>) summed over running MCP HTTP servers.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ConnectionQueueDepth">
+            <summary>UpDownCounter ({message}): notifications queued on server-side connections and not yet delivered.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ConnectionQueueDropped">
+            <summary>Counter ({message}): queued notifications discarded because a connection queue was full.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.HttpServerRequestDuration">
+            <summary>Histogram (s): duration of one request on an HttpListener-based server (MCP HTTP, A2A HTTP), by route and status.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.HttpServerActiveRequests">
+            <summary>UpDownCounter ({request}): HTTP requests currently being handled by HttpListener-based servers.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.HttpAccessDenials">
+            <summary>Counter ({request}): HTTP and WebSocket requests refused by the access gates (loopback, origin, authentication, scope), by reason.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpToolDuration">
+            <summary>Histogram (s): duration of one MCP <c>tools/call</c>, by tool and outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpToolStageDuration">
+            <summary>Histogram (s): duration of one stage of an MCP tool call (input validation, execution, output validation).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpSchemaValidations">
+            <summary>Counter ({validation}): JSON Schema validations of tool input and output, by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpRateLimitDecisions">
+            <summary>Counter ({decision}): MCP rate-limit decisions (tool calls, completions, log messages), by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpNotificationsSent">
+            <summary>Counter ({notification}): server-to-client MCP notifications, by method and outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpPings">
+            <summary>Counter ({ping}): MCP keep-alive pings, by side and outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpPingConnectionFailures">
+            <summary>Counter ({connection}): connections closed because the peer stopped answering pings.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpSseStreamsActive">
+            <summary>UpDownCounter ({stream}): open MCP server-sent event streams, by kind.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpSseReplayedEvents">
+            <summary>Counter ({event}): SSE events replayed to a client that resumed with <c>Last-Event-ID</c>.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpSubscriptionsActive">
+            <summary>UpDownCounter ({subscription}): open MCP <c>subscriptions/listen</c> streams.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.McpClientProcessStarts">
+            <summary>Counter ({process}): MCP stdio server processes launched by <c>McpClient</c>, by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2AAgentDuration">
+            <summary>Histogram (s): duration of one A2A agent handler execution, by mode and outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2ATaskTransitions">
+            <summary>Counter ({transition}): A2A task status updates applied, by the new state.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2APushDeliveries">
+            <summary>Counter ({notification}): A2A push notification deliveries, by final outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2APushStageDuration">
+            <summary>Histogram (s): duration of one A2A push notification stage (<c>queued</c>, <c>deliver</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2APushAttemptDuration">
+            <summary>Histogram (s): duration of one HTTP attempt to deliver an A2A push notification, by outcome.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2APushPending">
+            <summary>UpDownCounter ({notification}): A2A push notifications queued or being delivered.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2APushUrlRejections">
+            <summary>Counter ({url}): A2A push notification webhook URLs or addresses refused (SSRF protection), by reason.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.A2APushLastSuccess">
+            <summary>ObservableGauge (s): Unix time of the last successful A2A push notification delivery in this process.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.BuildInfo">
+            <summary>ObservableGauge (no unit): always 1, labeled with the Voltaic version and .NET runtime.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanHttpUnmatchedRoute">
+            <summary>Span: the HTTP layer of one request on an HttpListener-based server is named <c>{method} {route}</c>; this is the route used for unmatched paths.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanStagePrefix">
+            <summary>Span name prefix for a stage of a workflow, as in <c>stage:validate_input</c>.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanA2AAgentExecute">
+            <summary>Span: one A2A agent handler execution.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanA2APushDeliver">
+            <summary>Span: one A2A push notification delivery (all attempts).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanA2APushAttempt">
+            <summary>Span: one HTTP attempt to deliver an A2A push notification.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanMcpLaunchServer">
+            <summary>Span: launching an MCP stdio server process.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanMcpSessionRecover">
+            <summary>Span: an MCP Streamable HTTP client recovering a lost session.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.SpanConnectSuffix">
+            <summary>Span name suffix for a client connect, as in <c>mcp.websocket connect</c>.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrProtocol">
+            <summary>Attribute: the protocol (<c>jsonrpc</c>, <c>mcp</c>, <c>a2a</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrTransport">
+            <summary>Attribute: the transport or binding (<c>tcp</c>, <c>stdio</c>, <c>websocket</c>, <c>http</c>, <c>jsonrpc</c>, <c>http_json</c>, <c>grpc</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrOutcome">
+            <summary>Attribute: the outcome of an operation (for example <c>success</c>, <c>error</c>, <c>cancelled</c>, <c>timeout</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrReason">
+            <summary>Attribute: why something was refused, closed, or dropped.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrKind">
+            <summary>Attribute: a bounded sub-kind (rate-limit kind, stream kind, validation target, agent mode).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrStage">
+            <summary>Attribute: the stage of a workflow or pipeline.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrRole">
+            <summary>Attribute: which side of a connection recorded a measurement (<c>server</c>, <c>client</c>).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrVersion">
+            <summary>Attribute: the Voltaic version (build info).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrRuntime">
+            <summary>Attribute: the .NET runtime description (build info).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrRpcSystem">
+            <summary>Attribute (OpenTelemetry): the RPC system, always <c>jsonrpc</c> for Voltaic spans.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrRpcMethod">
+            <summary>Attribute (OpenTelemetry): the JSON-RPC or A2A method name; unrecognized server-side methods are reported as <c>_OTHER</c>.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrJsonRpcErrorCode">
+            <summary>Attribute (OpenTelemetry): the JSON-RPC error code of a failed request (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrJsonRpcRequestId">
+            <summary>Attribute (OpenTelemetry): the JSON-RPC request ID (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrErrorType">
+            <summary>Attribute (OpenTelemetry): the error class: a JSON-RPC error code, an HTTP status code, or an exception type name.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrMcpMethodName">
+            <summary>Attribute (OpenTelemetry MCP): the MCP method name (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrMcpProtocolVersion">
+            <summary>Attribute (OpenTelemetry MCP): the MCP protocol revision serving the request (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrToolName">
+            <summary>Attribute (OpenTelemetry GenAI): the name of a registered MCP tool.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrPromptName">
+            <summary>Attribute (OpenTelemetry GenAI): the name of an MCP prompt (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrHttpMethod">
+            <summary>Attribute (OpenTelemetry): the HTTP request method.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrHttpRoute">
+            <summary>Attribute (OpenTelemetry): the HTTP route template (a configured endpoint path, never a raw path).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrHttpStatusCode">
+            <summary>Attribute (OpenTelemetry): the HTTP response status code.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrServerAddress">
+            <summary>Attribute (OpenTelemetry): the remote host of an outbound call (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrA2ATaskState">
+            <summary>Attribute (OpenTelemetry): the A2A task state reached by a status update.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrA2ATaskId">
+            <summary>Attribute: the A2A task ID (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.AttrAttempt">
+            <summary>Attribute: the attempt number of a retried operation (spans only).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.OtherValue">
+            <summary>Value of <see cref="F:Voltaic.Core.VoltaicTelemetryNames.AttrRpcMethod"/> and similar labels for names Voltaic does not recognize, which keeps label cardinality bounded.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ProtocolJsonRpc">
+            <summary>Protocol value: plain JSON-RPC 2.0.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ProtocolMcp">
+            <summary>Protocol value: Model Context Protocol.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.ProtocolA2A">
+            <summary>Protocol value: Agent2Agent.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.TransportTcp">
+            <summary>Transport value: TCP.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.TransportStdio">
+            <summary>Transport value: standard input and output.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.TransportWebSocket">
+            <summary>Transport value: WebSocket.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.TransportHttp">
+            <summary>Transport value: HTTP (MCP Streamable HTTP and the legacy <c>/rpc</c> and <c>/events</c> endpoints).</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.TransportA2AJsonRpc">
+            <summary>Transport value: the A2A JSON-RPC binding.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.TransportA2AHttpJson">
+            <summary>Transport value: the A2A HTTP+JSON (REST) binding.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.TransportA2AGrpc">
+            <summary>Transport value: the A2A gRPC binding.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.OutcomeSuccess">
+            <summary>Outcome value: the operation succeeded.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.OutcomeError">
+            <summary>Outcome value: the operation failed.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.OutcomeCancelled">
+            <summary>Outcome value: the operation was cancelled by the caller or the peer.</summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTelemetryNames.OutcomeTimeout">
+            <summary>Outcome value: the operation timed out.</summary>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicTraceContext">
+            <summary>
+            W3C trace context propagation for Voltaic's transports: HTTP headers for HTTP-based clients and servers, and
+            <c>params._meta.traceparent</c>/<c>tracestate</c> for MCP stream transports (the OpenTelemetry MCP convention).
+            Uses <see cref="P:System.Diagnostics.DistributedContextPropagator.Current"/>, so a host's propagator choice applies. Every method is
+            best-effort and never throws. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicTraceContext.Extract(System.Func{System.String,System.String})">
+            <summary>
+            Reads a parent context from carrier fields (for example HTTP request headers); default when absent or invalid.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicTraceContext.ExtractFromMeta(System.Nullable{System.Text.Json.JsonElement})">
+            <summary>
+            Reads a parent context from an MCP request's <c>params._meta</c> object; default when absent or invalid.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicTraceContext.Inject(System.Net.Http.HttpRequestMessage,System.Diagnostics.Activity)">
+            <summary>
+            Adds <c>traceparent</c>/<c>tracestate</c> for <paramref name="activity"/> (or the current activity) to an
+            outbound HTTP request, unless the request already carries them.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicTraceContext.InjectIntoMeta(System.Object,System.Diagnostics.Activity)">
+            <summary>
+            Returns MCP request parameters that carry <paramref name="activity"/>'s context in <c>_meta</c>, or the
+            parameters unchanged when there is no span, propagation is off, or they are not a JSON object. Existing
+            <c>_meta</c> fields are kept, and a <c>traceparent</c> the caller set is never replaced.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicTraceContext.RunDetached(System.Func{System.Threading.Tasks.Task})">
+            <summary>
+            Starts long-running background work (a receive loop, a cleanup loop) without the current span, so the work
+            it does later is never attributed to whatever operation happened to start it.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.JsonValueInfo">
@@ -8382,6 +8901,17 @@
             governing protocol version. Thread-safe.
             </summary>
         </member>
+        <member name="M:Voltaic.Mcp.McpMessageProcessor.#ctor(Voltaic.Mcp.McpEndpoint,System.Collections.Generic.IDictionary{System.String,System.Func{Voltaic.Core.RpcParameters,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Object}}},System.Action{System.String},System.String)">
+            <param name="endpoint">The MCP endpoint that serves tools, resources, and prompts.</param>
+            <param name="methods">The server's method handlers.</param>
+            <param name="log">The server's log sink.</param>
+            <param name="transport">The telemetry transport label (<see cref="F:Voltaic.Core.VoltaicTelemetryNames.TransportStdio"/>, <c>tcp</c>, <c>websocket</c>, or <c>http</c>).</param>
+        </member>
+        <member name="P:Voltaic.Mcp.McpMessageProcessor.Transport">
+            <summary>
+            Gets the telemetry transport label of the server this processor belongs to.
+            </summary>
+        </member>
         <member name="P:Voltaic.Mcp.McpMessageProcessor.RequestReceived">
             <summary>
             Gets or sets a callback raised for every well-formed request or notification before it is handled.
@@ -8502,7 +9032,7 @@
             Thread-safe; dispose to stop.
             </summary>
         </member>
-        <member name="M:Voltaic.Mcp.McpPinger.Start(System.Int32,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Boolean}},System.Action{System.String},System.Action,System.Int32)">
+        <member name="M:Voltaic.Mcp.McpPinger.Start(System.Int32,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Boolean}},System.Action{System.String},System.Action,System.Int32,System.String)">
             <summary>
             Starts pinging every <paramref name="intervalMs"/> milliseconds, or returns null when the interval is 0.
             </summary>
@@ -8511,6 +9041,7 @@
             <param name="log">Receives a message when a ping is not answered.</param>
             <param name="onFailure">Called when the connection is treated as failed, or null.</param>
             <param name="failureThreshold">Consecutive failed pings that make the connection failed; 0 only logs.</param>
+            <param name="role">The telemetry role label: <c>client</c> (default) or <c>server</c>.</param>
         </member>
         <member name="M:Voltaic.Mcp.McpPinger.Dispose">
             <summary>
@@ -10432,6 +10963,17 @@
             Gets the subscription ID: the JSON-RPC ID of the <c>subscriptions/listen</c> request.
             </summary>
         </member>
+        <member name="P:Voltaic.Mcp.McpSubscription.Acknowledged">
+            <summary>
+            Gets a task that completes once the acknowledgment was written (or the subscription ended), so notifications
+            never overtake it.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpSubscription.MarkAcknowledged">
+            <summary>
+            Releases notifications held back until the acknowledgment was written.
+            </summary>
+        </member>
         <member name="M:Voltaic.Mcp.McpSubscription.Wants(System.String,System.String)">
             <summary>
             Gets whether the subscription asked for this notification: a list change of the kind, or an update of a
@@ -11319,6 +11861,44 @@
             </summary>
             <param name="context">The context to make ambient, or null to clear it.</param>
             <returns>A token that restores the previous context when disposed.</returns>
+        </member>
+        <member name="T:Voltaic.Mcp.McpToolCallTelemetry">
+            <summary>
+            Telemetry for one <c>tools/call</c>: the registered tool name (once known), the outcome the call reached, and
+            stage operations (<c>validate_input</c>, <c>execute</c>, <c>validate_output</c>). Records
+            <see cref="F:Voltaic.Core.VoltaicTelemetryNames.McpToolDuration"/> when the call ends and names the enclosing <c>tools/call</c>
+            server span after the tool. Not thread-safe: one instance belongs to one call.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpToolCallTelemetry.Begin">
+            <summary>
+            Starts tool call telemetry, or returns null when telemetry is off or nothing listens.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Mcp.McpToolCallTelemetry.Outcome">
+            <summary>
+            Gets the outcome set so far, or null while the call is on its success path.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpToolCallTelemetry.SetTool(System.String)">
+            <summary>
+            Records the registered tool the call resolved to and names the enclosing server span after it.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpToolCallTelemetry.SetOutcome(System.String,System.String)">
+            <summary>
+            Sets the outcome; an error type marks the call failed.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpToolCallTelemetry.StartStage(System.String)">
+            <summary>
+            Starts a stage operation (span <c>stage:{stage}</c> and the stage duration histogram), or null.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpToolCallTelemetry.Finish">
+            <summary>
+            Records the call's duration with its tool and outcome.
+            </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpToolException">
             <summary>

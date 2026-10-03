@@ -52,11 +52,22 @@ namespace Voltaic.Mcp
 
             McpSubscription subscription = ParseFilter(args, subscriptionId, scope.Notify);
 
-            // The acknowledgment is the first message of the subscription; notifications follow only after it.
-            await subscription.SendAsync("notifications/subscriptions/acknowledged", new Dictionary<string, object?>(StringComparer.Ordinal) { { "notifications", subscription.Filter() } }, token).ConfigureAwait(false);
+            // The acknowledgment is the first message of the subscription; notifications follow only after it. The
+            // subscription is active before the acknowledgment is written, so a change made as soon as the client reads
+            // the acknowledgment is never missed; notifications for it wait until the acknowledgment is out.
             _Active[subscription] = 0;
+            VoltaicInstruments.Subscription(1);
             try
             {
+                try
+                {
+                    await subscription.SendAsync("notifications/subscriptions/acknowledged", new Dictionary<string, object?>(StringComparer.Ordinal) { { "notifications", subscription.Filter() } }, token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    subscription.MarkAcknowledged();
+                }
+
                 using (CancellationTokenSource ended = CancellationTokenSource.CreateLinkedTokenSource(token, _Closing.Token))
                 {
                     try
@@ -77,7 +88,7 @@ namespace Voltaic.Mcp
             }
             finally
             {
-                _Active.TryRemove(subscription, out byte _);
+                if (_Active.TryRemove(subscription, out byte _)) VoltaicInstruments.Subscription(-1);
             }
         }
 
@@ -135,10 +146,16 @@ namespace Voltaic.Mcp
             {
                 // Each subscription gets its own parameters, since the tag differs.
                 Dictionary<string, object?>? copy = parameters == null ? null : new Dictionary<string, object?>(parameters, StringComparer.Ordinal);
-                sends.Add(subscription.SendAsync(method, copy, token));
+                sends.Add(SendAfterAcknowledgmentAsync(subscription, method, copy, token));
             }
 
             await Task.WhenAll(sends).ConfigureAwait(false);
+        }
+
+        private static async Task SendAfterAcknowledgmentAsync(McpSubscription subscription, string method, Dictionary<string, object?>? parameters, CancellationToken token)
+        {
+            await subscription.Acknowledged.ConfigureAwait(false);
+            await subscription.SendAsync(method, parameters, token).ConfigureAwait(false);
         }
 
         // The filter the server honors: list changes when it sends them, resource updates when it supports resource

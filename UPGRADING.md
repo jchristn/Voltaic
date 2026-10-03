@@ -4,6 +4,16 @@ Behavior changes that may need action when upgrading, newest first. Each table l
 
 v2.1.1 needs no action (see the README's [Specification conformance](README.md#specification-conformance) section).
 
+## Upgrading to v2.2.0
+
+v2.2.0 adds telemetry and needs no code changes. These cases may need attention:
+
+| Change | Who is affected | What to do |
+|---|---|---|
+| Voltaic records metrics and spans on the `Voltaic` meter and activity source | Hosts that subscribe to every meter or source (for example `AddMeter("*")`) | Expect the new series and spans; see [TELEMETRY.md](TELEMETRY.md). Set `VoltaicTelemetry.Enabled = false` to turn them off. |
+| MCP stdio, TCP, and WebSocket clients add `traceparent`/`tracestate` to `params._meta` while a span is recorded | Servers that reject unknown `_meta` keys, or tests that compare request JSON while a tracer listens to `Voltaic` | Set `VoltaicTelemetry.PropagateTraceContext = false`. |
+| HTTP clients add `traceparent`/`tracestate` headers while a span is recorded | Servers or proxies that reject unknown headers | Set `VoltaicTelemetry.PropagateTraceContext = false`. |
+
 ## Upgrading to v2.1.13
 
 v2.1.13 closes the gaps a review of v2.1.12 found. These cases need attention:

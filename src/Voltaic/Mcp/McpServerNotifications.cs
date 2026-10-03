@@ -103,6 +103,7 @@ namespace Voltaic.Mcp
             }
 
             await request.Notify(notification, token).ConfigureAwait(false);
+            VoltaicInstruments.NotificationSent(notification.Method, true);
             return true;
         }
 
@@ -126,21 +127,23 @@ namespace Voltaic.Mcp
             {
                 Func<string, CancellationToken, Task>? push = session.Push;
                 if (push == null) continue;
-                sends.Add(SafePushAsync(push, McpMessageProcessor.SerializeNotification(notification, session), token));
+                sends.Add(SafePushAsync(push, McpMessageProcessor.SerializeNotification(notification, session), notification.Method, token));
             }
 
             await Task.WhenAll(sends).ConfigureAwait(false);
         }
 
-        private static async Task SafePushAsync(Func<string, CancellationToken, Task> push, string json, CancellationToken token)
+        private static async Task SafePushAsync(Func<string, CancellationToken, Task> push, string json, string? method, CancellationToken token)
         {
             try
             {
                 await push(json, token).ConfigureAwait(false);
+                VoltaicInstruments.NotificationSent(method, true);
             }
             catch
             {
                 // The connection may have closed.
+                VoltaicInstruments.NotificationSent(method, false);
             }
         }
     }

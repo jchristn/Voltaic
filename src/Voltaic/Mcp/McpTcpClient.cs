@@ -263,6 +263,10 @@ namespace Voltaic.Mcp
             }, LogMessage, () => Task.Run(() => Disconnect()), _PingFailureThreshold);
         }
 
+        private protected override string TelemetryProtocol => VoltaicTelemetryNames.ProtocolMcp;
+
+        private protected override bool PropagatesTraceContext => true;
+
         private protected override void OnDisconnected()
         {
             _Pinger?.Dispose();

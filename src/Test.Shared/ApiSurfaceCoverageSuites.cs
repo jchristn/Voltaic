@@ -112,6 +112,8 @@ namespace Test.Shared
                             "Voltaic.Core.RpcCallContext",
                             "Voltaic.Core.RpcMethodInvocation",
                             "Voltaic.Core.RpcParameters",
+                            "Voltaic.Core.VoltaicTelemetry",
+                            "Voltaic.Core.VoltaicTelemetryNames",
                             "Voltaic.Mcp.McpAnnotations",
                             "Voltaic.Mcp.McpAudioContent",
                             "Voltaic.Mcp.McpBlobResourceContents",

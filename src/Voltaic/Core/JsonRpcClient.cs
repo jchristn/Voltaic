@@ -120,8 +120,10 @@ namespace Voltaic.Core
         /// </summary>
         public JsonRpcClient()
         {
+            VoltaicInstruments.EnsureCreated();
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
             _RequestDispatcher.Log = LogMessage;
+            _RequestDispatcher.TelemetryProtocol = TelemetryProtocol;
         }
 
         /// <summary>
@@ -136,6 +138,8 @@ namespace Voltaic.Core
             if (String.IsNullOrEmpty(host)) throw new ArgumentNullException(nameof(host));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
 
+            using VoltaicOperation? operation = VoltaicOperation.StartConnect(TelemetryProtocol, VoltaicTelemetryNames.TransportTcp);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrServerAddress, host);
             try
             {
                 Disconnect();
@@ -145,7 +149,8 @@ namespace Voltaic.Core
                 _Stream = _TcpClient.GetStream();
 
                 _TokenSource = new CancellationTokenSource();
-                _ReceiveTask = Task.Run(() => ReceiveLoop(_TokenSource.Token));
+                CancellationToken receiveToken = _TokenSource.Token;
+                _ReceiveTask = VoltaicTraceContext.RunDetached(() => ReceiveLoop(receiveToken));
 
                 Interlocked.Increment(ref _ConnectionGeneration);
                 _IsConnected = true;
@@ -156,6 +161,7 @@ namespace Voltaic.Core
 
                 if (!await OnConnectedAsync(token).ConfigureAwait(false))
                 {
+                    operation?.SetError("initialize_failed");
                     Disconnect();
                     return false;
                 }
@@ -164,6 +170,7 @@ namespace Voltaic.Core
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 LogMessage($"Connection failed: {ex.Message}");
                 _IsConnected = false;
                 return false;
@@ -186,11 +193,13 @@ namespace Voltaic.Core
             if (!IsConnected)
                 throw new InvalidOperationException("Client is not connected");
 
+            using VoltaicOperation? operation = VoltaicOperation.StartClientCall(TelemetryProtocol, VoltaicTelemetryNames.TransportTcp, method);
             int id = Interlocked.Increment(ref _RequestIdCounter);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcRequestId, id);
             JsonRpcRequest request = new JsonRpcRequest
             {
                 Method = method,
-                Params = parameters,
+                Params = PropagatesTraceContext ? VoltaicTraceContext.InjectIntoMeta(parameters, operation?.Activity) : parameters,
                 Id = id
             };
 
@@ -224,6 +233,8 @@ namespace Voltaic.Core
 
                     if (response.Error != null)
                     {
+                        operation?.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcErrorCode, response.Error.Code);
+                        operation?.SetError(VoltaicInstruments.CodeLabel(response.Error.Code));
                         throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
                     }
 
@@ -239,6 +250,11 @@ namespace Voltaic.Core
 
                     return (T)Convert.ChangeType(response.Result, typeof(T));
                 }
+            }
+            catch (Exception ex)
+            {
+                operation?.FailCall(ex, token);
+                throw;
             }
             finally
             {
@@ -379,6 +395,12 @@ namespace Voltaic.Core
                 }
             }
         }
+
+        // The telemetry protocol label of this client's calls.
+        private protected virtual string TelemetryProtocol => VoltaicTelemetryNames.ProtocolJsonRpc;
+
+        // True when calls carry the W3C trace context in params._meta (MCP clients only; plain JSON-RPC params are never altered).
+        private protected virtual bool PropagatesTraceContext => false;
 
         private async Task ReceiveLoop(CancellationToken token)
         {
@@ -652,6 +674,7 @@ namespace Voltaic.Core
         // Fails every call still waiting for a response, because the connection they were sent on is gone.
         private void FailPendingRequests()
         {
+            VoltaicInstruments.ConnectionLost(TelemetryProtocol, VoltaicTelemetryNames.TransportTcp);
             foreach (ClientPendingRequest pending in _PendingRequests.Values)
             {
                 pending.TaskCompletionSource.TrySetException(new IOException("The connection closed before the response arrived."));

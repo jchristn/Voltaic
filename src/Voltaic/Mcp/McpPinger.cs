@@ -15,9 +15,19 @@ namespace Voltaic.Mcp
         private readonly CancellationTokenSource _Stop = new CancellationTokenSource();
         private int _Disposed;
 
-        private McpPinger(int intervalMs, Func<CancellationToken, Task<bool>> ping, Action<string> log, Action? onFailure, int failureThreshold)
+        private McpPinger(int intervalMs, Func<CancellationToken, Task<bool>> ping, Action<string> log, Action? onFailure, int failureThreshold, string role)
         {
-            _ = Task.Run(() => LoopAsync(intervalMs, ping, log, onFailure, failureThreshold, _Stop.Token));
+            // The ping loop is background work of the connection, not of whatever span started it.
+            System.Diagnostics.Activity? previous = System.Diagnostics.Activity.Current;
+            System.Diagnostics.Activity.Current = null;
+            try
+            {
+                _ = Task.Run(() => LoopAsync(intervalMs, ping, log, onFailure, failureThreshold, role, _Stop.Token));
+            }
+            finally
+            {
+                System.Diagnostics.Activity.Current = previous;
+            }
         }
 
         /// <summary>
@@ -28,10 +38,11 @@ namespace Voltaic.Mcp
         /// <param name="log">Receives a message when a ping is not answered.</param>
         /// <param name="onFailure">Called when the connection is treated as failed, or null.</param>
         /// <param name="failureThreshold">Consecutive failed pings that make the connection failed; 0 only logs.</param>
-        internal static McpPinger? Start(int intervalMs, Func<CancellationToken, Task<bool>> ping, Action<string> log, Action? onFailure = null, int failureThreshold = 1)
+        /// <param name="role">The telemetry role label: <c>client</c> (default) or <c>server</c>.</param>
+        internal static McpPinger? Start(int intervalMs, Func<CancellationToken, Task<bool>> ping, Action<string> log, Action? onFailure = null, int failureThreshold = 1, string role = "client")
         {
             if (intervalMs <= 0) return null;
-            return new McpPinger(intervalMs, ping, log, onFailure, failureThreshold);
+            return new McpPinger(intervalMs, ping, log, onFailure, failureThreshold, role);
         }
 
         /// <summary>
@@ -49,7 +60,7 @@ namespace Voltaic.Mcp
             }
         }
 
-        private static async Task LoopAsync(int intervalMs, Func<CancellationToken, Task<bool>> ping, Action<string> log, Action? onFailure, int failureThreshold, CancellationToken token)
+        private static async Task LoopAsync(int intervalMs, Func<CancellationToken, Task<bool>> ping, Action<string> log, Action? onFailure, int failureThreshold, string role, CancellationToken token)
         {
             int failures = 0;
             while (!token.IsCancellationRequested)
@@ -59,6 +70,7 @@ namespace Voltaic.Mcp
                 {
                     await Task.Delay(intervalMs, token).ConfigureAwait(false);
                     answered = await ping(token).ConfigureAwait(false);
+                    Voltaic.Core.VoltaicInstruments.Ping(role, answered ? "answered" : "unanswered");
                     if (!answered) log("The other side did not answer ping in time.");
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -67,6 +79,7 @@ namespace Voltaic.Mcp
                 }
                 catch (Exception ex)
                 {
+                    Voltaic.Core.VoltaicInstruments.Ping(role, "failed");
                     log($"Ping failed: {ex.Message}");
                     answered = false;
                 }
@@ -76,6 +89,7 @@ namespace Voltaic.Mcp
                 {
                     // Ping timeouts are connection failures (MCP ping utility): the owner closes the connection.
                     log($"Treating the connection as failed after {failures} unanswered ping(s).");
+                    Voltaic.Core.VoltaicInstruments.PingConnectionFailure(role);
                     try
                     {
                         onFailure?.Invoke();

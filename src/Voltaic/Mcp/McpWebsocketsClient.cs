@@ -89,7 +89,7 @@ namespace Voltaic.Mcp
         private string _ClientName = "Voltaic.Mcp.WebsocketsClient";
         private string _ClientVersion = "1.0.0";
         private JsonElement? _InitializeResult;
-        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true, TelemetryProtocol = VoltaicTelemetryNames.ProtocolMcp, TelemetryTransport = VoltaicTelemetryNames.TransportWebSocket };
         private readonly ProgressTracker _ProgressTracker = new ProgressTracker { Enabled = true };
         private int _InitializeTimeoutMs = 30000;
         private int _PingIntervalMs = 30000;
@@ -103,6 +103,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public McpWebsocketsClient()
         {
+            VoltaicInstruments.EnsureCreated();
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
             _RequestDispatcher.Log = LogMessage;
             _RequestDispatcher.AcceptsBatches = () => McpClientHandshake.AllowsBatches(_ProtocolVersion);
@@ -141,6 +142,7 @@ namespace Voltaic.Mcp
         {
             if (String.IsNullOrEmpty(url)) throw new ArgumentNullException(nameof(url));
 
+            using VoltaicOperation? operation = VoltaicOperation.StartConnect(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket);
             try
             {
                 Disconnect();
@@ -159,7 +161,8 @@ namespace Voltaic.Mcp
                 await _WebSocket.ConnectAsync(uri, token).ConfigureAwait(false);
 
                 _TokenSource = new CancellationTokenSource();
-                _ReceiveTask = Task.Run(() => ReceiveLoop(_TokenSource.Token));
+                CancellationToken receiveToken = _TokenSource.Token;
+                _ReceiveTask = VoltaicTraceContext.RunDetached(() => ReceiveLoop(receiveToken));
 
                 Interlocked.Increment(ref _ConnectionGeneration);
                 _InitializeResult = null;
@@ -177,6 +180,7 @@ namespace Voltaic.Mcp
                     }
                     catch (Exception ex)
                     {
+                        operation?.Fail(ex);
                         LogMessage($"MCP initialize failed: {ex.Message}");
                         Disconnect();
                         return false;
@@ -187,6 +191,7 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 LogMessage($"Connection failed: {ex.Message}");
                 _IsConnected = false;
                 return false;
@@ -226,11 +231,13 @@ namespace Voltaic.Mcp
             if (!IsConnected)
                 throw new InvalidOperationException("WebSocket client is not connected");
 
+            using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket, method);
             int id = Interlocked.Increment(ref _RequestIdCounter);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcRequestId, id);
             JsonRpcRequest request = new JsonRpcRequest
             {
                 Method = method,
-                Params = parameters,
+                Params = VoltaicTraceContext.InjectIntoMeta(parameters, operation?.Activity),
                 Id = id
             };
 
@@ -264,6 +271,8 @@ namespace Voltaic.Mcp
 
                     if (response.Error != null)
                     {
+                        operation?.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcErrorCode, response.Error.Code);
+                        operation?.SetError(VoltaicInstruments.CodeLabel(response.Error.Code));
                         throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
                     }
 
@@ -279,6 +288,11 @@ namespace Voltaic.Mcp
 
                     return (T)Convert.ChangeType(response.Result, typeof(T));
                 }
+            }
+            catch (Exception ex)
+            {
+                operation?.FailCall(ex, token);
+                throw;
             }
             finally
             {
@@ -842,6 +856,7 @@ namespace Voltaic.Mcp
         // Fails every call still waiting for a response, because the connection they were sent on is gone.
         private void FailPendingRequests()
         {
+            VoltaicInstruments.ConnectionLost(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportWebSocket);
             foreach (ClientPendingRequest pending in _PendingRequests.Values)
             {
                 pending.TaskCompletionSource.TrySetException(new IOException("The connection closed before the response arrived."));

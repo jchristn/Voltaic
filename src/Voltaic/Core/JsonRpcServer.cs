@@ -3,6 +3,7 @@ namespace Voltaic.Core
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Net;
@@ -120,6 +121,7 @@ namespace Voltaic.Core
         /// <exception cref="ArgumentOutOfRangeException">Thrown when the port is invalid.</exception>
         public JsonRpcServer(IPAddress ip, int port, bool includeDiagnosticMethods = false)
         {
+            VoltaicInstruments.EnsureCreated();
             if (ip == null) throw new ArgumentNullException(nameof(ip));
             if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
 
@@ -386,6 +388,11 @@ namespace Voltaic.Core
             ClientConnection client = new ClientConnection(clientId, tcpClient);
             client.MaxQueueSize = _MaxQueueSize;
 
+            // A connection's work never inherits the span that was current when the server started.
+            Activity.Current = null;
+            long sessionStart = VoltaicInstruments.SessionOpened(TelemetryProtocol, VoltaicTelemetryNames.TransportTcp);
+            string closeReason = "client_closed";
+
             try
             {
                 _Clients.TryAdd(clientId, client);
@@ -450,10 +457,13 @@ namespace Voltaic.Core
             }
             catch (Exception ex)
             {
+                closeReason = token.IsCancellationRequested ? "server_stopped" : "error";
                 LogMessage($"Client {clientId} error: {ex.Message}");
             }
             finally
             {
+                if (closeReason == "client_closed" && token.IsCancellationRequested) closeReason = "server_stopped";
+                VoltaicInstruments.SessionClosed(TelemetryProtocol, VoltaicTelemetryNames.TransportTcp, closeReason, sessionStart);
                 _Clients.TryRemove(clientId, out _);
                 OnClientDisconnected(client);
                 RaiseClientDisconnected(client);
@@ -500,6 +510,7 @@ namespace Voltaic.Core
                     if (discarding)
                     {
                         discarding = false;
+                        VoltaicInstruments.RejectedMessage(TelemetryProtocol, VoltaicTelemetryNames.TransportTcp, "too_large");
                         LogMessage($"Skipped a message from {client.SessionId} larger than MaxMessageSize ({_MaxMessageSize} bytes).");
                         await WriteToClientAsync(client, TooLargeError(client, _MaxMessageSize), token).ConfigureAwait(false);
                         continue;
@@ -512,6 +523,7 @@ namespace Voltaic.Core
                     string trimmed = text.TrimStart();
                     if (!trimmed.StartsWith("{", StringComparison.Ordinal) && !trimmed.StartsWith("[", StringComparison.Ordinal) && !IsJsonValue(trimmed))
                     {
+                        VoltaicInstruments.RejectedMessage(TelemetryProtocol, VoltaicTelemetryNames.TransportTcp, "invalid_framing");
                         LogMessage($"Closing {client.SessionId}: a line is not a JSON message.");
                         return;
                     }
@@ -552,6 +564,9 @@ namespace Voltaic.Core
 
         // The connected clients.
         private protected IEnumerable<ClientConnection> ConnectedClients => _Clients.Values;
+
+        // The telemetry protocol label of this server's connections and requests.
+        private protected virtual string TelemetryProtocol => VoltaicTelemetryNames.ProtocolJsonRpc;
 
         // Derived servers may accept newline-delimited JSON in addition to Content-Length framing.
         private protected virtual bool AcceptNewlineFraming => false;
@@ -618,6 +633,7 @@ namespace Voltaic.Core
         private async Task ProcessRequestAsync(ClientConnection client, string requestString, CancellationToken token = default)
         {
             ServerPendingRequest? pendingRequest = null;
+            VoltaicOperation? operation = null;
 
             try
             {
@@ -626,6 +642,7 @@ namespace Voltaic.Core
                 JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString, JsonLimits.Serializer);
                 if (request == null)
                 {
+                    VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolJsonRpc, VoltaicTelemetryNames.TransportTcp, "invalid_request");
                     JsonRpcResponse invalidResponse = new JsonRpcResponse
                     {
                         Error = JsonRpcError.InvalidRequest(),
@@ -637,6 +654,7 @@ namespace Voltaic.Core
 
                 pendingRequest = new ServerPendingRequest(request.Id, client, request);
                 RaiseRequestReceived(pendingRequest);
+                operation = StartRequestOperation(request);
 
                 JsonRpcResponse response;
 
@@ -655,6 +673,7 @@ namespace Voltaic.Core
                     }
                     catch (Exception ex)
                     {
+                        VoltaicOperation.RecordException(operation?.Activity, ex);
                         JsonRpcError error = ex is IJsonRpcErrorProvider protocolException
                             ? protocolException.ToJsonRpcError()
                             : new JsonRpcError
@@ -680,6 +699,8 @@ namespace Voltaic.Core
                     };
                 }
 
+                if (response.Error != null) operation?.SetError(VoltaicInstruments.CodeLabel(response.Error.Code));
+
                 // Only send response if request has an id (not a notification)
                 if (request.Id != null)
                 {
@@ -688,6 +709,8 @@ namespace Voltaic.Core
             }
             catch (Exception ex)
             {
+                if (operation != null) operation.Fail(ex);
+                else VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolJsonRpc, VoltaicTelemetryNames.TransportTcp, "parse_error");
                 LogMessage($"Error processing request: {ex.Message}");
                 JsonRpcResponse errorResponse = new JsonRpcResponse
                 {
@@ -696,6 +719,27 @@ namespace Voltaic.Core
                 };
                 await SendResponseAsync(client, null, errorResponse, token).ConfigureAwait(false);
             }
+            finally
+            {
+                operation?.Dispose();
+            }
+        }
+
+        private VoltaicOperation? StartRequestOperation(JsonRpcRequest request)
+        {
+            if (!VoltaicTelemetry.Enabled) return null;
+            string method = VoltaicInstruments.ServerMethodLabel(request.Method, name => _Methods.ContainsKey(name));
+            TagList tags = new TagList
+            {
+                { VoltaicTelemetryNames.AttrProtocol, VoltaicTelemetryNames.ProtocolJsonRpc },
+                { VoltaicTelemetryNames.AttrTransport, VoltaicTelemetryNames.TransportTcp },
+                { VoltaicTelemetryNames.AttrRpcMethod, method }
+            };
+
+            VoltaicOperation? operation = VoltaicOperation.Start(VoltaicInstruments.RpcServerDuration, VoltaicInstruments.RpcServerActive, method, ActivityKind.Server, tags);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrRpcSystem, "jsonrpc");
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcRequestId, request.Id?.ToString());
+            return operation;
         }
 
         private async Task SendResponseAsync(ClientConnection client, ServerPendingRequest? pendingRequest, JsonRpcResponse response, CancellationToken token = default)

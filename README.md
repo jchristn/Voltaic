@@ -10,7 +10,7 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v2.1.13 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Voltaic v2.2.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 An `initialize` handshake negotiates at most the newest handshake-era revision, `2025-11-25` (configurable with `MaximumHandshakeProtocolVersion`), because the stateless `2026-07-28` revision defines no `initialize` and no sessions. Clients reach `2026-07-28` through the stateless request path instead: `server/discover` followed by per-request `MCP-Protocol-Version`, `Mcp-Method`, and `_meta` signals. That is how current clients such as Claude Code 2.1.x connect, and Voltaic's stateless responses carry the `resultType`, `ttlMs`, and `cacheScope` fields the revision requires. Version selection is driven by the `McpProtocol` registry and `McpVersionResolver`, and it behaves identically with or without an `AuthenticationHandler`. See [Protocol version negotiation](#protocol-version-negotiation).
 
@@ -43,7 +43,8 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Host Voltaic's own request/response endpoints (`/rpc` and `/events`) alongside the Streamable HTTP endpoint (`/mcp`). They are a Voltaic convenience, not the deprecated 2024-11-05 HTTP+SSE transport.
 - Expose and consume A2A agents through dependency-light `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2AHttpServer`, and `A2AGrpcServer` classes without ASP.NET Core.
 - Answer MCP requests from handshake-era and stateless `2026-07-28` clients on the same server, on every transport, including Multi Round-Trip input requests from tool handlers.
-- Run the same 838-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+- Emit OpenTelemetry-compatible metrics and traces for every server, client, tool call, session, limiter, A2A agent run, and push delivery on the `Voltaic` meter and activity source, with W3C trace propagation across every transport and no new dependencies. See [Observability](#observability).
+- Run the same 853-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
 
 ## MCP Endpoint Requirements
 
@@ -1136,6 +1137,32 @@ Console.WriteLine(result);
 
 ---
 
+## Observability
+
+Voltaic measures itself through the .NET base class library: a `Meter` and an `ActivitySource`, both named `Voltaic`. It adds no package dependency and opens no connection; your host subscribes and exports. With nothing subscribed, instrumentation costs a listener check per operation.
+
+```csharp
+// OpenTelemetry SDK
+Sdk.CreateMeterProviderBuilder().AddMeter("Voltaic").AddOtlpExporter().Build();
+Sdk.CreateTracerProviderBuilder().AddSource("Voltaic").AddOtlpExporter().Build();
+
+// or Radiant
+RadiantSettings settings = new RadiantSettings("my-service");
+settings.Sources.AddMeter("Voltaic");
+settings.Sources.AddActivitySource("Voltaic");
+using RadiantHost host = RadiantHost.Start(settings);
+```
+
+What you get:
+
+- **Every request and call:** `voltaic.rpc.server.duration` and `voltaic.rpc.client.duration` by protocol (`jsonrpc`, `mcp`, `a2a`), transport, method, outcome, and `error.type`, with a `Server` or `Client` span per request.
+- **MCP tool calls by stage:** `voltaic.mcp.tool.duration` by tool and outcome (`tool_error`, `invalid_arguments`, `rate_limited`, `handler_exception`, ...) and `stage:validate_input`, `stage:execute`, `stage:validate_output` spans and histograms.
+- **HTTP, sessions, and gates:** the HTTP layer of `McpHttpServer` and `A2AHttpServer` by route template and status, sessions opened and closed by reason against `MaxSessions`, access denials by reason, rate-limit decisions, queue drops, pings, notifications.
+- **A2A:** agent runs, task transitions, and the push notification pipeline (`queued` and `deliver` stages, attempts, outcomes, last success, SSRF refusals). `A2AGrpcServer` keeps Watson's own HTTP/2 telemetry on and nests its spans under it.
+- **One trace across processes:** `traceparent` travels in HTTP headers and, on MCP stdio, TCP, and WebSocket, in `params._meta`.
+
+Labels are bounded (no IDs, paths, or free text), spans never carry payloads, exception messages, or credentials, and a failing listener never affects a request. `VoltaicTelemetry.Enabled` and `VoltaicTelemetry.PropagateTraceContext` switch it off. [TELEMETRY.md](TELEMETRY.md) has the full metrics and spans catalog, PromQL alerts, and a dashboard layout.
+
 ## Security defaults
 
 Voltaic servers usually run on a developer workstation or next to data they expose, often without authentication. Since v2.1.0 the defaults assume a web page in the user's browser, or another host on the network, may try to reach them.
@@ -1425,6 +1452,7 @@ Most upgrades within 2.x need no code changes; code that follows the MCP specifi
 - **Handshake and liveness (v2.1.5, v2.1.7):** stream clients initialize on connect (`AutoInitialize`), and both sides ping every 30 seconds (`PingIntervalMs`, `PingFailureThreshold`).
 - **Schemas (v2.1.7 to v2.1.11):** tool schemas are checked at `RegisterTool` in their declared dialect (2020-12 or draft-07), and `pattern` uses ECMA-262 syntax and semantics.
 - **Limits (v2.1.11, v2.1.13):** `RateLimits` per client, `MaxMessageSize` on every transport, and `MaxSessions`/`MaxSessionsPerClient` on `McpHttpServer` (set `ClientIdentifier` behind a reverse proxy).
+- **Telemetry (v2.2.0):** Voltaic emits metrics and traces on the `Voltaic` meter and activity source. Nothing changes until a collector subscribes. MCP stream clients add `traceparent` to `params._meta` while a span is recorded; set `VoltaicTelemetry.PropagateTraceContext = false` to stop it. See [TELEMETRY.md](TELEMETRY.md).
 
 ---
 
@@ -1480,7 +1508,7 @@ Check out the `src/Test.*` projects for working examples:
 - **Sample.A2AServer**: A2A Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended-card sample
 - **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
 - **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
-- **Test.Shared**: Shared Touchstone descriptors and the central 838-case API/protocol matrix
+- **Test.Shared**: Shared Touchstone descriptors and the central 853-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -1556,7 +1584,7 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 838 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 853 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json

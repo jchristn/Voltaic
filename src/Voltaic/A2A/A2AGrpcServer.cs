@@ -451,12 +451,14 @@ namespace Voltaic.A2A
 
         private async Task HandleRequestAsync(HttpContextBase context)
         {
+            VoltaicOperation? operation = null;
             try
             {
                 string path = context.Request.Url.RawWithoutQuery ?? "/";
 
                 if (RestrictToLoopbackClients && !IsLoopbackSource(context))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AGrpc, "loopback_only");
                     LogMessage($"Rejected remote client {context.Request.Source?.IpAddress}: the server accepts loopback clients only");
                     await SendTextAsync(context, 403, "Remote connections are not allowed.", context.Token).ConfigureAwait(false);
                     return;
@@ -465,6 +467,7 @@ namespace Voltaic.A2A
                 string? origin = context.Request.RetrieveHeaderValue("Origin");
                 if (!_OriginPolicy.IsAllowed(String.IsNullOrEmpty(origin) ? null : origin))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AGrpc, "origin");
                     LogMessage($"Rejected request from disallowed origin '{origin}'");
                     await SendTextAsync(context, 403, "Origin not allowed.", context.Token).ConfigureAwait(false);
                     return;
@@ -476,6 +479,7 @@ namespace Voltaic.A2A
                     AuthenticationResult auth = await AuthenticationHandler(context).ConfigureAwait(false);
                     if (!auth.IsAuthenticated)
                     {
+                        VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AGrpc, auth.StatusCode == 403 ? "insufficient_scope" : "authentication");
                         foreach (KeyValuePair<string, string> header in auth.Headers)
                         {
                             if (String.IsNullOrEmpty(header.Key) || header.Value == null) continue;
@@ -520,6 +524,9 @@ namespace Voltaic.A2A
                         await SendTextAsync(context, 426, "A2A gRPC requires HTTP/2.", context.Token).ConfigureAwait(false);
                         return;
                     }
+
+                    // Watson's server span for this HTTP/2 request is current, so this operation nests under it.
+                    operation = A2AHttpServer.StartBindingOperation(VoltaicTelemetryNames.TransportA2AGrpc, A2ATelemetry.GrpcMethodOf(path));
 
                     byte[] body = await context.Request.ReadBodyAsync(context.Token).ConfigureAwait(false);
                     byte[] payload = A2AGrpcWire.DecodeSinglePayload(body);
@@ -621,6 +628,7 @@ namespace Voltaic.A2A
                             break;
 
                         default:
+                            operation?.SetError(VoltaicInstruments.CodeLabel((int)A2AErrorCode.MethodNotFound));
                             await SendGrpcErrorAsync(
                                 context,
                                 new A2AProtocolException(A2AErrorCode.MethodNotFound, $"gRPC method path '{path}' was not found."),
@@ -631,10 +639,17 @@ namespace Voltaic.A2A
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 LogMessage($"A2A gRPC request error: {ex}");
                 await SendGrpcErrorAsync(context, ex, context.Token).ConfigureAwait(false);
             }
+            finally
+            {
+                operation?.Dispose();
+            }
         }
+
+
 
         private async Task HandleUnaryAsync<TWireRequest, TResult>(
             HttpContextBase context,
@@ -783,6 +798,13 @@ namespace Voltaic.A2A
             settings.Protocols.EnableHttp2 = true;
             settings.Protocols.EnableHttp2Cleartext = true;
             settings.Protocols.EnableHttp3 = false;
+
+            // Watson measures the HTTP/2 layer itself (meter and activity source "Watson"): request metrics and one
+            // server span per call that adopts an inbound traceparent. Voltaic's per-method spans nest under it.
+            settings.Telemetry.Enable = true;
+            settings.Telemetry.EnableMetrics = true;
+            settings.Telemetry.EnableTraces = true;
+            settings.Telemetry.PropagateContext = true;
             return settings;
         }
 

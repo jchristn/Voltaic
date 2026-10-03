@@ -2,6 +2,7 @@ namespace Voltaic.Mcp
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Linq;
     using System.Text.Json;
     using System.Text.Json.Nodes;
@@ -29,13 +30,24 @@ namespace Voltaic.Mcp
         private readonly McpEndpoint _Endpoint;
         private readonly IDictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> _Methods;
         private readonly Action<string> _Log;
+        private readonly string _Transport;
 
-        internal McpMessageProcessor(McpEndpoint endpoint, IDictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> methods, Action<string> log)
+        /// <param name="endpoint">The MCP endpoint that serves tools, resources, and prompts.</param>
+        /// <param name="methods">The server's method handlers.</param>
+        /// <param name="log">The server's log sink.</param>
+        /// <param name="transport">The telemetry transport label (<see cref="VoltaicTelemetryNames.TransportStdio"/>, <c>tcp</c>, <c>websocket</c>, or <c>http</c>).</param>
+        internal McpMessageProcessor(McpEndpoint endpoint, IDictionary<string, Func<RpcParameters?, CancellationToken, Task<object>>> methods, Action<string> log, string transport)
         {
             _Endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
             _Methods = methods ?? throw new ArgumentNullException(nameof(methods));
             _Log = log ?? throw new ArgumentNullException(nameof(log));
+            _Transport = transport ?? throw new ArgumentNullException(nameof(transport));
         }
+
+        /// <summary>
+        /// Gets the telemetry transport label of the server this processor belongs to.
+        /// </summary>
+        internal string Transport => _Transport;
 
         /// <summary>
         /// Gets or sets a callback raised for every well-formed request or notification before it is handled.
@@ -64,6 +76,7 @@ namespace Voltaic.Mcp
             }
             catch (JsonException)
             {
+                VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolMcp, _Transport, "parse_error");
                 await SafeSendAsync(send, SerializeError(new JsonRpcResponse { Error = JsonRpcError.ParseError(), Id = null }, session.NegotiatedVersion), token).ConfigureAwait(false);
                 return;
             }
@@ -147,6 +160,7 @@ namespace Voltaic.Mcp
             Func<string, CancellationToken, Task>? rawSend = null,
             bool deferFinish = false)
         {
+            VoltaicOperation? operation = StartOperation(envelope, session, statelessVersion);
             try
             {
                 McpHandledResponse? handled = await HandleCoreAsync(envelope, session, statelessVersion, statelessResolved, notify, token, rawSend).ConfigureAwait(false);
@@ -156,17 +170,85 @@ namespace Voltaic.Mcp
                 if (!deferFinish && handled != null && envelope.IdKey != null && session.WasCancelledBeforeStart(envelope.IdKey))
                 {
                     _Log($"Request {envelope.IdKey} was cancelled by the client before it ran; its error response is not sent.");
+                    operation?.SetOutcome(VoltaicTelemetryNames.OutcomeCancelled);
                     return null;
                 }
 
+                if (operation != null) RecordOutcome(operation, envelope, handled, session, statelessVersion);
                 return handled;
+            }
+            catch (Exception ex)
+            {
+                operation?.Fail(ex);
+                throw;
             }
             finally
             {
+                operation?.Dispose();
+
                 // Every request that was answered (or rejected, including a malformed one whose ID could be read) is
                 // finished: a cancellation for its ID that arrives later is ignored, so it can never cancel a later
                 // request that reuses the ID.
                 if (!deferFinish && envelope.Kind != McpEnvelopeKind.Response && envelope.Kind != McpEnvelopeKind.Notification && envelope.IdKey != null) session.RecordFinished(envelope.IdKey);
+            }
+        }
+
+        // Starts the server span and duration measurement for a request or notification; null for client responses,
+        // invalid messages (counted as rejected), or when nothing listens.
+        private VoltaicOperation? StartOperation(McpEnvelope envelope, McpSessionState session, string? statelessVersion)
+        {
+            if (envelope.Kind == McpEnvelopeKind.Invalid)
+            {
+                VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolMcp, _Transport, "invalid_request");
+                return null;
+            }
+
+            if (envelope.Kind != McpEnvelopeKind.Request && envelope.Kind != McpEnvelopeKind.Notification) return null;
+            if (!VoltaicTelemetry.Enabled) return null;
+
+            // Continue the client's trace from params._meta (stream transports); on HTTP the request span already
+            // continued the traceparent header. A stream connection's request never inherits whatever span happened to
+            // be current when the server started.
+            JsonElement? meta = envelope.Params.HasValue && envelope.Params.Value.ValueKind == JsonValueKind.Object && envelope.Params.Value.TryGetProperty("_meta", out JsonElement found) ? found : (JsonElement?)null;
+            ActivityContext parent = VoltaicTraceContext.ExtractFromMeta(meta);
+            if (parent == default && _Transport != VoltaicTelemetryNames.TransportHttp) Activity.Current = null;
+
+            string method = VoltaicInstruments.ServerMethodLabel(envelope.Method, name => _Methods.ContainsKey(name));
+            TagList tags = new TagList
+            {
+                { VoltaicTelemetryNames.AttrProtocol, VoltaicTelemetryNames.ProtocolMcp },
+                { VoltaicTelemetryNames.AttrTransport, _Transport },
+                { VoltaicTelemetryNames.AttrRpcMethod, method }
+            };
+
+            VoltaicOperation? operation = VoltaicOperation.Start(VoltaicInstruments.RpcServerDuration, VoltaicInstruments.RpcServerActive, method, ActivityKind.Server, tags, parent);
+            if (operation?.Activity != null)
+            {
+                operation.SetSpanTag(VoltaicTelemetryNames.AttrRpcSystem, "jsonrpc");
+                operation.SetSpanTag(VoltaicTelemetryNames.AttrMcpMethodName, envelope.Method != null && envelope.Method.Length <= 128 ? envelope.Method : method);
+                operation.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcRequestId, envelope.IdKey);
+                string? version = statelessVersion ?? session.NegotiatedVersion;
+                operation.SetSpanTag(VoltaicTelemetryNames.AttrMcpProtocolVersion, version);
+            }
+
+            return operation;
+        }
+
+        private static void RecordOutcome(VoltaicOperation operation, McpEnvelope envelope, McpHandledResponse? handled, McpSessionState session, string? statelessVersion)
+        {
+            if (handled == null)
+            {
+                // A request that gets no response was cancelled (or dropped); a notification never gets one.
+                if (envelope.Kind == McpEnvelopeKind.Request) operation.SetOutcome(VoltaicTelemetryNames.OutcomeCancelled);
+                return;
+            }
+
+            operation.SetSpanTag(VoltaicTelemetryNames.AttrMcpProtocolVersion, handled.StatelessVersion ?? statelessVersion ?? session.NegotiatedVersion);
+            JsonRpcError? error = handled.Response.Error;
+            if (error != null)
+            {
+                operation.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcErrorCode, error.Code);
+                operation.SetError(VoltaicInstruments.CodeLabel(error.Code));
             }
         }
 

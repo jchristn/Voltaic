@@ -3,6 +3,7 @@ namespace Voltaic.Core
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Linq;
     using System.Text.Json;
     using System.Threading;
@@ -39,6 +40,11 @@ namespace Voltaic.Core
 
         // Receives diagnostic messages, such as the reason the server gave for cancelling a request.
         internal Action<string>? Log { get; set; }
+
+        // Telemetry labels of the client this dispatcher answers for; JsonRpcClient sets them from its virtual labels.
+        internal string TelemetryProtocol { get; set; } = VoltaicTelemetryNames.ProtocolJsonRpc;
+
+        internal string TelemetryTransport { get; set; } = VoltaicTelemetryNames.TransportTcp;
 
         /// <summary>
         /// Handles a <c>notifications/cancelled</c> from the server: the matching request's handler token is cancelled
@@ -229,6 +235,10 @@ namespace Voltaic.Core
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
             string? idKey = IdKey(request.Id);
+
+            // A request from the server is an inbound unit of work on the client: it gets its own server span (continuing
+            // the server's trace from params._meta when present) and a voltaic.rpc.server.duration measurement.
+            VoltaicOperation? operation = StartOperation(request);
             try
             {
                 JsonRpcResponse? response = await DispatchCoreAsync(request, idKey, token).ConfigureAwait(false);
@@ -239,16 +249,51 @@ namespace Voltaic.Core
                 {
                     lock (_RequestLock)
                     {
-                        if (_Reserved.TryGetValue(idKey, out bool cancelled) && cancelled) return null;
+                        if (_Reserved.TryGetValue(idKey, out bool cancelled) && cancelled)
+                        {
+                            operation?.SetOutcome(VoltaicTelemetryNames.OutcomeCancelled);
+                            return null;
+                        }
                     }
                 }
 
+                if (response?.Error != null) operation?.SetError(VoltaicInstruments.CodeLabel(response.Error.Code));
                 return response;
+            }
+            catch (Exception ex)
+            {
+                operation?.Fail(ex);
+                throw;
             }
             finally
             {
+                operation?.Dispose();
                 if (idKey != null) RecordFinished(idKey);
             }
+        }
+
+        private VoltaicOperation? StartOperation(JsonRpcRequest request)
+        {
+            if (!VoltaicTelemetry.Enabled) return null;
+            string method = VoltaicInstruments.ServerMethodLabel(request.Method, name => _Handlers.ContainsKey(name));
+            ActivityContext parent = default;
+            if (TelemetryProtocol == VoltaicTelemetryNames.ProtocolMcp && request.Params is JsonElement parameters && parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("_meta", out JsonElement meta))
+            {
+                parent = VoltaicTraceContext.ExtractFromMeta(meta);
+            }
+
+            if (parent == default) Activity.Current = null;
+            TagList tags = new TagList
+            {
+                { VoltaicTelemetryNames.AttrProtocol, TelemetryProtocol },
+                { VoltaicTelemetryNames.AttrTransport, TelemetryTransport },
+                { VoltaicTelemetryNames.AttrRpcMethod, method }
+            };
+
+            VoltaicOperation? operation = VoltaicOperation.Start(VoltaicInstruments.RpcServerDuration, VoltaicInstruments.RpcServerActive, method, ActivityKind.Server, tags, parent);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrRpcSystem, "jsonrpc");
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrRole, "client");
+            return operation;
         }
 
         private void RecordFinished(string idKey)

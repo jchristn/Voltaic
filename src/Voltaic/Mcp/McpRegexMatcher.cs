@@ -2,6 +2,9 @@ namespace Voltaic.Mcp
 {
     using System;
     using System.Collections.Generic;
+    using System.Runtime.CompilerServices;
+    using System.Runtime.ExceptionServices;
+    using System.Threading;
 
     /// <summary>
     /// Runs a compiled ECMA-262 regular expression against one input. A backtracking virtual machine with an explicit
@@ -15,6 +18,8 @@ namespace Voltaic.Mcp
     internal sealed class McpRegexMatcher
     {
         private const int _Exhausted = -1;
+        // Stack for a nested run that continues on its own thread: enough for the remaining nesting levels.
+        private const int _NestedStackBytes = 16 * 1024 * 1024;
         private readonly string _Input;
         private readonly int[] _Captures;
         private readonly int[] _Registers;
@@ -54,6 +59,34 @@ namespace Voltaic.Mcp
                 if (anchored || position >= _Input.Length) return false;
                 position += CodePointLength(position);
             }
+        }
+
+        // Runs a lookaround's program. Each nesting level is one Run frame, so a deeply nested pattern (the parser allows
+        // 500 levels) can outgrow a small thread stack (thread-pool threads on macOS); when the stack runs low, the nested
+        // run continues on a dedicated thread with a large stack while this one waits, so the matcher state is never
+        // used by two threads at once.
+        private int RunNested(McpRegexProgram program, int start)
+        {
+            if (RuntimeHelpers.TryEnsureSufficientExecutionStack()) return Run(program, start);
+
+            int result = 0;
+            Exception? failure = null;
+            Thread worker = new Thread(() =>
+            {
+                try
+                {
+                    result = Run(program, start);
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            }, _NestedStackBytes);
+            worker.IsBackground = true;
+            worker.Start();
+            worker.Join();
+            if (failure != null) ExceptionDispatchInfo.Capture(failure).Throw();
+            return result;
         }
 
         // Runs a program from a position: 1 when it reaches Match, 0 when every path fails, -1 when out of steps.
@@ -133,7 +166,7 @@ namespace Voltaic.Mcp
                     case McpRegexOp.Lookaround:
                         _Steps += _Captures.Length;
                         int[] snapshot = (int[])_Captures.Clone();
-                        int inner = Run(instruction.Program!, position);
+                        int inner = RunNested(instruction.Program!, position);
                         if (inner == _Exhausted) return _Exhausted;
                         if (instruction.Negated)
                         {

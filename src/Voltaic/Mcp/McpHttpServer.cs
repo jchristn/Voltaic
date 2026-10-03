@@ -623,7 +623,7 @@ namespace Voltaic.Mcp
                 if (!_Endpoint.SupportsListChangedNotifications) return;
                 _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
-            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage)
+            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogMessage, VoltaicTelemetryNames.TransportHttp)
             {
                 RequestReceived = (request, session) =>
                 {
@@ -1032,6 +1032,7 @@ namespace Voltaic.Mcp
 
                 // Start session cleanup task
                 _CleanupTask = Task.Run(() => CleanupSessionsLoop(_TokenSource.Token));
+                VoltaicInstruments.TrackSessionCapacity(this, () => _MaxSessions);
 
                 LogMessage($"HTTP server started on port {_Port}");
                 LogMessage($"RPC endpoint: {_RpcPath}");
@@ -1215,7 +1216,7 @@ namespace Voltaic.Mcp
         /// <returns>True if the client was found and kicked; otherwise, false.</returns>
         public bool KickClient(string clientId)
         {
-            if (RemoveSession(clientId))
+            if (RemoveSession(clientId, "kicked"))
             {
                 LogMessage($"Kicked client: {clientId}");
                 return true;
@@ -1231,8 +1232,14 @@ namespace Voltaic.Mcp
         /// <returns>True if the session was found and removed; otherwise, false.</returns>
         public bool RemoveSession(string sessionId)
         {
+            return RemoveSession(sessionId, "removed");
+        }
+
+        private bool RemoveSession(string sessionId, string reason)
+        {
             if (_Sessions.TryRemove(sessionId, out ClientConnection? connection))
             {
+                VoltaicInstruments.SessionClosed(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, reason, connection.TelemetryStart);
                 _SessionVersions.TryRemove(sessionId, out string? _);
                 (connection.ProtocolState as McpSessionState)?.CancelAll();
                 _SseStreams.TryRemove(sessionId, out SseSessionStreams? _);
@@ -1256,8 +1263,10 @@ namespace Voltaic.Mcp
             _Endpoint.Subscriptions.CloseAllAndWait(TimeSpan.FromSeconds(1));
             _TokenSource?.Cancel();
 
+            VoltaicInstruments.TrackSessionCapacity(this, null);
             foreach (ClientConnection connection in _Sessions.Values)
             {
+                VoltaicInstruments.SessionClosed(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "server_stopped", connection.TelemetryStart);
                 (connection.ProtocolState as McpSessionState)?.CancelAll();
                 connection.Dispose();
             }
@@ -1470,6 +1479,30 @@ namespace Voltaic.Mcp
 
         private async Task HandleRequestAsync(HttpListenerContext context, CancellationToken token)
         {
+            VoltaicOperation? operation = HttpListenerTelemetry.StartRequest(context.Request, VoltaicTelemetryNames.ProtocolMcp, RouteOf(context.Request.Url?.AbsolutePath ?? ""));
+            try
+            {
+                await HandleRequestCoreAsync(context, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                HttpListenerTelemetry.Finish(operation, context.Response);
+            }
+        }
+
+        // The route template of a request path for telemetry: a configured endpoint path, never the raw path.
+        private string RouteOf(string path)
+        {
+            if (!String.IsNullOrEmpty(_McpPath) && IsEndpointPath(path, _McpPath)) return _McpPath;
+            if (_EnableLegacyEndpoints && IsEndpointPath(path, _RpcPath)) return _RpcPath;
+            if (_EnableLegacyEndpoints && IsEndpointPath(path, _EventsPath)) return _EventsPath;
+            if (path == "/") return "/";
+            if (IsProtectedResourceMetadataPath(path)) return "/.well-known/oauth-protected-resource";
+            return VoltaicTelemetryNames.SpanHttpUnmatchedRoute;
+        }
+
+        private async Task HandleRequestCoreAsync(HttpListenerContext context, CancellationToken token)
+        {
             try
             {
                 string path = context.Request.Url?.AbsolutePath ?? "";
@@ -1482,6 +1515,7 @@ namespace Voltaic.Mcp
                 // header, so a remote client could otherwise reach it by spoofing Host: localhost).
                 if (!HttpAccessGuard.IsRemoteAllowed(context.Request, _RestrictToLoopbackClients))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "loopback_only");
                     LogMessage($"Rejected remote client {context.Request.RemoteEndPoint}: the server accepts loopback clients only");
                     await HttpAccessGuard.RejectAsync(context, 403, "Remote connections are not allowed.", token).ConfigureAwait(false);
                     return;
@@ -1491,6 +1525,7 @@ namespace Voltaic.Mcp
                 string? origin = HttpAccessGuard.GetOrigin(context.Request);
                 if (!_OriginPolicy.IsAllowed(origin))
                 {
+                    VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "origin");
                     LogMessage($"Rejected request from disallowed origin '{origin}' for {path}");
                     await HttpAccessGuard.RejectAsync(context, 403, "Origin not allowed.", token).ConfigureAwait(false);
                     return;
@@ -1532,6 +1567,7 @@ namespace Voltaic.Mcp
                     AuthenticationResult authResult = await _AuthenticationHandler(context.Request).ConfigureAwait(false);
                     if (!authResult.IsAuthenticated)
                     {
+                        VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, authResult.StatusCode == 403 ? "insufficient_scope" : "authentication");
                         await HttpAccessGuard.WriteAuthenticationFailureAsync(context, authResult, _EnableCors, _CorsHeaders, token, ResourceMetadataUrl(context)).ConfigureAwait(false);
                         LogMessage($"Authentication failed for {path}: {authResult.ErrorMessage ?? "no details"}");
                         return;
@@ -1566,6 +1602,7 @@ namespace Voltaic.Mcp
             }
             catch (MessageTooLargeException tooLarge)
             {
+                VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "too_large");
                 LogMessage($"Rejected a request body larger than MaxMessageSize ({tooLarge.Limit} bytes)");
                 try
                 {
@@ -1875,6 +1912,7 @@ namespace Voltaic.Mcp
         // Answers 403 with an RFC 6750 insufficient_scope challenge (plus resource_metadata when configured).
         private async Task WriteInsufficientScopeBodyAsync(HttpListenerContext context, string scope, string json, string? sessionId, CancellationToken token)
         {
+            VoltaicInstruments.AccessDenied(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "insufficient_scope");
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
             if (sessionId != null) SetSessionIdHeaders(context.Response, sessionId);
             // RFC 6750 scope tokens exclude the quote and the backslash, so neither may reach the quoted string.
@@ -1936,13 +1974,14 @@ namespace Voltaic.Mcp
                 List<ClientConnection> owned = _Sessions.Values.Where(existing => StringComparer.Ordinal.Equals(StateOf(existing).RateLimitKey, client)).OrderBy(existing => existing.LastActivity).ToList();
                 for (int i = 0; i <= owned.Count - _MaxSessionsPerClient; i++)
                 {
-                    RemoveSession(owned[i].SessionId);
+                    RemoveSession(owned[i].SessionId, "evicted");
                     LogMessage($"Removed session {owned[i].SessionId}: its client opened more than MaxSessionsPerClient ({_MaxSessionsPerClient}) sessions");
                 }
             }
 
             if (_Sessions.TryAdd(connection.SessionId, connection))
             {
+                connection.TelemetryStart = VoltaicInstruments.SessionOpened(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp);
                 // The client learns the session ID from the initialize response, and only then can open a stream that
                 // carries notifications, so they cannot overtake the response.
                 StateOf(connection).MarkNotificationsReady();
@@ -2134,6 +2173,8 @@ namespace Voltaic.Mcp
                 // that stream with the events the client missed; anything else opens a new stream.
                 SseSessionStreams sessionStreams = _SseStreams.GetOrAdd(sessionId, _ => new SseSessionStreams(_MaxResumableStreamsPerSession));
                 SseStreamLog streamLog = sessionStreams.Open(context.Request.Headers["Last-Event-ID"], _SseReplayBufferSize, out long resumeAfter);
+                if (resumeAfter >= 0) VoltaicInstruments.SseReplayed(streamLog.After(resumeAfter).Count);
+                VoltaicInstruments.SseStream("get", 1);
 
                 LogMessage(resumeAfter >= 0
                     ? $"MCP SSE stream {streamLog.StreamId} resumed after event {resumeAfter} for session {sessionId}"
@@ -2248,6 +2289,7 @@ namespace Voltaic.Mcp
                 }
                 finally
                 {
+                    VoltaicInstruments.SseStream("get", -1);
                     streamLog.Release(streamTokenSource);
                     context.Response.Close();
                     LogMessage($"MCP SSE connection closed for session {sessionId}");
@@ -2278,7 +2320,7 @@ namespace Voltaic.Mcp
 
                 if (!String.IsNullOrEmpty(sessionId))
                 {
-                    RemoveSession(sessionId);
+                    RemoveSession(sessionId, "deleted");
                     LogMessage($"MCP session terminated: {sessionId}");
                 }
 
@@ -2687,6 +2729,9 @@ namespace Voltaic.Mcp
         // JSON-RPC 2.0 requires; an id that is not a string or an integer is never echoed.
         private async Task WriteJsonRpcErrorAsync(HttpListenerContext context, int statusCode, object? id, McpProtocolException error, CancellationToken token)
         {
+            if (statusCode == 404 && error.Code == -32001) VoltaicInstruments.SessionRejected(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "not_found");
+            else if (statusCode == 400 && error.Code == -32600 && error.Message.StartsWith("Missing MCP-Session-Id", StringComparison.Ordinal)) VoltaicInstruments.SessionRejected(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "session_required");
+            else if (statusCode == 503) VoltaicInstruments.SessionRejected(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportHttp, "max_sessions");
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
 
             JsonRpcResponse response = new JsonRpcResponse
@@ -3165,6 +3210,7 @@ namespace Voltaic.Mcp
             context.Response.SendChunked = true;
 
             LogMessage($"SSE connection established for session {sessionId}");
+            VoltaicInstruments.SseStream("events", 1);
 
             // The stream ends when the server stops or the session ends (terminated or expired).
             using CancellationTokenSource streamSource = CancellationTokenSource.CreateLinkedTokenSource(token, StateOf(connection).Closed);
@@ -3209,6 +3255,7 @@ namespace Voltaic.Mcp
             }
             finally
             {
+                VoltaicInstruments.SseStream("events", -1);
                 context.Response.Close();
                 LogMessage($"SSE connection closed for session {sessionId}");
             }
@@ -3270,7 +3317,7 @@ namespace Voltaic.Mcp
                             continue;
                         }
 
-                        RemoveSession(sessionId);
+                        RemoveSession(sessionId, "expired");
                         LogMessage($"Expired session: {sessionId}");
                     }
 

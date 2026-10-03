@@ -214,7 +214,7 @@ namespace Voltaic.Mcp
                 if (!_Endpoint.SupportsListChangedNotifications) return;
                 _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, Sessions(), "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
-            _Processor = new McpMessageProcessor(_Endpoint, Methods, WriteLog)
+            _Processor = new McpMessageProcessor(_Endpoint, Methods, WriteLog, VoltaicTelemetryNames.TransportTcp)
             {
                 RequestReceived = (request, session) => { if (session.Owner is ClientConnection client) RaiseRequestReceivedFor(client, request); },
                 ResponseProduced = (request, response, session) => { if (session.Owner is ClientConnection client) RaiseResponseSentFor(client, request, response); }
@@ -700,6 +700,8 @@ namespace Voltaic.Mcp
     
         // MCP over TCP accepts newline-delimited JSON (the stdio framing) as well as Content-Length framing.
         private protected override bool AcceptNewlineFraming => true;
+
+        private protected override string TelemetryProtocol => VoltaicTelemetryNames.ProtocolMcp;
 
         // Open subscriptions/listen streams end gracefully, with their completion results, before the connections close.
         private protected override void OnStopping()

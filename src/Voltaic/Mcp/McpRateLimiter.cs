@@ -22,7 +22,9 @@ namespace Voltaic.Mcp
             if (ratePerSecond <= 0) return true;
             if (_Buckets.Count > _PruneThreshold) Prune();
             McpTokenBucket bucket = _Buckets.GetOrAdd(kind + "|" + clientKey, _ => new McpTokenBucket());
-            return bucket.TryTake(ratePerSecond);
+            bool allowed = bucket.TryTake(ratePerSecond);
+            Voltaic.Core.VoltaicInstruments.RateLimitDecision(kind, allowed);
+            return allowed;
         }
 
         private void Prune()

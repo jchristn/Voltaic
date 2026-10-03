@@ -78,7 +78,7 @@ namespace Voltaic.Mcp
         private string _ClientName = "Voltaic.Mcp.Client";
         private string _ClientVersion = "1.0.0";
         private JsonElement? _InitializeResult;
-        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true };
+        private readonly ClientRequestDispatcher _RequestDispatcher = new ClientRequestDispatcher { AnswersPing = true, TelemetryProtocol = VoltaicTelemetryNames.ProtocolMcp, TelemetryTransport = VoltaicTelemetryNames.TransportStdio };
         private readonly ProgressTracker _ProgressTracker = new ProgressTracker { Enabled = true };
         private int _ShutdownGracePeriodMs = 5000;
         private int _InitializeTimeoutMs = 30000;
@@ -95,6 +95,7 @@ namespace Voltaic.Mcp
         /// </summary>
         public McpClient()
         {
+            VoltaicInstruments.EnsureCreated();
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
             _RequestDispatcher.Log = LogMessage;
             _RequestDispatcher.AcceptsBatches = () => McpClientHandshake.AllowsBatches(_ProtocolVersion);
@@ -109,6 +110,7 @@ namespace Voltaic.Mcp
         /// <returns>A task that represents the asynchronous operation. The task result is true if the launch was successful; otherwise, false.</returns>
         public async Task<bool> LaunchServerAsync(string executable, string[] args, CancellationToken token = default)
         {
+            using VoltaicOperation? operation = VoltaicOperation.StartConnect(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportStdio);
             try
             {
                 Shutdown();
@@ -139,7 +141,21 @@ namespace Voltaic.Mcp
                     StartInfo = startInfo
                 };
 
-                _ServerProcess.Start();
+                using (Activity? launch = VoltaicOperation.StartSpan(VoltaicTelemetryNames.SpanMcpLaunchServer))
+                {
+                    try
+                    {
+                        _ServerProcess.Start();
+                        VoltaicInstruments.ProcessStart(true);
+                    }
+                    catch (Exception launchError)
+                    {
+                        VoltaicInstruments.ProcessStart(false);
+                        launch?.SetStatus(ActivityStatusCode.Error, launchError.GetType().Name);
+                        VoltaicOperation.RecordException(launch, launchError);
+                        throw;
+                    }
+                }
 
                 _StdinWriter = _ServerProcess.StandardInput;
                 _StdinWriter.NewLine = "\n";
@@ -147,8 +163,9 @@ namespace Voltaic.Mcp
                 _StderrReader = _ServerProcess.StandardError;
 
                 _CancellationTokenSource = new CancellationTokenSource();
-                _ReceiveTask = Task.Run(() => ReceiveLoop(_CancellationTokenSource.Token));
-                _StderrTask = Task.Run(() => StderrLoop(_CancellationTokenSource.Token));
+                CancellationToken loopToken = _CancellationTokenSource.Token;
+                _ReceiveTask = VoltaicTraceContext.RunDetached(() => ReceiveLoop(loopToken));
+                _StderrTask = VoltaicTraceContext.RunDetached(() => StderrLoop(loopToken));
 
                 Interlocked.Increment(ref _ConnectionGeneration);
                 _InitializeResult = null;
@@ -166,6 +183,7 @@ namespace Voltaic.Mcp
                     }
                     catch (Exception ex)
                     {
+                        operation?.Fail(ex);
                         LogMessage($"MCP initialize failed: {ex.Message}");
                         Shutdown();
                         return false;
@@ -176,6 +194,7 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex)
             {
+                operation?.Fail(ex);
                 LogMessage($"Failed to launch MCP server: {ex.Message}");
                 _IsConnected = false;
                 return false;
@@ -213,11 +232,13 @@ namespace Voltaic.Mcp
             if (!IsConnected)
                 throw new InvalidOperationException("MCP client is not connected");
 
+            using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportStdio, method);
             int id = Interlocked.Increment(ref _RequestIdCounter);
+            operation?.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcRequestId, id);
             JsonRpcRequest request = new JsonRpcRequest
             {
                 Method = method,
-                Params = parameters,
+                Params = VoltaicTraceContext.InjectIntoMeta(parameters, operation?.Activity),
                 Id = id
             };
 
@@ -251,6 +272,8 @@ namespace Voltaic.Mcp
 
                     if (response.Error != null)
                     {
+                        operation?.SetSpanTag(VoltaicTelemetryNames.AttrJsonRpcErrorCode, response.Error.Code);
+                        operation?.SetError(VoltaicInstruments.CodeLabel(response.Error.Code));
                         throw new Exception($"RPC Error {response.Error.Code}: {response.Error.Message}");
                     }
 
@@ -266,6 +289,11 @@ namespace Voltaic.Mcp
 
                     return (T)Convert.ChangeType(response.Result, typeof(T));
                 }
+            }
+            catch (Exception ex)
+            {
+                operation?.FailCall(ex, token);
+                throw;
             }
             finally
             {
@@ -889,6 +917,7 @@ namespace Voltaic.Mcp
         // Fails every call still waiting for a response, because the connection they were sent on is gone.
         private void FailPendingRequests()
         {
+            VoltaicInstruments.ConnectionLost(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportStdio);
             foreach (ClientPendingRequest pending in _PendingRequests.Values)
             {
                 pending.TaskCompletionSource.TrySetException(new IOException("The connection closed before the response arrived."));

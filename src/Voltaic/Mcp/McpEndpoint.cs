@@ -93,6 +93,7 @@ namespace Voltaic.Mcp
 
         public McpEndpoint(string serverName)
         {
+            VoltaicInstruments.EnsureCreated();
             ServerName = serverName;
             Subscriptions = new McpSubscriptions(this);
         }
@@ -317,6 +318,29 @@ namespace Voltaic.Mcp
 
         public async Task<object> CallToolAsync(RpcParameters? args, CancellationToken token)
         {
+            McpToolCallTelemetry? telemetry = McpToolCallTelemetry.Begin();
+            try
+            {
+                return await CallToolCoreAsync(args, telemetry, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException cancelled)
+            {
+                telemetry?.SetOutcome(VoltaicTelemetryNames.OutcomeCancelled, cancelled.GetType().Name);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                telemetry?.SetOutcome(telemetry.Outcome ?? McpToolCallTelemetry.OutcomeProtocolError, VoltaicInstruments.ErrorTypeOf(ex));
+                throw;
+            }
+            finally
+            {
+                telemetry?.Finish();
+            }
+        }
+
+        private async Task<object> CallToolCoreAsync(RpcParameters? args, McpToolCallTelemetry? telemetry, CancellationToken token)
+        {
             if (args == null || !args.HasValue)
             {
                 throw McpProtocolException.InvalidParams("tools/call requires params with a name.");
@@ -354,6 +378,7 @@ namespace Voltaic.Mcp
                 // processed as text: an input validation error, reported as a tool execution error.
                 McpToolCallResult invalidText = McpToolCallResult.FromText($"Tool '{toolName}' arguments contain a string with an unpaired UTF-16 surrogate, which is not valid Unicode.");
                 invalidText.IsError = true;
+                telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeInvalidArguments);
                 return invalidText;
             }
 
@@ -368,26 +393,36 @@ namespace Voltaic.Mcp
                 throw McpProtocolException.InvalidParams($"Tool '{toolName}' was not found.");
             }
 
+            telemetry?.SetTool(tool.Definition.Name);
+
             // Tool invocations are rate-limited per client (MCP security considerations); the model can back off.
             if (!_RateLimiter.TryAcquire(RateLimitClient(), "tools", RateLimits.ToolCallsPerSecond))
             {
                 McpToolCallResult limited = McpToolCallResult.FromText($"Tool '{toolName}' was not run: the rate limit of {RateLimits.ToolCallsPerSecond} tool calls per second was exceeded. Try again shortly.");
                 limited.IsError = true;
+                telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeRateLimited);
                 return limited;
             }
 
             // Input validation failures are tool execution errors, not protocol errors: the MCP specification
             // (2025-11-25 and later) reports them as a result with isError true so the model can read the message
             // and retry with corrected arguments. The handler is not run.
-            try
+            using (VoltaicOperation? stage = telemetry?.StartStage("validate_input"))
             {
-                McpSchemaValidator.Validate(tool.Definition.InputSchema, toolArguments?.RawJson, $"Tool '{toolName}' arguments");
-            }
-            catch (McpProtocolException validationError)
-            {
-                McpToolCallResult invalid = McpToolCallResult.FromText(validationError.Message);
-                invalid.IsError = true;
-                return invalid;
+                try
+                {
+                    McpSchemaValidator.Validate(tool.Definition.InputSchema, toolArguments?.RawJson, $"Tool '{toolName}' arguments");
+                    VoltaicInstruments.SchemaValidation("input", true);
+                }
+                catch (McpProtocolException validationError)
+                {
+                    VoltaicInstruments.SchemaValidation("input", false);
+                    stage?.SetError(VoltaicInstruments.CodeLabel(validationError.Code), McpToolCallTelemetry.OutcomeInvalidArguments);
+                    McpToolCallResult invalid = McpToolCallResult.FromText(validationError.Message);
+                    invalid.IsError = true;
+                    telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeInvalidArguments);
+                    return invalid;
+                }
             }
 
             // Make the MRTR retry state (inputResponses, requestState) available to the handler. inputResponses exists
@@ -396,22 +431,27 @@ namespace Voltaic.Mcp
             string? statelessVersion = McpRequestProtocol.StatelessVersion;
             Dictionary<string, JsonElement>? inputResponses = statelessVersion != null ? FilterInputResponses(call.InputResponses) : null;
             using (McpToolCallContext.Push(new McpToolCallContext(toolName, inputResponses, call.RequestState, statelessVersion != null, McpRequestScope.Current)))
+            using (VoltaicOperation? stage = telemetry?.StartStage("execute"))
             {
                 try
                 {
                     result = await tool.Handler(toolArguments, token).ConfigureAwait(false);
                 }
-                catch (McpProtocolException)
+                catch (McpProtocolException protocolError)
                 {
                     // A handler that throws a protocol exception asks for a JSON-RPC error explicitly.
+                    stage?.Fail(protocolError);
                     throw;
                 }
-                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                catch (OperationCanceledException cancelled) when (token.IsCancellationRequested)
                 {
+                    stage?.Fail(cancelled);
                     throw;
                 }
                 catch (Exception handlerError)
                 {
+                    stage?.Fail(handlerError);
+                    telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeHandlerException, VoltaicInstruments.ErrorTypeOf(handlerError));
                     // API failures and business-logic errors are tool execution errors (MCP 2025-06-18 and later):
                     // a result with isError true carries the message to the model so it can react, instead of a
                     // JSON-RPC protocol error the client may not show to the model.
@@ -428,6 +468,7 @@ namespace Voltaic.Mcp
                 McpToolCallResult unsupported = McpToolCallResult.FromText(
                     $"Tool '{toolName}' needs additional input from the user, which requires MCP protocol version {McpProtocol.ProtocolVersion20260728} or later; this request used an earlier protocol version.");
                 unsupported.IsError = true;
+                telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeToolError);
                 return unsupported;
             }
 
@@ -436,22 +477,25 @@ namespace Voltaic.Mcp
             // a tool result.
             if (result is McpInputRequiredResult inputRequired)
             {
+                telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeInputRequired);
                 ValidateInputRequired(toolName, inputRequired);
                 return inputRequired;
             }
 
             if (result is McpToolCallResult toolCallResult)
             {
+                if (toolCallResult.IsError == true) telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeToolError);
+
                 // A tool with an output schema must return structured content that conforms to it (except on errors).
                 if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent == null && toolCallResult.IsError != true)
                 {
+                    telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeInvalidOutput);
                     throw new McpProtocolException(-32603, $"Tool '{toolName}' declares an output schema but returned no structured content.");
                 }
 
                 if (tool.Definition.OutputSchema != null && toolCallResult.StructuredContent != null)
                 {
-                    ValidateOutput(tool.Definition.OutputSchema, toolCallResult.StructuredContent, $"Tool '{toolName}' structured output");
-                    RequireObjectForHandshake(tool.Definition.OutputSchema, toolCallResult.StructuredContent, statelessVersion, toolName);
+                    ValidateOutputStage(tool.Definition.OutputSchema, toolCallResult.StructuredContent, $"Tool '{toolName}' structured output", statelessVersion, toolName, telemetry);
                 }
 
                 return toolCallResult;
@@ -459,8 +503,7 @@ namespace Voltaic.Mcp
 
             if (tool.Definition.OutputSchema != null)
             {
-                ValidateOutput(tool.Definition.OutputSchema, result, $"Tool '{toolName}' output");
-                RequireObjectForHandshake(tool.Definition.OutputSchema, result, statelessVersion, toolName);
+                ValidateOutputStage(tool.Definition.OutputSchema, result, $"Tool '{toolName}' output", statelessVersion, toolName, telemetry);
                 return McpToolCallResult.FromStructured(result);
             }
 
@@ -485,6 +528,43 @@ namespace Voltaic.Mcp
             if (value.ValueKind != JsonValueKind.Object)
             {
                 throw new McpProtocolException(-32603, $"Tool '{toolName}' structured output must be an object on protocol versions before {McpProtocol.ProtocolVersion20260728}, where its output schema is advertised with \"type\": \"object\".");
+            }
+        }
+
+        // Names the enclosing Voltaic server span after the registered target, as in "prompts/get summarize".
+        private static void NameServerSpan(string method, string target, string attribute)
+        {
+            System.Diagnostics.Activity? current = System.Diagnostics.Activity.Current;
+            if (current == null || current.Source != VoltaicInstruments.Source || current.OperationName != method || target.Length > 128) return;
+            try
+            {
+                current.DisplayName = method + " " + target;
+                if (current.IsAllDataRequested) current.SetTag(attribute, target);
+            }
+            catch (Exception)
+            {
+                // Best-effort.
+            }
+        }
+
+        // The validate_output stage of a tool call: the output schema check and the handshake-era object rule.
+        private static void ValidateOutputStage(object outputSchema, object value, string context, string? statelessVersion, string toolName, McpToolCallTelemetry? telemetry)
+        {
+            using (VoltaicOperation? stage = telemetry?.StartStage("validate_output"))
+            {
+                try
+                {
+                    ValidateOutput(outputSchema, value, context);
+                    RequireObjectForHandshake(outputSchema, value, statelessVersion, toolName);
+                    VoltaicInstruments.SchemaValidation("output", true);
+                }
+                catch (McpProtocolException invalid)
+                {
+                    VoltaicInstruments.SchemaValidation("output", false);
+                    stage?.Fail(invalid);
+                    telemetry?.SetOutcome(McpToolCallTelemetry.OutcomeInvalidOutput);
+                    throw;
+                }
             }
         }
 
@@ -745,6 +825,8 @@ namespace Voltaic.Mcp
             {
                 throw McpProtocolException.InvalidParams($"Prompt '{promptName}' was not found.");
             }
+
+            NameServerSpan("prompts/get", prompt.Prompt.Name, VoltaicTelemetryNames.AttrPromptName);
 
             if (request.Arguments != null)
             {

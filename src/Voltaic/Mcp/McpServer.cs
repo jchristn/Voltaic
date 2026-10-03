@@ -242,7 +242,7 @@ namespace Voltaic.Mcp
                 if (!_Endpoint.SupportsListChangedNotifications) return;
                 _ = McpServerNotifications.ListChangedAsync(_Endpoint.Subscriptions, new[] { _Session }, "notifications/" + kind + "/list_changed", CancellationToken.None);
             };
-            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogToStderr);
+            _Processor = new McpMessageProcessor(_Endpoint, _Methods, LogToStderr, VoltaicTelemetryNames.TransportStdio);
             _Session.Push = WriteLineAsync;
             RegisterProtocolMethods();
             if (includeDiagnosticTools) RegisterDiagnosticTools();
@@ -593,11 +593,17 @@ namespace Voltaic.Mcp
 
             // The run ends when the caller cancels, stdin closes, or the client stops answering pings.
             using CancellationTokenSource run = CancellationTokenSource.CreateLinkedTokenSource(token);
+            string closeReason = "client_closed";
             _Session.Terminate = () =>
             {
                 LogToStderr("The client did not answer ping; shutting down");
+                closeReason = "ping_failure";
                 run.Cancel();
             };
+
+            // The stdio connection is one session; its requests never inherit the caller's current span.
+            System.Diagnostics.Activity.Current = null;
+            long sessionStart = VoltaicInstruments.SessionOpened(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportStdio);
 
             // A read from redirected console input does not observe cancellation, so each read is raced against the run
             // token: cancellation, or a failed ping, ends the run even while a read is pending.
@@ -620,6 +626,7 @@ namespace Voltaic.Mcp
                     {
                         // The message was skipped; its ID cannot be read, so the error carries a null id.
                         LogToStderr($"Skipped a message larger than MaxMessageSize ({_MaxMessageSize} bytes)");
+                        VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportStdio, "too_large");
                         JsonRpcError tooLarge = JsonRpcError.InvalidRequest();
                         tooLarge.Message = $"Invalid Request: the message exceeds the maximum message size of {_MaxMessageSize} bytes.";
                         await WriteLineAsync(McpMessageProcessor.SerializeError(new JsonRpcResponse { Id = null, Error = tooLarge }, _Session.NegotiatedVersion), run.Token).ConfigureAwait(false);
@@ -636,11 +643,14 @@ namespace Voltaic.Mcp
             }
             catch (Exception ex)
             {
+                closeReason = "error";
                 LogToStderr($"Fatal error: {ex.Message}");
                 throw;
             }
             finally
             {
+                if (closeReason == "client_closed" && token.IsCancellationRequested) closeReason = "server_stopped";
+                VoltaicInstruments.SessionClosed(VoltaicTelemetryNames.ProtocolMcp, VoltaicTelemetryNames.TransportStdio, closeReason, sessionStart);
                 _Session.Terminate = null;
                 _Session.CancelAll();
                 _Stdout = null;

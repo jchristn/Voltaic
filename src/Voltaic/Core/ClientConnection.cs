@@ -105,6 +105,12 @@ namespace Voltaic.Core
         /// </summary>
         internal object? ProtocolState { get; set; }
 
+        /// <summary>
+        /// Gets or sets the <see cref="System.Diagnostics.Stopwatch"/> timestamp at which telemetry counted this connection
+        /// or session as opened, or 0 when it was not counted.
+        /// </summary>
+        internal long TelemetryStart { get; set; }
+
         #endregion Private-Members
 
         #region Constructors-and-Factories
@@ -212,11 +218,16 @@ namespace Voltaic.Core
 
             // Queueing a server notification is not client activity; delivering it to a client stream is.
             _Queue.Enqueue(notification);
+            VoltaicInstruments.QueueChanged(Type, 1);
 
             // Enforce max queue size
             while (_Queue.Count > _MaxQueueSize)
             {
-                _Queue.TryDequeue(out JsonRpcRequest? _);
+                if (_Queue.TryDequeue(out JsonRpcRequest? _))
+                {
+                    VoltaicInstruments.QueueChanged(Type, -1);
+                    VoltaicInstruments.QueueDropped(Type);
+                }
             }
 
             _Semaphore.Release();
@@ -236,6 +247,7 @@ namespace Voltaic.Core
             await _Semaphore.WaitAsync(token).ConfigureAwait(false);
             if (_Queue.TryDequeue(out JsonRpcRequest? notification))
             {
+                VoltaicInstruments.QueueChanged(Type, -1);
                 LastActivity = DateTime.UtcNow;
                 return notification;
             }
@@ -264,6 +276,8 @@ namespace Voltaic.Core
             {
                 notifications.Add(notification);
             }
+
+            if (!_IsDisposed) VoltaicInstruments.QueueChanged(Type, -notifications.Count);
 
             LastActivity = DateTime.UtcNow;
             return notifications;
@@ -296,6 +310,9 @@ namespace Voltaic.Core
             if (!_IsDisposed)
             {
                 _IsDisposed = true;
+
+                // Undelivered notifications no longer count as queued.
+                VoltaicInstruments.QueueChanged(Type, -_Queue.Count);
 
                 if (disposing)
                 {
