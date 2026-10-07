@@ -1,0 +1,76 @@
+name: Native AOT
+
+# Publishes src/Test.Aot as a Native AOT binary and runs it. The project treats every trimming and AOT
+# warning as an error, so the publish step fails on any regression in the library's AOT compatibility,
+# and the run step makes real calls over every Voltaic transport (exit code 0 means every check passed).
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-aot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-aot:
+    name: ${{ matrix.rid }} / ${{ matrix.framework }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            framework: net8.0
+          - os: ubuntu-latest
+            rid: linux-x64
+            framework: net10.0
+          - os: windows-latest
+            rid: win-x64
+            framework: net8.0
+          - os: windows-latest
+            rid: win-x64
+            framework: net10.0
+          - os: macos-latest
+            rid: osx-arm64
+            framework: net8.0
+          - os: macos-latest
+            rid: osx-arm64
+            framework: net10.0
+
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Install Native AOT prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish Test.Aot (Native AOT, trimming and AOT warnings are errors)
+        shell: bash
+        run: dotnet publish src/Test.Aot/Test.Aot.csproj -c Release -f ${{ matrix.framework }} -r ${{ matrix.rid }} -o artifacts/aot
+
+      - name: Run the native binary
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./artifacts/aot/Test.Aot.exe
+          else
+            ./artifacts/aot/Test.Aot
+          fi

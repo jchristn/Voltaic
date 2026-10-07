@@ -1652,6 +1652,8 @@ dotnet publish src/Test.Aot/Test.Aot.csproj -c Release -f net10.0 -r osx-arm64 -
 dotnet run --project src/Test.Aot/Test.Aot.csproj -c Release -f net10.0
 ```
 
+The [Native AOT workflow](.github/workflows/native-aot.yml) publishes and runs `Test.Aot` on every push to `main` and every pull request, on Linux (`linux-x64`), Windows (`win-x64`), and macOS (`osx-arm64`), for net8.0 and net10.0.
+
 ---
 
 ## API Surface
