@@ -23,8 +23,8 @@ namespace Test.McpServer
         [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "fstat$INODE64")]
         private static extern int StatDescriptorInode64(int descriptor, byte[] buffer);
 
-        // Closes descriptor 1 and, on macOS, every other descriptor open on the same pipe: the .NET host there keeps its
-        // own duplicate of stdout, so closing descriptor 1 alone never shows the client an end of stream.
+        // Closes descriptor 1 and, on macOS and Linux, every other descriptor open on the same pipe: the .NET host keeps
+        // its own duplicate of stdout, so closing descriptor 1 alone never shows the client an end of stream.
         private static void CloseStdoutEverywhere()
         {
             if (OperatingSystem.IsMacOS())
@@ -46,7 +46,40 @@ namespace Test.McpServer
                 }
             }
 
+            if (OperatingSystem.IsLinux())
+            {
+                // Each /proc/self/fd entry links to its open file; a pipe reads as "pipe:[inode]".
+                string? stdoutTarget = DescriptorTarget(1);
+                if (stdoutTarget != null)
+                {
+                    foreach (string entry in System.IO.Directory.GetFiles("/proc/self/fd"))
+                    {
+                        if (Int32.TryParse(System.IO.Path.GetFileName(entry), out int descriptor) && descriptor > 2
+                            && DescriptorTarget(descriptor) == stdoutTarget)
+                        {
+                            CloseDescriptor(descriptor);
+                        }
+                    }
+                }
+            }
+
             CloseDescriptor(1);
+        }
+
+        private static string? DescriptorTarget(int descriptor)
+        {
+            try
+            {
+                return new System.IO.FileInfo("/proc/self/fd/" + descriptor).LinkTarget;
+            }
+            catch (System.IO.IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
         }
 
         private static bool MacStat(int descriptor, byte[] buffer)
