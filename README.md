@@ -1652,7 +1652,10 @@ dotnet publish src/Test.Aot/Test.Aot.csproj -c Release -f net10.0 -r osx-arm64 -
 dotnet run --project src/Test.Aot/Test.Aot.csproj -c Release -f net10.0
 ```
 
-The [Native AOT workflow](.github/workflows/native-aot.yml) publishes and runs `Test.Aot` on every push to `main` and every pull request, on Linux (`linux-x64`), Windows (`win-x64`), and macOS (`osx-arm64`), for net8.0 and net10.0.
+Continuous integration runs on every commit to any branch and on every pull request, on Linux, Windows, and macOS for net8.0 and net10.0:
+
+- [Tests](.github/workflows/tests.yml): builds the solution, then runs the shared suite through the console, xUnit, and NUnit runners and the `Test.Aot` checks under the JIT. Test results are uploaded as artifacts.
+- [Native AOT](.github/workflows/native-aot.yml): publishes `Test.Aot` as a native binary (`linux-x64`, `win-x64`, `osx-arm64`; trimming and AOT warnings are errors) and runs it.
 
 ---
 
