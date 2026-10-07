@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>2.2.1</Version>
+		<Version>2.3.0</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -9,6 +9,9 @@
 		<GenerateDocumentationFile>True</GenerateDocumentationFile>
 		<!-- Every public type and member must be documented. -->
 		<WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
+		<!-- Trimming and Native AOT: the analyzers run on every build and their warnings are errors. -->
+		<IsAotCompatible>true</IsAotCompatible>
+		<WarningsAsErrors>$(WarningsAsErrors);IL2026;IL2046;IL2057;IL2067;IL2070;IL2072;IL2075;IL2087;IL2090;IL2091;IL3050;IL3051</WarningsAsErrors>
 		<DocumentationFile>Voltaic.xml</DocumentationFile>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<Title>Voltaic</Title>
@@ -20,8 +23,8 @@
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
-		<PackageTags>json;rpc;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
-		<PackageReleaseNotes>v2.2.1: Dependency update (Google.Protobuf 3.36.2, Grpc.Tools 2.84.0, Watson 7.2.2); no API or behavior changes. See CHANGELOG.md.</PackageReleaseNotes>
+		<PackageTags>json;rpc;aot;nativeaot;trimming;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
+		<PackageReleaseNotes>v2.3.0: Native AOT and trimming support (IsAotCompatible on net8.0 and net10.0). Voltaic serializes from source-generated metadata; applications add a JsonSerializerContext for their own types with VoltaicJson.AddTypeInfoResolver. Without AOT nothing changes and JSON output is identical. Watson 7.3.0. See CHANGELOG.md.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -34,7 +37,7 @@
 	<ItemGroup>
 		<PackageReference Include="Google.Protobuf" Version="3.36.2" />
 		<PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="All" />
-		<PackageReference Include="Watson" Version="7.2.2" />
+		<PackageReference Include="Watson" Version="7.3.0" />
 	</ItemGroup>
 
 	<ItemGroup>

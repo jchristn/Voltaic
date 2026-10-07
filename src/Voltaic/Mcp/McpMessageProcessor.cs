@@ -304,7 +304,7 @@ namespace Voltaic.Mcp
             {
                 // A stateless request's notifications follow its own revision, never a version negotiated earlier on
                 // the same connection.
-                if (rawSend != null) notify = (notification, ct) => SafeSendAsync(rawSend, JsonSerializer.Serialize(notification), ct);
+                if (rawSend != null) notify = (notification, ct) => SafeSendAsync(rawSend, VoltaicJsonSerializer.Serialize(notification), ct);
 
                 McpProtocolException? metaError = ValidateStatelessMeta(envelope, out statelessCapabilities, out requestLogLevel);
                 if (metaError != null)
@@ -461,11 +461,11 @@ namespace Voltaic.Mcp
 
             if (response.Error != null) return SerializeError(response, session.NegotiatedVersion);
 
-            string json = JsonSerializer.Serialize(response);
+            string json = VoltaicJsonSerializer.Serialize(response);
             if (response.Error == null && !IsObjectResult(response.Result))
             {
                 // Every MCP result is a JSON object (a Result); a handler that returned something else is a server fault.
-                return JsonSerializer.Serialize(new JsonRpcResponse
+                return VoltaicJsonSerializer.Serialize(new JsonRpcResponse
                 {
                     Id = response.Id,
                     Error = new JsonRpcError { Code = -32603, Message = $"The handler for '{method}' returned a result that is not a JSON object." }
@@ -501,7 +501,7 @@ namespace Voltaic.Mcp
         /// </summary>
         internal static string SerializeError(JsonRpcResponse response, string? version)
         {
-            string json = JsonSerializer.Serialize(response);
+            string json = VoltaicJsonSerializer.Serialize(response);
             if (response.Id != null || !OmitsUnreadableErrorId(version)) return json;
             JsonObject? envelope = JsonNode.Parse(json) as JsonObject;
             if (envelope == null) return json;
@@ -534,7 +534,7 @@ namespace Voltaic.Mcp
                 return false;
             }
 
-            return JsonSerializer.SerializeToElement(result).ValueKind == JsonValueKind.Object;
+            return VoltaicJsonSerializer.SerializeToElement(result).ValueKind == JsonValueKind.Object;
         }
 
         /// <summary>
@@ -542,7 +542,7 @@ namespace Voltaic.Mcp
         /// </summary>
         internal static string SerializeNotification(JsonRpcRequest notification, McpSessionState session)
         {
-            string json = JsonSerializer.Serialize(notification);
+            string json = VoltaicJsonSerializer.Serialize(notification);
             string? version = session.NegotiatedVersion;
             if (version == null) return json;
 
@@ -614,7 +614,7 @@ namespace Voltaic.Mcp
                 {
                     // initialize must not be part of a JSON-RPC batch (2025-03-26).
                     pendingIds.Add(requestKey);
-                    pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest("initialize must not be part of a JSON-RPC batch.") })));
+                    pending.Add(Task.FromResult<string?>(VoltaicJsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest("initialize must not be part of a JSON-RPC batch.") })));
                     continue;
                 }
 
@@ -624,7 +624,7 @@ namespace Voltaic.Mcp
                     if (envelope.Kind == McpEnvelopeKind.Request)
                     {
                         pendingIds.Add(requestKey);
-                        pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest($"Protocol version {McpProtocol.ProtocolVersion20260728} does not allow JSON-RPC batches; send the request on its own.") })));
+                        pending.Add(Task.FromResult<string?>(VoltaicJsonSerializer.Serialize(new JsonRpcResponse { Id = envelope.ResponseId, Error = InvalidRequest($"Protocol version {McpProtocol.ProtocolVersion20260728} does not allow JSON-RPC batches; send the request on its own.") })));
                     }
 
                     continue;
@@ -884,7 +884,7 @@ namespace Voltaic.Mcp
                 if (data["supported"] is not JsonArray)
                 {
                     JsonArray supported = new JsonArray();
-                    foreach (string version in _Endpoint.SupportedVersions()) supported.Add(version);
+                    foreach (string version in _Endpoint.SupportedVersions()) supported.Add((JsonNode?)version);
                     data["supported"] = supported;
                 }
 
@@ -970,7 +970,7 @@ namespace Voltaic.Mcp
         private static string? ReadString(object? result, string property)
         {
             if (result == null) return null;
-            JsonElement element = result is JsonElement json ? json : JsonSerializer.SerializeToElement(result);
+            JsonElement element = result is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(result);
             return element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
                 : null;

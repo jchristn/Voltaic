@@ -86,7 +86,7 @@ namespace Voltaic.Core
             JsonElement parameters;
             try
             {
-                parameters = notification.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(notification.Params);
+                parameters = notification.Params is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(notification.Params);
             }
             catch (Exception error) when (error is JsonException || error is NotSupportedException)
             {
@@ -137,7 +137,7 @@ namespace Voltaic.Core
             if (parameters == null) return null;
             try
             {
-                JsonElement element = parameters is JsonElement json ? json : JsonSerializer.SerializeToElement(parameters);
+                JsonElement element = parameters is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(parameters);
                 if (element.ValueKind != JsonValueKind.Object) return null;
                 if (!element.TryGetProperty("_meta", out JsonElement meta) || meta.ValueKind != JsonValueKind.Object) return null;
                 if (!meta.TryGetProperty("progressToken", out JsonElement token)) return null;

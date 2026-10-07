@@ -106,7 +106,7 @@ namespace Voltaic.Core
                 });
                 if (String.IsNullOrEmpty(traceParent)) return parameters;
 
-                JsonNode? node = parameters == null ? new JsonObject() : JsonSerializer.SerializeToNode(parameters, JsonLimits.Serializer);
+                JsonNode? node = parameters == null ? new JsonObject() : VoltaicJsonSerializer.SerializeToNode(parameters, JsonLimits.Serializer);
                 if (node is not JsonObject root) return parameters;
 
                 JsonNode? existingMeta = root["_meta"];

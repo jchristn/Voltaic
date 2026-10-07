@@ -11,6 +11,7 @@ namespace Voltaic.A2A
     using System.Threading.Tasks;
     using Google.Protobuf;
     using Google.Protobuf.WellKnownTypes;
+    using Voltaic.Core;
     using GrpcWire = Voltaic.A2A.Grpc;
 
     internal static class A2AGrpcWire
@@ -1007,7 +1008,7 @@ namespace Voltaic.A2A
             {
                 try
                 {
-                    Dictionary<string, object?>? header = JsonSerializer.Deserialize<Dictionary<string, object?>>(signature.Header, A2AJson.DefaultOptions);
+                    Dictionary<string, object?>? header = VoltaicJsonSerializer.Deserialize<Dictionary<string, object?>>(signature.Header, A2AJson.DefaultOptions);
                     if (header != null)
                     {
                         grpc.Header = ToGrpcStruct(header);
@@ -1027,7 +1028,7 @@ namespace Voltaic.A2A
             {
                 Protected = signature.Protected,
                 Signature = signature.Signature,
-                Header = signature.Header != null ? JsonSerializer.Serialize(FromGrpcStruct(signature.Header), A2AJson.DefaultOptions) : string.Empty
+                Header = signature.Header != null ? VoltaicJsonSerializer.Serialize(FromGrpcStruct(signature.Header), A2AJson.DefaultOptions) : string.Empty
             };
         }
 
@@ -1357,7 +1358,7 @@ namespace Voltaic.A2A
             // Normalize any value (primitive, POCO, dictionary, list, or a deserialized JSON value)
             // through JSON, then build the protobuf Value with the streaming reader. This is DOM-free
             // and handles deserialized JSON values transparently.
-            string json = JsonSerializer.Serialize(element, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(element, A2AJson.DefaultOptions);
             byte[] bytes = Encoding.UTF8.GetBytes(json);
             Utf8JsonReader reader = new Utf8JsonReader(bytes);
             reader.Read();

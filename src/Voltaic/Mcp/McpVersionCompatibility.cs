@@ -6,6 +6,7 @@ namespace Voltaic.Mcp
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Nodes;
+    using Voltaic.Core;
 
     /// <summary>
     /// Downgrades server-produced MCP JSON (results, server notifications, and server capabilities) so it
@@ -230,7 +231,7 @@ namespace Voltaic.Mcp
         // DowngradeTool), so structured content sent under it must be an object on those sessions.
         internal static bool IsObjectOnlyBeforeStateless(object outputSchema)
         {
-            JsonObject? schema = outputSchema as JsonObject ?? JsonSerializer.SerializeToNode(outputSchema) as JsonObject;
+            JsonObject? schema = outputSchema as JsonObject ?? VoltaicJsonSerializer.SerializeToNode(outputSchema) as JsonObject;
             return schema != null && !schema.ContainsKey("type") && DescribesOnlyObjects(schema);
         }
 
@@ -338,7 +339,7 @@ namespace Voltaic.Mcp
                         result["content"] = content;
                     }
 
-                    content.Add(CreateTextBlock(structured.ToJsonString(), null, revision));
+                    content.Add((JsonNode)CreateTextBlock(structured.ToJsonString(), null, revision));
                 }
             }
         }

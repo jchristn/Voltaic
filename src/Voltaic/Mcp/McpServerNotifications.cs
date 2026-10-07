@@ -34,7 +34,7 @@ namespace Voltaic.Mcp
         internal static Task ResourceUpdatedAsync(McpSubscriptions subscriptions, IEnumerable<McpSessionState> sessions, string uri, CancellationToken token)
         {
             if (String.IsNullOrEmpty(uri)) throw new ArgumentNullException(nameof(uri));
-            JsonRpcRequest notification = new JsonRpcRequest { Method = "notifications/resources/updated", Params = new { uri } };
+            JsonRpcRequest notification = new JsonRpcRequest { Method = "notifications/resources/updated", Params = new Dictionary<string, object?> { { "uri", uri } } };
             return Task.WhenAll(
                 SendAsync(sessions.Where(session => session.NotificationsReady && session.IsSubscribed(uri)), notification, token),
                 subscriptions.ResourceUpdatedAsync(uri, token));
@@ -64,7 +64,7 @@ namespace Voltaic.Mcp
         internal static async Task<bool> ProgressAsync(IEnumerable<McpSessionState> sessions, object progressToken, double progress, double? total, string? message, CancellationToken token)
         {
             if (progressToken == null) throw new ArgumentNullException(nameof(progressToken));
-            string tokenJson = progressToken is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(progressToken);
+            string tokenJson = progressToken is JsonElement element ? element.GetRawText() : VoltaicJsonSerializer.Serialize(progressToken);
 
             // Progress tokens are unique only per client, so two clients may use the same one. Prefer the request this
             // code runs for; otherwise send only when exactly one active request carries the token.

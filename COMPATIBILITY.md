@@ -2,7 +2,7 @@
 
 This document records how Voltaic conforms to each published MCP specification revision: which transports are supported, the status of every requirement area, the relaxations made deliberately to simplify integration, and the optional features not implemented. It is updated with every release.
 
-- **Voltaic version:** 2.1.13
+- **Voltaic version:** 2.3.0. v2.2.0 (telemetry), v2.2.1 (dependencies), and v2.3.0 (Native AOT and trimming support; the JSON Voltaic writes is unchanged) change no protocol behavior, so the requirement status below is the v2.1.13 review's.
 - **Last reviewed:** 2026-09-26. The v2.1.12 source was reviewed line by line against every MUST, MUST NOT, SHOULD, and SHOULD NOT requirement of each revision (four independent reviews: lifecycle and stream transports, Streamable HTTP and authorization, server features and data model, and the stateless revision); v2.1.13 resolves each finding, and each resolution is covered by a test. The unreleased v2.1.13 was then reviewed the same way, and its findings are resolved in this release too.
 - **Revisions covered:** `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, `2026-07-28`
 - **Interoperability verified with:** MCP Inspector CLI 2.8.0, the official Python MCP SDK 2.2.0 (as client and server; as client on each handshake revision, `2024-11-05` through `2025-11-25`, over HTTP and stdio, and on `2026-07-28`, including `subscriptions/listen`), Claude Code 2.1.281, the official A2A Python SDK 1.1.5

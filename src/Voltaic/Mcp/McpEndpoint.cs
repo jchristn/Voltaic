@@ -361,7 +361,7 @@ namespace Voltaic.Mcp
             RpcParameters? toolArguments;
             try
             {
-                JsonValueKind argumentsKind = call.Arguments is JsonElement argumentsElement ? argumentsElement.ValueKind : JsonSerializer.SerializeToElement(call.Arguments).ValueKind;
+                JsonValueKind argumentsKind = call.Arguments is JsonElement argumentsElement ? argumentsElement.ValueKind : VoltaicJsonSerializer.SerializeToElement(call.Arguments).ValueKind;
                 if (call.Arguments != null && argumentsKind != JsonValueKind.Object)
                 {
                     throw McpProtocolException.InvalidParams("tools/call arguments must be a JSON object.");
@@ -512,7 +512,7 @@ namespace Voltaic.Mcp
                 return McpToolCallResult.FromText(text);
             }
 
-            return McpToolCallResult.FromText(JsonSerializer.Serialize(result));
+            return McpToolCallResult.FromText(VoltaicJsonSerializer.Serialize(result));
         }
 
         // Handshake-era sessions see a typeless object-only output schema as "type": "object" (McpVersionCompatibility),
@@ -524,7 +524,7 @@ namespace Voltaic.Mcp
             // Revisions before 2025-06-18 receive neither the output schema nor structured content.
             string? negotiated = McpRequestScope.Current?.ProtocolVersion;
             if (negotiated != null && String.CompareOrdinal(negotiated, McpProtocol.ProtocolVersion20250618) < 0) return;
-            JsonElement value = structuredContent is JsonElement element ? element : JsonSerializer.SerializeToElement(structuredContent);
+            JsonElement value = structuredContent is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(structuredContent);
             if (value.ValueKind != JsonValueKind.Object)
             {
                 throw new McpProtocolException(-32603, $"Tool '{toolName}' structured output must be an object on protocol versions before {McpProtocol.ProtocolVersion20260728}, where its output schema is advertised with \"type\": \"object\".");
@@ -573,7 +573,7 @@ namespace Voltaic.Mcp
         {
             try
             {
-                McpSchemaValidator.Validate(outputSchema, JsonSerializer.Serialize(value), context);
+                McpSchemaValidator.Validate(outputSchema, VoltaicJsonSerializer.Serialize(value), context);
             }
             catch (McpProtocolException invalid)
             {
@@ -638,7 +638,7 @@ namespace Voltaic.Mcp
         // else the method's capability. Null for other methods and for an elicitation mode other than form or url.
         private static List<string>? RequiredCapabilityPaths(McpInputRequest request, JsonElement? declared)
         {
-            JsonElement parameters = request.Params == null ? default : (request.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(request.Params));
+            JsonElement parameters = request.Params == null ? default : (request.Params is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(request.Params));
             bool hasParams = parameters.ValueKind == JsonValueKind.Object;
             switch (request.Method)
             {
@@ -766,10 +766,10 @@ namespace Voltaic.Mcp
             string? version = McpRequestScope.Current?.ProtocolVersion;
             if (version != null && McpProtocol.GetVersionInfo(version)?.Era == McpProtocolEra.Stateless)
             {
-                throw McpProtocolException.InvalidParams($"Resource '{uri}' was not found.", new { uri });
+                throw McpProtocolException.InvalidParams($"Resource '{uri}' was not found.", new Dictionary<string, object?> { { "uri", uri } });
             }
 
-            throw new McpProtocolException(-32002, $"Resource '{uri}' was not found.", new { uri });
+            throw new McpProtocolException(-32002, $"Resource '{uri}' was not found.", new Dictionary<string, object?> { { "uri", uri } });
         }
 
         public McpListPromptsResult ListPrompts(RpcParameters? args)
@@ -833,7 +833,7 @@ namespace Voltaic.Mcp
                 JsonElement provided;
                 try
                 {
-                    provided = JsonSerializer.SerializeToElement(request.Arguments);
+                    provided = VoltaicJsonSerializer.SerializeToElement(request.Arguments);
                 }
                 catch (Exception unreadable) when (unreadable is InvalidOperationException || unreadable is JsonException)
                 {
@@ -1003,15 +1003,15 @@ namespace Voltaic.Mcp
                     Subscribe = includeChangeNotifications ? SupportsResourceSubscriptions : null
                 },
                 Prompts = new McpListChangedCapability { ListChanged = includeChangeNotifications ? SupportsListChangedNotifications : null },
-                Completions = new { },
-                Logging = SupportsLogging ? new { } : null
+                Completions = JsonEmptyObject.Instance,
+                Logging = SupportsLogging ? JsonEmptyObject.Instance : null
             };
 
             if (AdvertiseTasksExtension)
             {
                 capabilities.Extensions = new Dictionary<string, object>
                 {
-                    { McpProtocol.TasksExtensionId, new { } }
+                    { McpProtocol.TasksExtensionId, JsonEmptyObject.Instance }
                 };
             }
 
@@ -1044,7 +1044,7 @@ namespace Voltaic.Mcp
         // any other type is rejected.
         private static JsonElement NormalizeObjectSchema(object schema, string toolName, string kind)
         {
-            JsonElement element = schema is JsonElement json ? json : JsonSerializer.SerializeToElement(schema);
+            JsonElement element = schema is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(schema);
             if (element.ValueKind != JsonValueKind.Object)
             {
                 throw new ArgumentException($"Tool '{toolName}' {kind} schema must be a JSON object.");
@@ -1082,7 +1082,7 @@ namespace Voltaic.Mcp
                 copy[property.Key] = property.Value?.DeepClone();
             }
 
-            return JsonSerializer.SerializeToElement(copy);
+            return VoltaicJsonSerializer.SerializeToElement(copy);
         }
 
         private static void ValidateResource(McpResource resource)

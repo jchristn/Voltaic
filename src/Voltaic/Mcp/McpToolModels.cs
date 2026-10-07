@@ -64,7 +64,7 @@ namespace Voltaic.Mcp
                 StructuredContent = structuredContent ?? JsonNullElement(),
                 Content = new List<object>
                 {
-                    new McpTextContent { Text = JsonSerializer.Serialize(structuredContent) }
+                    new McpTextContent { Text = VoltaicJsonSerializer.Serialize(structuredContent) }
                 }
             };
         }

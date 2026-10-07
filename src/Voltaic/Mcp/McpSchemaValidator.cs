@@ -8,6 +8,7 @@ namespace Voltaic.Mcp
     using System.Text;
     using System.Text.Json;
     using System.Text.RegularExpressions;
+    using Voltaic.Core;
 
     /// <summary>
     /// Validates JSON values (tool arguments and structured tool output) against a JSON Schema, operating
@@ -216,7 +217,7 @@ namespace Voltaic.Mcp
                     return true;
                 }
 
-                root = JsonSerializer.SerializeToElement(schema);
+                root = VoltaicJsonSerializer.SerializeToElement(schema);
                 return true;
             }
             catch (JsonException)
@@ -600,7 +601,7 @@ namespace Voltaic.Mcp
 
                 if (hasPropertyNames)
                 {
-                    JsonElement nameElement = JsonSerializer.SerializeToElement(member.Name);
+                    JsonElement nameElement = VoltaicJsonSerializer.SerializeToElement(member.Name);
                     string? nameError = Evaluate(propertyNames, nameElement, $"{path} property name '{member.Name}'", root, depth + 1, 0, ref budget);
                     if (nameError != null) return nameError;
                 }

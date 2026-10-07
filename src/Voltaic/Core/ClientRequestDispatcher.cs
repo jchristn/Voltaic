@@ -57,7 +57,7 @@ namespace Voltaic.Core
             string reason = "none given";
             try
             {
-                JsonElement parameters = notification.Params is JsonElement element ? element : JsonSerializer.SerializeToElement(notification.Params);
+                JsonElement parameters = notification.Params is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(notification.Params);
                 if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("requestId", out JsonElement requestId)) idKey = IdKey(requestId);
                 if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("reason", out JsonElement reasonElement) && reasonElement.ValueKind == JsonValueKind.String)
                 {
@@ -101,7 +101,7 @@ namespace Voltaic.Core
         {
             try
             {
-                JsonElement element = value is JsonElement json ? json : JsonSerializer.SerializeToElement(value);
+                JsonElement element = value is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(value);
                 return element.ValueKind == JsonValueKind.Object;
             }
             catch (Exception serializeError) when (serializeError is JsonException || serializeError is NotSupportedException)
@@ -113,7 +113,7 @@ namespace Voltaic.Core
         private static string? IdKey(object? id)
         {
             if (id == null) return null;
-            JsonElement element = id is JsonElement json ? json : JsonSerializer.SerializeToElement(id);
+            JsonElement element = id is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(id);
             return element.ValueKind == JsonValueKind.String || element.ValueKind == JsonValueKind.Number ? element.GetRawText() : null;
         }
 
@@ -169,7 +169,7 @@ namespace Voltaic.Core
                     if (!root.TryGetProperty("id", out JsonElement _)) return null;
                 }
 
-                return JsonSerializer.Deserialize<JsonRpcRequest>(json, JsonLimits.Serializer);
+                return VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(json, JsonLimits.Serializer);
             }
             catch (JsonException)
             {

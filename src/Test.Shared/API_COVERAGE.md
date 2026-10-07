@@ -83,6 +83,7 @@ Public APIs are grouped under `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`. 
 | `McpResourceTemplate` | Covered | `McpProtocol.Content.ResourceSerialization`, `ModelApi.Mcp.Matrix.ResourceTemplateFullMetadata`, HTTP/TCP template suites |
 | `McpTextResourceContents` | Covered | `McpProtocol.Content.ResourceSerialization`, `ModelApi.Mcp.Matrix.TextResourceContentsOmittedMimeType`, HTTP/TCP resource suites |
 | `McpBlobResourceContents` | Covered | `McpProtocol.Content.ResourceSerialization`, `ModelApi.Mcp.Matrix.BlobResourceContents` |
+| `VoltaicJson` | Covered | `Json.TypeInfo.*` (argument validation, application resolvers consulted in order and once, every exported model and the values Voltaic builds itself served by source-generated metadata, an MCP TCP session that touches no reflection metadata); Native AOT round trips on every transport in `src/Test.Aot` |
 | `VoltaicTelemetry`, `VoltaicTelemetryNames` | Covered | `Telemetry.*` (names and build info, JSON-RPC TCP, MCP TCP tool stages and propagation, MCP HTTP sessions and propagation, HTTP rejections, WebSocket, pings and notifications, stdio launch failure, connection queue, A2A JSON-RPC, HTTP+JSON, push pipeline, gRPC under Watson, no listener, `Enabled = false`, throwing listener) |
 | `McpRateLimits` | Covered | `McpServers.Hardening.RateLimitsApplyPerClient` (defaults, validation, tool-call and log limits, `RateLimits` on the servers) |
 | `McpReadResourceResult` | Covered | `ModelApi.Mcp.Matrix.ReadResourceResultDefaults`, HTTP/TCP resource suites |

@@ -252,7 +252,7 @@ namespace Voltaic.Core
                 Params = parameters
             };
 
-            string json = JsonSerializer.Serialize(notification);
+            string json = VoltaicJsonSerializer.Serialize(notification);
 
             List<Task> tasks = new List<Task>();
             foreach (ClientConnection client in _Clients.Values)
@@ -639,7 +639,7 @@ namespace Voltaic.Core
             {
                 LogMessage($"Received from {client.SessionId}: {requestString}");
 
-                JsonRpcRequest? request = JsonSerializer.Deserialize<JsonRpcRequest>(requestString, JsonLimits.Serializer);
+                JsonRpcRequest? request = VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(requestString, JsonLimits.Serializer);
                 if (request == null)
                 {
                     VoltaicInstruments.RejectedMessage(VoltaicTelemetryNames.ProtocolJsonRpc, VoltaicTelemetryNames.TransportTcp, "invalid_request");
@@ -746,7 +746,7 @@ namespace Voltaic.Core
         {
             try
             {
-                string json = JsonSerializer.Serialize(response);
+                string json = VoltaicJsonSerializer.Serialize(response);
                 await WriteToClientAsync(client, json, token).ConfigureAwait(false);
                 LogMessage($"Sent to {client.SessionId}: {json}");
 

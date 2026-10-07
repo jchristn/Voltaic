@@ -93,7 +93,7 @@ namespace Voltaic.Mcp
         internal static JsonElement ToElement(object? result)
         {
             if (result is JsonElement element) return element;
-            return JsonSerializer.SerializeToElement(result);
+            return VoltaicJsonSerializer.SerializeToElement(result);
         }
     }
 }

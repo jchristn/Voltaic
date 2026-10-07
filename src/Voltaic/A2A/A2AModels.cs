@@ -5,6 +5,7 @@ namespace Voltaic.A2A
     using System.Linq;
     using System.Text.Json;
     using System.Text.Json.Serialization;
+    using Voltaic.Core;
 
     /// <summary>
     /// An A2A Agent Card: the self-describing document an agent publishes (at <c>/.well-known/agent-card.json</c>)
@@ -877,8 +878,8 @@ namespace Voltaic.A2A
         /// <returns>A new, independent task instance.</returns>
         public AgentTask Clone()
         {
-            string json = JsonSerializer.Serialize(this, A2AJson.DefaultOptions);
-            return JsonSerializer.Deserialize<AgentTask>(json, A2AJson.DefaultOptions) ?? new AgentTask();
+            string json = VoltaicJsonSerializer.Serialize(this, A2AJson.DefaultOptions);
+            return VoltaicJsonSerializer.Deserialize<AgentTask>(json, A2AJson.DefaultOptions) ?? new AgentTask();
         }
     }
 
@@ -1112,7 +1113,7 @@ namespace Voltaic.A2A
         [JsonInclude]
         [JsonPropertyName("pushNotificationConfig")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        private PushNotificationConfig? LegacyPushNotificationConfig
+        internal PushNotificationConfig? LegacyPushNotificationConfig
         {
             get => null;
             set
@@ -1400,7 +1401,7 @@ namespace Voltaic.A2A
         [JsonInclude]
         [JsonPropertyName("configId")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        private string? LegacyConfigId
+        internal string? LegacyConfigId
         {
             get => null;
             set
@@ -1462,7 +1463,7 @@ namespace Voltaic.A2A
         [JsonInclude]
         [JsonPropertyName("configId")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        private string? LegacyConfigId
+        internal string? LegacyConfigId
         {
             get => null;
             set

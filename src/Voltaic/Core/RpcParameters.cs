@@ -46,7 +46,7 @@ namespace Voltaic.Core
             // A JsonElement keeps its exact text (no transcoding, so any JSON string survives, even one that is not
             // valid Unicode).
             if (value is JsonElement element && element.ValueKind != JsonValueKind.Undefined) return new RpcParameters(element.GetRawText());
-            return new RpcParameters(value == null ? null : JsonSerializer.Serialize(value));
+            return new RpcParameters(value == null ? null : VoltaicJsonSerializer.Serialize(value));
         }
 
         /// <summary>
@@ -63,7 +63,7 @@ namespace Voltaic.Core
                 return default;
             }
 
-            return JsonSerializer.Deserialize<T>(_RawJson!, JsonLimits.Serializer);
+            return VoltaicJsonSerializer.Deserialize<T>(_RawJson!, JsonLimits.Serializer);
         }
 
         /// <summary>
@@ -91,7 +91,7 @@ namespace Voltaic.Core
 
             try
             {
-                return JsonSerializer.Deserialize<string>(raw, JsonLimits.Serializer);
+                return VoltaicJsonSerializer.Deserialize<string>(raw, JsonLimits.Serializer);
             }
             catch (JsonException)
             {

@@ -967,7 +967,7 @@ namespace Voltaic.A2A
             JsonRpcRequest? request;
             try
             {
-                request = JsonSerializer.Deserialize<JsonRpcRequest>(body, A2AJson.DefaultOptions);
+                request = VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(body, A2AJson.DefaultOptions);
             }
             catch (JsonException)
             {
@@ -1140,7 +1140,7 @@ namespace Voltaic.A2A
                         if (context.Request.HttpMethod == "DELETE")
                         {
                             await DeleteTaskPushNotificationConfigAsync(new DeleteTaskPushNotificationConfigRequest { TaskId = taskId, ConfigId = configId }, token).ConfigureAwait(false);
-                            await SendJsonAsync(context, new { }, token).ConfigureAwait(false);
+                            await SendJsonAsync(context, JsonEmptyObject.Instance, token).ConfigureAwait(false);
                             return true;
                         }
                     }
@@ -1622,7 +1622,7 @@ namespace Voltaic.A2A
         {
             // Awaited directly so errors (for example TaskNotFound) reach the JSON-RPC caller.
             await DeleteTaskPushNotificationConfigAsync(request, token).ConfigureAwait(false);
-            return new { };
+            return JsonEmptyObject.Instance;
         }
 
         private async Task EnsureTaskExistsAsync(string taskId, CancellationToken token)
@@ -1703,7 +1703,7 @@ namespace Voltaic.A2A
                 return;
             }
 
-            string payload = JsonSerializer.Serialize(response, A2AJson.DefaultOptions);
+            string payload = VoltaicJsonSerializer.Serialize(response, A2AJson.DefaultOptions);
 
             // The delivery continues the trace of the event that queued it (a background hand-off), and its time in the
             // queue is the "queued" stage.
@@ -1898,8 +1898,8 @@ namespace Voltaic.A2A
                 return new T();
             }
 
-            string json = JsonSerializer.Serialize(parameters, A2AJson.DefaultOptions);
-            return JsonSerializer.Deserialize<T>(json, A2AJson.DefaultOptions) ?? new T();
+            string json = VoltaicJsonSerializer.Serialize(parameters, A2AJson.DefaultOptions);
+            return VoltaicJsonSerializer.Deserialize<T>(json, A2AJson.DefaultOptions) ?? new T();
         }
 
         private static async Task<T> ReadJsonAsync<T>(HttpListenerRequest request) where T : new()
@@ -1910,7 +1910,7 @@ namespace Voltaic.A2A
                 return new T();
             }
 
-            return JsonSerializer.Deserialize<T>(body, A2AJson.DefaultOptions) ?? new T();
+            return VoltaicJsonSerializer.Deserialize<T>(body, A2AJson.DefaultOptions) ?? new T();
         }
 
         private static async Task<CreateTaskPushNotificationConfigRequest> ReadPushNotificationConfigRequestAsync(HttpListenerRequest request)
@@ -1921,14 +1921,14 @@ namespace Voltaic.A2A
                 return new CreateTaskPushNotificationConfigRequest();
             }
 
-            Dictionary<string, object?>? fields = JsonSerializer.Deserialize<Dictionary<string, object?>>(body, A2AJson.DefaultOptions);
+            Dictionary<string, object?>? fields = VoltaicJsonSerializer.Deserialize<Dictionary<string, object?>>(body, A2AJson.DefaultOptions);
             if (fields != null && fields.ContainsKey("config"))
             {
-                return JsonSerializer.Deserialize<CreateTaskPushNotificationConfigRequest>(body, A2AJson.DefaultOptions)
+                return VoltaicJsonSerializer.Deserialize<CreateTaskPushNotificationConfigRequest>(body, A2AJson.DefaultOptions)
                     ?? new CreateTaskPushNotificationConfigRequest();
             }
 
-            PushNotificationConfig? config = JsonSerializer.Deserialize<PushNotificationConfig>(body, A2AJson.DefaultOptions);
+            PushNotificationConfig? config = VoltaicJsonSerializer.Deserialize<PushNotificationConfig>(body, A2AJson.DefaultOptions);
             return new CreateTaskPushNotificationConfigRequest
             {
                 ConfigId = config?.Id ?? string.Empty,
@@ -1978,7 +1978,7 @@ namespace Voltaic.A2A
 
         private async Task SendJsonAsync(HttpListenerContext context, object value, CancellationToken token)
         {
-            string json = JsonSerializer.Serialize(value, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(value, A2AJson.DefaultOptions);
             byte[] buffer = Encoding.UTF8.GetBytes(json);
             context.Response.ContentType = "application/json";
             context.Response.ContentLength64 = buffer.Length;
@@ -1998,7 +1998,7 @@ namespace Voltaic.A2A
 
         private static async Task SendSseJsonAsync(HttpListenerResponse response, object value, CancellationToken token)
         {
-            string json = JsonSerializer.Serialize(value, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(value, A2AJson.DefaultOptions);
             byte[] buffer = Encoding.UTF8.GetBytes($"data: {json}\n\n");
             await response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
             await response.OutputStream.FlushAsync(token).ConfigureAwait(false);
@@ -2044,7 +2044,7 @@ namespace Voltaic.A2A
 
             try
             {
-                return JsonSerializer.Deserialize<TaskState>($"\"{value}\"", A2AJson.DefaultOptions);
+                return VoltaicJsonSerializer.Deserialize<TaskState>($"\"{value}\"", A2AJson.DefaultOptions);
             }
             catch (JsonException)
             {

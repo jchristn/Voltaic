@@ -541,7 +541,7 @@ namespace Voltaic.Mcp
                 return default(T)!;
             }
 
-            return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(response.Result))!;
+            return VoltaicJsonSerializer.Deserialize<T>(VoltaicJsonSerializer.Serialize(response.Result))!;
         }
 
         /// <summary>
@@ -616,7 +616,7 @@ namespace Voltaic.Mcp
         {
             if (parameters == null) return null;
             if (parameters is IReadOnlyDictionary<string, object?> map) return map;
-            JsonElement element = parameters is JsonElement json ? json : JsonSerializer.SerializeToElement(parameters);
+            JsonElement element = parameters is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(parameters);
             if (element.ValueKind != JsonValueKind.Object) throw new ArgumentException("MCP request parameters must be a JSON object.", nameof(parameters));
             Dictionary<string, object?> fields = new Dictionary<string, object?>(StringComparer.Ordinal);
             foreach (JsonProperty property in element.EnumerateObject()) fields[property.Name] = property.Value.Clone();
@@ -662,7 +662,7 @@ namespace Voltaic.Mcp
                 };
 
                 DateTime sentUtc = DateTime.UtcNow;
-                string requestJson = JsonSerializer.Serialize(request);
+                string requestJson = VoltaicJsonSerializer.Serialize(request);
                 LogMessage($"Sending request: {requestJson}");
                 RaiseRequestSent(new RequestSentEventArgs(request));
                 bool hadSession = !String.IsNullOrEmpty(SessionId);
@@ -691,7 +691,7 @@ namespace Voltaic.Mcp
                         string responseJson = await ReadResponseBodyAsync(httpResponse, request.Id, cts.Token).ConfigureAwait(false);
                         LogMessage($"Received response: {responseJson}");
 
-                        JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson, JsonLimits.Serializer);
+                        JsonRpcResponse? response = VoltaicJsonSerializer.Deserialize<JsonRpcResponse>(responseJson, JsonLimits.Serializer);
                         if (response == null)
                         {
                             throw new Exception("Invalid response from server");
@@ -923,7 +923,7 @@ namespace Voltaic.Mcp
             };
 
             DateTime sentUtc = DateTime.UtcNow;
-            string requestJson = JsonSerializer.Serialize(request);
+            string requestJson = VoltaicJsonSerializer.Serialize(request);
             LogMessage($"Sending stateless request: {requestJson}");
             RaiseRequestSent(new RequestSentEventArgs(request));
 
@@ -977,7 +977,7 @@ namespace Voltaic.Mcp
                     throw new McpProtocolException(-32603, $"Empty stateless response (HTTP {(int)httpResponse.StatusCode}).");
                 }
 
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson, JsonLimits.Serializer);
+                JsonRpcResponse? response = VoltaicJsonSerializer.Deserialize<JsonRpcResponse>(responseJson, JsonLimits.Serializer);
                 if (response == null)
                 {
                     throw new McpProtocolException(-32603, "Invalid stateless response from server.");
@@ -1157,7 +1157,7 @@ namespace Voltaic.Mcp
                 Params = _Stateless ? BuildStatelessParams(ToParameterMap(parameters)) : parameters
             };
 
-            string requestJson = JsonSerializer.Serialize(request);
+            string requestJson = VoltaicJsonSerializer.Serialize(request);
             LogMessage($"Sending notification: {requestJson}");
             RaiseRequestSent(new RequestSentEventArgs(request));
 
@@ -1392,7 +1392,7 @@ namespace Voltaic.Mcp
 
             string? negotiatedVersion = response.Result == null
                 ? null
-                : new RpcParameters(JsonSerializer.Serialize(response.Result)).GetString("protocolVersion");
+                : new RpcParameters(VoltaicJsonSerializer.Serialize(response.Result)).GetString("protocolVersion");
             if (!String.IsNullOrEmpty(negotiatedVersion))
             {
                 if (!McpProtocol.IsHandshakeVersion(negotiatedVersion!))
@@ -1439,7 +1439,7 @@ namespace Voltaic.Mcp
                 {
                     if (entry.Key == "_meta" && entry.Value != null)
                     {
-                        JsonElement metaElement = entry.Value is JsonElement json ? json : JsonSerializer.SerializeToElement(entry.Value);
+                        JsonElement metaElement = entry.Value is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(entry.Value);
                         if (metaElement.ValueKind == JsonValueKind.Object)
                         {
                             foreach (JsonProperty property in metaElement.EnumerateObject()) callerMeta[property.Name] = property.Value.Clone();
@@ -1482,7 +1482,7 @@ namespace Voltaic.Mcp
             if (!StringComparer.Ordinal.Equals(method, "tools/call") && !StringComparer.Ordinal.Equals(method, "prompts/get") && !StringComparer.Ordinal.Equals(method, "resources/read")) return null;
             if (!parameters.TryGetValue(key, out object? value) || value == null) return null;
             if (value is string text) return text;
-            JsonElement element = value is JsonElement json ? json : JsonSerializer.SerializeToElement(value);
+            JsonElement element = value is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(value);
             return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
         }
 
@@ -1493,7 +1493,7 @@ namespace Voltaic.Mcp
             if (!_ToolHeaderParameters.TryGetValue(toolName, out List<McpHeaderParameter>? headerParameters) || headerParameters.Count == 0) return;
             if (parameters == null || !parameters.TryGetValue("arguments", out object? argumentObject) || argumentObject == null) return;
 
-            JsonElement arguments = argumentObject is JsonElement element ? element : JsonSerializer.SerializeToElement(argumentObject);
+            JsonElement arguments = argumentObject is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(argumentObject);
             foreach (McpHeaderParameter parameter in headerParameters)
             {
                 if (!McpHeaderParameters.TryGetValue(arguments, parameter.Path, out JsonElement value)) continue;
@@ -1508,7 +1508,7 @@ namespace Voltaic.Mcp
         {
             if (result == null) return null;
 
-            JsonElement root = result is JsonElement element ? element : JsonSerializer.SerializeToElement(result);
+            JsonElement root = result is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(result);
             if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("tools", out JsonElement tools) || tools.ValueKind != JsonValueKind.Array)
             {
                 return result;
@@ -1541,10 +1541,10 @@ namespace Voltaic.Mcp
             Dictionary<string, JsonElement> rebuilt = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
             foreach (JsonProperty property in root.EnumerateObject())
             {
-                rebuilt[property.Name] = property.NameEquals("tools") ? JsonSerializer.SerializeToElement(kept) : property.Value;
+                rebuilt[property.Name] = property.NameEquals("tools") ? VoltaicJsonSerializer.SerializeToElement(kept) : property.Value;
             }
 
-            return JsonSerializer.SerializeToElement(rebuilt);
+            return VoltaicJsonSerializer.SerializeToElement(rebuilt);
         }
 
         // Lists every page of tools so the x-mcp-header definitions are current.
@@ -1557,7 +1557,7 @@ namespace Voltaic.Mcp
                 JsonRpcResponse listed = await SendStatelessCoreAsync("tools/list", parameters, null, 0, token).ConfigureAwait(false);
                 if (listed.Error != null || listed.Result == null) return;
 
-                JsonElement result = listed.Result is JsonElement element ? element : JsonSerializer.SerializeToElement(listed.Result);
+                JsonElement result = listed.Result is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(listed.Result);
                 cursor = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("nextCursor", out JsonElement next) && next.ValueKind == JsonValueKind.String
                     ? next.GetString()
                     : null;
@@ -1568,7 +1568,7 @@ namespace Voltaic.Mcp
         private static string? PickSupportedStatelessVersion(object? errorData)
         {
             if (errorData == null) return null;
-            JsonElement data = errorData is JsonElement json ? json : JsonSerializer.SerializeToElement(errorData);
+            JsonElement data = errorData is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(errorData);
             if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("supported", out JsonElement supported) || supported.ValueKind != JsonValueKind.Array) return null;
 
             foreach (JsonElement candidate in supported.EnumerateArray())
@@ -1583,7 +1583,7 @@ namespace Voltaic.Mcp
         private static string? ReadResultType(object? result)
         {
             if (result == null) return null;
-            JsonElement element = result is JsonElement json ? json : JsonSerializer.SerializeToElement(result);
+            JsonElement element = result is JsonElement json ? json : VoltaicJsonSerializer.SerializeToElement(result);
             if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("resultType", out JsonElement value)) return null;
 
             // A resultType that is not a string is unrecognized too; its raw JSON is returned so it is rejected.
@@ -1597,8 +1597,8 @@ namespace Voltaic.Mcp
                 return default;
             }
 
-            string raw = JsonSerializer.Serialize(result);
-            return JsonSerializer.Deserialize<T>(raw, JsonLimits.Serializer);
+            string raw = VoltaicJsonSerializer.Serialize(result);
+            return VoltaicJsonSerializer.Deserialize<T>(raw, JsonLimits.Serializer);
         }
 
         private static McpInputRequiredResult? TryParseInputRequired(object? result)
@@ -1608,11 +1608,11 @@ namespace Voltaic.Mcp
                 return null;
             }
 
-            string raw = JsonSerializer.Serialize(result);
-            ResultTypeProbe? probe = JsonSerializer.Deserialize<ResultTypeProbe>(raw, JsonLimits.Serializer);
+            string raw = VoltaicJsonSerializer.Serialize(result);
+            ResultTypeProbe? probe = VoltaicJsonSerializer.Deserialize<ResultTypeProbe>(raw, JsonLimits.Serializer);
             if (probe != null && StringComparer.Ordinal.Equals(probe.ResultType, "input_required"))
             {
-                return JsonSerializer.Deserialize<McpInputRequiredResult>(raw, JsonLimits.Serializer);
+                return VoltaicJsonSerializer.Deserialize<McpInputRequiredResult>(raw, JsonLimits.Serializer);
             }
 
             return null;
@@ -1635,7 +1635,7 @@ namespace Voltaic.Mcp
                 return await ReadBoundedStringAsync(httpResponse.Content, token).ConfigureAwait(false);
             }
 
-            string requestIdJson = JsonSerializer.Serialize(requestId);
+            string requestIdJson = VoltaicJsonSerializer.Serialize(requestId);
             string? lastEventId;
             int? retryMs;
             using (Stream stream = await httpResponse.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
@@ -1798,7 +1798,7 @@ namespace Voltaic.Mcp
             {
                 JsonRpcResponse? response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
                 if (response == null) return;
-                string responseJson = JsonSerializer.Serialize(response);
+                string responseJson = VoltaicJsonSerializer.Serialize(response);
                 using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
                     cts.CancelAfter(_RequestTimeoutMs);
@@ -1960,7 +1960,7 @@ namespace Voltaic.Mcp
             {
                 LogMessage($"Received notification: {data}");
 
-                JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(data, JsonLimits.Serializer);
+                JsonRpcRequest? notification = VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(data, JsonLimits.Serializer);
                 if (notification != null)
                 {
                     // A cancellation of a request the server sent stops its handler; the notification is still raised.
@@ -2091,7 +2091,7 @@ namespace Voltaic.Mcp
             }
         }
 
-        private sealed class ResultTypeProbe
+        internal sealed class ResultTypeProbe
         {
             [JsonPropertyName("resultType")]
             public string? ResultType { get; set; }

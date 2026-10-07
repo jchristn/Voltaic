@@ -3,6 +3,7 @@ namespace Voltaic.A2A
     using System;
     using System.Collections.Generic;
     using System.Text.Json;
+    using Voltaic.Core;
 
     /// <summary>
     /// Maps A2A errors to and from the HTTP+JSON binding's error format: a <c>google.rpc.Status</c> JSON object with a
@@ -85,7 +86,7 @@ namespace Voltaic.A2A
                                 && detail.TryGetProperty("reason", out JsonElement reason) && reason.ValueKind == JsonValueKind.String
                                 && FromReason(reason.GetString()) is A2AErrorCode fromReason)
                             {
-                                return new A2AProtocolException(fromReason, message, JsonSerializer.Deserialize<object>(details.GetRawText()));
+                                return new A2AProtocolException(fromReason, message, VoltaicJsonSerializer.Deserialize<object>(details.GetRawText()));
                             }
                         }
                     }
@@ -125,7 +126,7 @@ namespace Voltaic.A2A
 
         private static A2AErrorCode? FromReason(string? reason)
         {
-            foreach (A2AErrorCode code in Enum.GetValues(typeof(A2AErrorCode)))
+            foreach (A2AErrorCode code in Enum.GetValues<A2AErrorCode>())
             {
                 if (StringComparer.OrdinalIgnoreCase.Equals(Reason(code), reason)) return code;
             }

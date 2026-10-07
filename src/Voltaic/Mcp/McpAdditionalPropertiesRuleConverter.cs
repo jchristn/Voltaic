@@ -3,6 +3,7 @@ namespace Voltaic.Mcp
     using System;
     using System.Text.Json;
     using System.Text.Json.Serialization;
+    using Voltaic.Core;
 
     /// <summary>
     /// Reads and writes the JSON Schema <c>additionalProperties</c> keyword, which may be a boolean or a
@@ -26,7 +27,7 @@ namespace Voltaic.Mcp
                 case JsonTokenType.False:
                     return new McpAdditionalPropertiesRule { Allowed = false };
                 case JsonTokenType.StartObject:
-                    McpJsonSchema? schema = JsonSerializer.Deserialize<McpJsonSchema>(ref reader, options);
+                    McpJsonSchema? schema = VoltaicJsonSerializer.Deserialize<McpJsonSchema>(ref reader, options);
                     return new McpAdditionalPropertiesRule { Allowed = true, Schema = schema };
                 case JsonTokenType.Null:
                     return null;
@@ -46,7 +47,7 @@ namespace Voltaic.Mcp
         {
             if (value.Schema != null)
             {
-                JsonSerializer.Serialize(writer, value.Schema, options);
+                VoltaicJsonSerializer.Serialize(writer, value.Schema, options);
                 return;
             }
 

@@ -1,6 +1,7 @@
 namespace Voltaic.A2A
 {
     using System;
+    using System.Collections.Generic;
     using Voltaic.Core;
 
     /// <summary>
@@ -130,7 +131,7 @@ namespace Voltaic.A2A
         /// <returns>A new exception. Never null.</returns>
         public static A2AProtocolException TaskNotFound(string taskId)
         {
-            return new A2AProtocolException(A2AErrorCode.TaskNotFound, $"Task '{taskId}' was not found.", new { taskId });
+            return new A2AProtocolException(A2AErrorCode.TaskNotFound, $"Task '{taskId}' was not found.", new Dictionary<string, object?> { { "taskId", taskId } });
         }
 
         /// <summary>

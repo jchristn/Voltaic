@@ -1,6 +1,7 @@
 namespace Voltaic.Mcp
 {
     using System;
+    using System.Collections.Generic;
 
     /// <summary>
     /// Thrown by a tool or method handler when the caller's access token lacks a scope the operation needs. On
@@ -26,7 +27,7 @@ namespace Voltaic.Mcp
         /// <param name="message">The error message, or null for a default that names the scope.</param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="requiredScope"/> is null or whitespace.</exception>
         public McpInsufficientScopeException(string requiredScope, string? message = null)
-            : base(ErrorCode, message ?? $"Insufficient scope: this operation requires '{requiredScope}'.", new { scope = requiredScope })
+            : base(ErrorCode, message ?? $"Insufficient scope: this operation requires '{requiredScope}'.", new Dictionary<string, object?> { { "scope", requiredScope } })
         {
             if (String.IsNullOrWhiteSpace(requiredScope)) throw new ArgumentNullException(nameof(requiredScope));
             RequiredScope = requiredScope;

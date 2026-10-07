@@ -8,6 +8,7 @@ namespace Voltaic.Mcp
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
+    using Voltaic.Core;
 
     /// <summary>
     /// The MCP protocol state of one connection or session: whether it completed the <c>initialize</c> handshake,
@@ -290,7 +291,7 @@ namespace Voltaic.Mcp
             if (push == null) return false;
 
             string id = "voltaic-ping-" + Guid.NewGuid().ToString("N");
-            string idKey = JsonSerializer.Serialize(id);
+            string idKey = VoltaicJsonSerializer.Serialize(id);
             TaskCompletionSource<bool> answered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _PendingPings[idKey] = answered;
             try

@@ -112,6 +112,7 @@ namespace Test.Shared
                             "Voltaic.Core.RpcCallContext",
                             "Voltaic.Core.RpcMethodInvocation",
                             "Voltaic.Core.RpcParameters",
+                            "Voltaic.Core.VoltaicJson",
                             "Voltaic.Core.VoltaicTelemetry",
                             "Voltaic.Core.VoltaicTelemetryNames",
                             "Voltaic.Mcp.McpAnnotations",

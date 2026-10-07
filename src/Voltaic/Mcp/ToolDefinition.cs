@@ -36,7 +36,7 @@ namespace Voltaic.Mcp
         /// Gets or sets the JSON schema for the tool's input parameters.
         /// </summary>
         [JsonPropertyName("inputSchema")]
-        public object InputSchema { get; set; } = new { };
+        public object InputSchema { get; set; } = JsonEmptyObject.Instance;
 
         /// <summary>
         /// Gets or sets the JSON schema for structured tool output.

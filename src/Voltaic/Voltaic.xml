@@ -4388,6 +4388,17 @@
             </summary>
             <returns>JSON-RPC error.</returns>
         </member>
+        <member name="T:Voltaic.Core.JsonEmptyObject">
+            <summary>
+            Serializes as an empty JSON object (<c>{}</c>). Used where Voltaic writes an empty object, because anonymous
+            types cannot be serialized under Native AOT. Immutable and thread-safe.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.JsonEmptyObject.Instance">
+            <summary>
+            The shared instance.
+            </summary>
+        </member>
         <member name="T:Voltaic.Core.JsonLimits">
             <summary>
             JSON reader settings for received messages: nesting up to 256 levels, the depth JSON Schema validation allows,
@@ -4408,6 +4419,12 @@
         <member name="F:Voltaic.Core.JsonLimits.Serializer">
             <summary>
             Options for <see cref="T:System.Text.Json.JsonSerializer"/> reads and writes of message content.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.JsonLimits.Plain">
+            <summary>
+            The <see cref="T:System.Text.Json.JsonSerializer"/> defaults (<see cref="P:System.Text.Json.JsonSerializerOptions.Default"/>) with Voltaic's resolver,
+            for writes that used the default options.
             </summary>
         </member>
         <member name="T:Voltaic.Core.JsonRpcClient">
@@ -5588,6 +5605,1112 @@
             <see cref="T:Voltaic.Core.VoltaicTelemetryNames"/>). Thread-safe.
             </summary>
         </member>
+        <member name="T:Voltaic.Core.VoltaicJson">
+            <summary>
+            JSON type metadata used by every Voltaic client and server, for trimmed and Native AOT applications.
+            Voltaic serializes its own protocol types with source-generated metadata. Values an application passes as
+            <see cref="T:System.Object"/> (tool results, call parameters, structured content, error data) and the types it reads
+            with generic methods such as <c>CallAsync&lt;T&gt;</c> and <see cref="M:Voltaic.Core.RpcParameters.Deserialize``1"/> are
+            resolved through <see cref="P:Voltaic.Core.VoltaicJson.TypeInfoResolver"/>: Voltaic's metadata first, then each resolver added with
+            <see cref="M:Voltaic.Core.VoltaicJson.AddTypeInfoResolver(System.Text.Json.Serialization.Metadata.IJsonTypeInfoResolver)"/>, in the order added, then reflection when it is enabled.
+            Reflection is enabled by default and disabled in Native AOT and trimmed applications
+            (<see cref="P:System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault"/>); there, every application type Voltaic serializes
+            must come from an added resolver, typically a <see cref="T:System.Text.Json.Serialization.JsonSerializerContext"/>, or be a JSON DOM type
+            (<see cref="T:System.Text.Json.JsonElement"/>, <see cref="T:System.Text.Json.Nodes.JsonNode"/>), a primitive, or a Voltaic model.
+            Anonymous types cannot be source-generated. Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJson.TypeInfoResolver">
+            <summary>
+            Gets the resolver Voltaic serializes with. Never null. Applications that build their own
+            <see cref="T:System.Text.Json.JsonSerializerOptions"/> for Voltaic types can use it as their
+            <see cref="P:System.Text.Json.JsonSerializerOptions.TypeInfoResolver"/>. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJson.AddTypeInfoResolver(System.Text.Json.Serialization.Metadata.IJsonTypeInfoResolver)">
+            <summary>
+            Adds a resolver, typically an application's <see cref="T:System.Text.Json.Serialization.JsonSerializerContext"/>, that supplies metadata for
+            application types Voltaic serializes or deserializes. Resolvers are consulted after Voltaic's own metadata,
+            in the order added; adding the same instance again has no effect. Add resolvers at startup, before the
+            first server or client is created: Voltaic's serializer options cache metadata per type, including the
+            failure to find it. Thread-safe.
+            </summary>
+            <param name="resolver">The resolver to add. Cannot be null.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="resolver"/> is null.</exception>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicJsonContext">
+            <summary>
+            Source-generated metadata for every type Voltaic serializes, and for the JSON DOM, primitive, and collection
+            types applications commonly pass as <see cref="T:System.Object"/>. Metadata only: the runtime options (naming,
+            null handling, converters) apply exactly as they do with reflection. Thread-safe.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Boolean">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableBoolean">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.BooleanArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Byte">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ByteArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Char">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Decimal">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableDecimal">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Double">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableDouble">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DoubleArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Single">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableSingle">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringBoolean">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringDouble">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringListString">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringJsonElement">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringJsonNode">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringSecurityScheme">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringMcpInputRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringMcpJsonSchema">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringInt32">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringInt64">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DictionaryStringString">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.IDictionaryStringObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.IEnumerableObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.IListObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.IReadOnlyDictionaryStringObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.IReadOnlyListObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListDouble">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListJsonElement">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListJsonNode">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListAgentCardSignature">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListAgentExtension">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListAgentInterface">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListAgentSkill">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListAgentTask">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListArtifact">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMessage">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListPart">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListSecurityRequirement">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListTaskPushNotificationConfig">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListJsonRpcRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListJsonRpcResponse">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMcpIcon">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMcpInCoreTask">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMcpPrompt">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMcpPromptArgument">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMcpPromptMessage">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMcpResource">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListMcpResourceTemplate">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListToolDefinition">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListInt32">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListInt64">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ListString">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DateTime">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.DateTimeOffset">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableDateTimeOffset">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Guid">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonDocument">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonElement">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableJsonElement">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonElementArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonNode">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonValue">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.TimeSpan">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Uri">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentCapabilities">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentCard">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentCardSignature">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentExtension">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentInterface">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentProvider">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentSkill">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAgentTask">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AApiKeySecurityScheme">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AArtifact">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AAuthenticationInfo">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ACancelTaskRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ACreateTaskPushNotificationConfigRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ADeleteTaskPushNotificationConfigRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AGetExtendedAgentCardRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AGetTaskPushNotificationConfigRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AGetTaskRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AHttpAuthSecurityScheme">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AListTaskPushNotificationConfigRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AListTaskPushNotificationConfigResponse">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AListTasksRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AListTasksResponse">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AMessage">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AMutualTlsSecurityScheme">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AOAuth2SecurityScheme">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AOAuthFlow">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AOAuthFlows">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AOpenIdConnectSecurityScheme">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2APart">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2APushNotificationConfig">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Role">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ASecurityRequirement">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ASecurityScheme">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ASendMessageConfiguration">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ASendMessageRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ASendMessageResponse">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2AStreamResponse">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ASubscribeToTaskRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ATaskArtifactUpdateEvent">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ATaskPushNotificationConfig">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.TaskState">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableTaskState">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ATaskStatus">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.A2ATaskStatusUpdateEvent">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonEmptyObject">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.CoreJsonRpcError">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.CoreJsonRpcRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonRpcRequestArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.CoreJsonRpcResponse">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.JsonRpcResponseArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.CoreRpcAddArguments">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.CoreRpcEchoArguments">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpAdditionalPropertiesRule">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpAnnotations">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpAudioContent">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpBlobResourceContents">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCancelledNotification">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpClientCapabilities">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCompleteRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCompleteResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCompletion">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCompletionArgument">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCompletionContext">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCompletionReference">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCreateInCoreTaskResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCreateTaskResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpCursorParams">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpDiscoverResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpEchoArguments">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpEmbeddedResourceContent">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpEmptyResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpGetPromptResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpResultTypeProbe">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpIcon">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpImageContent">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpImplementation">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpInCoreTask">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpInitializeParams">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpInputRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpInputRequiredResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpJsonSchema">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpLevelParams">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpListChangedCapability">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpListPromptsResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpListResourcesResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpListResourceTemplatesResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpListTasksResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpListToolsResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpLogMessageNotification">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpNamedArgumentsParams">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpPaginatedResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpProgressNotification">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpPrompt">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpPromptArgument">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpPromptMessage">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpProtectedResourceMetadata">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpReadResourceResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpResource">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpResourceCapability">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpResourceLinkContent">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpResourceTemplate">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpServerCapabilities">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpSetLogLevelRequest">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpSubscriptionFilter">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpTask">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpTaskAck">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpTaskAugmentation">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpTextContent">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpTextResourceContents">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpToolCallResult">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpUpdateTaskParams">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpMcpUriParams">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.McpToolDefinition">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Int32">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableInt32">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Int32Array">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Int64">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.NullableInt64">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Int64Array">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Object">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.ObjectArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.SByte">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Int16">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.String">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.StringArray">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.UInt32">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.UInt64">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.UInt16">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.Default">
+            <summary>
+            The default <see cref="T:System.Text.Json.Serialization.JsonSerializerContext"/> associated with a default <see cref="T:System.Text.Json.JsonSerializerOptions"/> instance.
+            </summary>
+        </member>
+        <member name="P:Voltaic.Core.VoltaicJsonContext.GeneratedSerializerOptions">
+            <summary>
+            The source-generated options associated with this context.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonContext.#ctor">
+            <inheritdoc/>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonContext.#ctor(System.Text.Json.JsonSerializerOptions)">
+            <inheritdoc/>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonContext.GetTypeInfo(System.Type)">
+            <inheritdoc/>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicJsonSerializer">
+            <summary>
+            <see cref="T:System.Text.Json.JsonSerializer"/> calls that take their metadata from the options' resolver
+            (<see cref="T:Voltaic.Core.VoltaicTypeInfoResolver"/> for every Voltaic option set) rather than from reflection, so they are
+            safe under trimming and Native AOT. A null options argument means <see cref="F:Voltaic.Core.JsonLimits.Plain"/>. Thread-safe.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.Serialize``1(``0,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Serializes a value to a JSON string.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.Serialize``1(System.Text.Json.Utf8JsonWriter,``0,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Writes a value to a writer.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.SerializeToElement``1(``0,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Serializes a value to a <see cref="T:System.Text.Json.JsonElement"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.SerializeToNode``1(``0,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Serializes a value to a <see cref="T:System.Text.Json.Nodes.JsonNode"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.Deserialize``1(System.String,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Reads a value from a JSON string.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.Deserialize``1(System.Text.Json.JsonElement,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Reads a value from a <see cref="T:System.Text.Json.JsonElement"/>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.Deserialize``1(System.Text.Json.Utf8JsonReader@,System.Text.Json.JsonSerializerOptions)">
+            <summary>
+            Reads a value from a reader.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicJsonSerializer.DeserializeAsync``1(System.IO.Stream,System.Text.Json.JsonSerializerOptions,System.Threading.CancellationToken)">
+            <summary>
+            Reads a value from a stream.
+            </summary>
+        </member>
         <member name="T:Voltaic.Core.VoltaicOperation">
             <summary>
             One instrumented unit of work: a span on the Voltaic activity source, a duration histogram measurement with an
@@ -6043,6 +7166,26 @@
             Starts long-running background work (a receive loop, a cleanup loop) without the current span, so the work
             it does later is never attributed to whatever operation happened to start it.
             </summary>
+        </member>
+        <member name="T:Voltaic.Core.VoltaicTypeInfoResolver">
+            <summary>
+            The resolver behind every Voltaic serializer option set: Voltaic's source-generated metadata, then the
+            application's resolvers in the order added, then reflection when <see cref="P:System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault"/>
+            is true. Thread-safe.
+            </summary>
+        </member>
+        <member name="F:Voltaic.Core.VoltaicTypeInfoResolver.Instance">
+            <summary>
+            The shared instance.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicTypeInfoResolver.Add(System.Text.Json.Serialization.Metadata.IJsonTypeInfoResolver)">
+            <summary>
+            Adds an application resolver; an instance already added is ignored.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Core.VoltaicTypeInfoResolver.GetTypeInfo(System.Type,System.Text.Json.JsonSerializerOptions)">
+            <inheritdoc />
         </member>
         <member name="T:Voltaic.Mcp.JsonValueInfo">
             <summary>
@@ -6901,6 +8044,22 @@
         <member name="P:Voltaic.Mcp.McpResourceLinkContent.Meta">
             <summary>
             Gets or sets protocol-level metadata. Null omits it.
+            </summary>
+        </member>
+        <member name="T:Voltaic.Mcp.McpDiagnosticToolSchemas">
+            <summary>
+            Input schemas of the opt-in diagnostic tools <c>echo</c> and <c>getTime</c>, as source-generated dictionaries
+            (anonymous types cannot be serialized under Native AOT). Each call returns a new instance.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpDiagnosticToolSchemas.Echo">
+            <summary>
+            The <c>echo</c> input schema: one required string property, <c>message</c>.
+            </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpDiagnosticToolSchemas.GetTime">
+            <summary>
+            The <c>getTime</c> input schema: an object with no properties.
             </summary>
         </member>
         <member name="T:Voltaic.Mcp.McpDiscoverResult">

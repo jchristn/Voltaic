@@ -2,6 +2,7 @@ namespace Voltaic.A2A
 {
     using System;
     using System.Text.Json;
+    using Voltaic.Core;
 
     /// <summary>
     /// Shared reading and writing of the flat A2A v1.0 push notification configuration fields.
@@ -16,7 +17,7 @@ namespace Voltaic.A2A
         {
             if (root.TryGetProperty(legacyProperty, out JsonElement nested) && nested.ValueKind == JsonValueKind.Object && !root.TryGetProperty("url", out _))
             {
-                return nested.Deserialize<PushNotificationConfig>(options) ?? new PushNotificationConfig();
+                return VoltaicJsonSerializer.Deserialize<PushNotificationConfig>(nested, options) ?? new PushNotificationConfig();
             }
 
             PushNotificationConfig target = new PushNotificationConfig
@@ -27,7 +28,7 @@ namespace Voltaic.A2A
 
             if (root.TryGetProperty("authentication", out JsonElement authentication) && authentication.ValueKind == JsonValueKind.Object)
             {
-                target.Authentication = authentication.Deserialize<AuthenticationInfo>(options);
+                target.Authentication = VoltaicJsonSerializer.Deserialize<AuthenticationInfo>(authentication, options);
             }
 
             return target;
@@ -47,7 +48,7 @@ namespace Voltaic.A2A
             if (target.Authentication != null)
             {
                 writer.WritePropertyName("authentication");
-                JsonSerializer.Serialize(writer, target.Authentication, options);
+                VoltaicJsonSerializer.Serialize(writer, target.Authentication, options);
             }
 
             writer.WriteEndObject();

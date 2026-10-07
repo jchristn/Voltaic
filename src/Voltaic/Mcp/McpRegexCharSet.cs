@@ -210,7 +210,7 @@ namespace Voltaic.Mcp
             if (_Categories.TryGetValue(code, out McpRegexCharSet? cached)) return cached;
 
             List<UnicodeCategory> members = new List<UnicodeCategory>();
-            foreach (UnicodeCategory category in Enum.GetValues(typeof(UnicodeCategory)))
+            foreach (UnicodeCategory category in Enum.GetValues<UnicodeCategory>())
             {
                 string shortCode = ShortCode(category);
                 if (shortCode == code || (code.Length == 1 && shortCode[0] == code[0])
@@ -234,7 +234,7 @@ namespace Voltaic.Mcp
             lock (_CategoryLock)
             {
                 if (_CategoryRanges != null) return _CategoryRanges;
-                int count = Enum.GetValues(typeof(UnicodeCategory)).Length;
+                int count = Enum.GetValues<UnicodeCategory>().Length;
                 List<int[]>[] ranges = new List<int[]>[count];
                 for (int i = 0; i < count; i++) ranges[i] = new List<int[]>();
 

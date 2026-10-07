@@ -1008,19 +1008,7 @@ namespace Voltaic.Mcp
         {
             RegisterTool("echo",
                 "Echoes back the provided message",
-                new
-                {
-                    type = "object",
-                    properties = new
-                    {
-                        message = new
-                        {
-                            type = "string",
-                            description = "The message to echo back"
-                        }
-                    },
-                    required = new[] { "message" }
-                },
+                McpDiagnosticToolSchemas.Echo(),
                 (args) =>
                 {
                     McpEchoArguments? echo = args?.Deserialize<McpEchoArguments>();
@@ -1029,12 +1017,7 @@ namespace Voltaic.Mcp
 
             RegisterTool("getTime",
                 "Returns the current UTC time in ISO format",
-                new
-                {
-                    type = "object",
-                    properties = new { },
-                    required = Array.Empty<string>()
-                },
+                McpDiagnosticToolSchemas.GetTime(),
                 (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
         }
 

@@ -3,6 +3,7 @@ namespace Voltaic.A2A
     using System;
     using System.Text.Json;
     using System.Text.Json.Serialization;
+    using Voltaic.Core;
 
     /// <summary>
     /// JSON configuration used by Voltaic's A2A implementation.
@@ -25,7 +26,8 @@ namespace Voltaic.A2A
             {
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
                 NumberHandling = JsonNumberHandling.AllowReadingFromString,
-                PropertyNameCaseInsensitive = true
+                PropertyNameCaseInsensitive = true,
+                TypeInfoResolver = VoltaicTypeInfoResolver.Instance
             };
             options.Converters.Add(new RoleJsonConverter());
             options.Converters.Add(new TaskStateJsonConverter());

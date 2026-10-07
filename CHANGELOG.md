@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.3.0
+Native AOT and trimming support. Applications that do not use Native AOT or trimming need no changes, and the JSON Voltaic writes is identical. See the README's [Native AOT and trimming](README.md#native-aot-and-trimming) and [UPGRADING.md](UPGRADING.md#upgrading-to-v230).
+
+### Native AOT and trimming
+- The library is `IsAotCompatible` on net8.0 and net10.0. The trimming and AOT analyzers run on every build, and their warnings are build errors (previously 287 warnings: reflection-based `System.Text.Json` calls, `JsonArray.Add<T>`, and `Enum.GetValues(Type)`).
+- Every type Voltaic serializes, on every transport, comes from source-generated metadata (an internal `JsonSerializerContext`, metadata mode, so the runtime options keep applying exactly as before). The internal JSON calls go through one helper that takes metadata from the options' resolver.
+- New public `VoltaicJson`: `AddTypeInfoResolver` adds an application's `JsonSerializerContext` (or any `IJsonTypeInfoResolver`) for the types it hands Voltaic as `object` or reads with `CallAsync<T>` and `RpcParameters.Deserialize<T>()`. `TypeInfoResolver` is the resolver Voltaic uses: Voltaic's metadata first, then application resolvers in the order added, then reflection while `JsonSerializer.IsReflectionEnabledByDefault` is true (the default outside Native AOT and trimming).
+- `A2AJson.DefaultOptions` uses `VoltaicJson.TypeInfoResolver`.
+- Anonymous objects Voltaic built itself are gone: error data (`McpProtocolException`, `McpInsufficientScopeException`, `A2AProtocolException`, resource-not-found), empty-object bodies (A2A delete and subscribe, the `logging` and `completions` capabilities, the tasks extension entry, the TCP keep-alive `ping`), the default `ToolDefinition.InputSchema`, and the diagnostic `echo`/`getTime` schemas are dictionaries or an internal empty-object type with the same JSON.
+- The private `[JsonInclude]` legacy aliases on `SendMessageConfiguration`, `GetTaskPushNotificationConfigRequest`, and `DeleteTaskPushNotificationConfigRequest` are internal, so the source generator can read them; the public API is unchanged.
+- A type no resolver knows (under Native AOT) fails only its own call: `-32603 Internal error`, with the type named in the server's `Log` event.
+
+### Dependencies
+- `Watson` 7.2.2 -> 7.3.0, which is itself `IsAotCompatible`; `A2AGrpcServer` runs under Native AOT.
+
+### Tests
+- New `Json.TypeInfo` suite (4 cases): `VoltaicJson` argument validation, application resolvers consulted in order and once, every exported model and every value Voltaic builds served by source-generated metadata, and an MCP TCP session that never falls back to reflection. A resolver added after Voltaic's metadata records what that metadata lacks, so a model added without metadata fails the ordinary test run.
+- New `src/Test.Aot`: a Native AOT console app with its own `JsonSerializerContext` that makes real calls over JSON-RPC TCP, MCP stdio (launching itself as the server), TCP, WebSocket, Streamable HTTP, and stateless HTTP (`2026-07-28`), and A2A JSON-RPC, HTTP+JSON, SSE streaming, and gRPC, including schema `pattern` validation, error data, and an unregistered result type. Published with trimming and AOT warnings as errors; 69 of 69 checks pass as native binaries on net8.0 and net10.0 (osx-arm64).
+- Source-generated and reflection metadata produce identical JSON, written and read, for every exported model under both Voltaic option sets (206 comparisons).
+- 857 cases pass on net8.0 and net10.0 through the console, xUnit, and NUnit runners.
+
 ## v2.2.1
 Dependency update. No public API or behavior changes.
 

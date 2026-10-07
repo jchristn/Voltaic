@@ -32,7 +32,7 @@ namespace Voltaic.Mcp
             : base(message)
         {
             Code = code;
-            ErrorData = data == null && code == -32021 ? new { requiredCapabilities = new Dictionary<string, object>() } : data;
+            ErrorData = data == null && code == -32021 ? new Dictionary<string, object?> { { "requiredCapabilities", new Dictionary<string, object>() } } : data;
         }
 
         /// <summary>
@@ -64,7 +64,7 @@ namespace Voltaic.Mcp
         /// <returns>Protocol exception.</returns>
         public static McpProtocolException UnsupportedVersion(string version)
         {
-            return InvalidParams($"Unsupported MCP protocol version '{version}'.", new { protocolVersion = version });
+            return InvalidParams($"Unsupported MCP protocol version '{version}'.", new Dictionary<string, object?> { { "protocolVersion", version } });
         }
 
         /// <summary>
@@ -74,7 +74,7 @@ namespace Voltaic.Mcp
         /// <returns>Protocol exception.</returns>
         public static McpProtocolException InvalidCursor(string cursor)
         {
-            return InvalidParams($"Invalid cursor '{cursor}'.", new { cursor });
+            return InvalidParams($"Invalid cursor '{cursor}'.", new Dictionary<string, object?> { { "cursor", cursor } });
         }
 
         /// <summary>
@@ -84,7 +84,7 @@ namespace Voltaic.Mcp
         /// <returns>Protocol exception.</returns>
         public static McpProtocolException InvalidSession(string sessionId)
         {
-            return InvalidParams($"Invalid MCP session '{sessionId}'.", new { sessionId });
+            return InvalidParams($"Invalid MCP session '{sessionId}'.", new Dictionary<string, object?> { { "sessionId", sessionId } });
         }
 
         /// <summary>
@@ -155,7 +155,7 @@ namespace Voltaic.Mcp
         /// <returns>Protocol exception.</returns>
         public static McpProtocolException MissingRequiredClientCapability(string message, object? requiredCapabilities = null)
         {
-            return new McpProtocolException(-32021, message, new { requiredCapabilities = requiredCapabilities ?? new Dictionary<string, object>() });
+            return new McpProtocolException(-32021, message, new Dictionary<string, object?> { { "requiredCapabilities", requiredCapabilities ?? new Dictionary<string, object>() } });
         }
 
         /// <summary>
@@ -173,7 +173,7 @@ namespace Voltaic.Mcp
             return new McpProtocolException(
                 -32022,
                 $"Unsupported MCP protocol version '{requested}'.",
-                new { supported = supportedArray, requested });
+                new Dictionary<string, object?> { { "supported", supportedArray }, { "requested", requested } });
         }
 
         /// <summary>

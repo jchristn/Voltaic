@@ -51,7 +51,7 @@ namespace Voltaic.Mcp
         /// </summary>
         internal static string SerializeResponse(JsonRpcResponse response)
         {
-            return JsonSerializer.Serialize(response);
+            return VoltaicJsonSerializer.Serialize(response);
         }
 
         /// <summary>

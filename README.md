@@ -10,7 +10,7 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v2.2.1 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Voltaic v2.3.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 An `initialize` handshake negotiates at most the newest handshake-era revision, `2025-11-25` (configurable with `MaximumHandshakeProtocolVersion`), because the stateless `2026-07-28` revision defines no `initialize` and no sessions. Clients reach `2026-07-28` through the stateless request path instead: `server/discover` followed by per-request `MCP-Protocol-Version`, `Mcp-Method`, and `_meta` signals. That is how current clients such as Claude Code 2.1.x connect, and Voltaic's stateless responses carry the `resultType`, `ttlMs`, and `cacheScope` fields the revision requires. Version selection is driven by the `McpProtocol` registry and `McpVersionResolver`, and it behaves identically with or without an `AuthenticationHandler`. See [Protocol version negotiation](#protocol-version-negotiation).
 
@@ -44,7 +44,8 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Expose and consume A2A agents through dependency-light `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2AHttpServer`, and `A2AGrpcServer` classes without ASP.NET Core.
 - Answer MCP requests from handshake-era and stateless `2026-07-28` clients on the same server, on every transport, including Multi Round-Trip input requests from tool handlers.
 - Emit OpenTelemetry-compatible metrics and traces for every server, client, tool call, session, limiter, A2A agent run, and push delivery on the `Voltaic` meter and activity source, with W3C trace propagation across every transport and no new dependencies. See [Observability](#observability).
-- Run the same 853-case Touchstone suite through console, xUnit, and NUnit projects under `src/`.
+- Run in Native AOT and trimmed applications on .NET 8 and .NET 10: Voltaic serializes from source-generated metadata, and your own types join through `VoltaicJson.AddTypeInfoResolver`. See [Native AOT and trimming](#native-aot-and-trimming).
+- Run the same 857-case Touchstone suite through console, xUnit, and NUnit projects under `src/`, plus a Native AOT smoke test (`src/Test.Aot`) across every transport.
 
 ## MCP Endpoint Requirements
 
@@ -1163,6 +1164,46 @@ What you get:
 
 Labels are bounded (no IDs, paths, or free text), spans never carry payloads, exception messages, or credentials, and a failing listener never affects a request. `VoltaicTelemetry.Enabled` and `VoltaicTelemetry.PropagateTraceContext` switch it off. [TELEMETRY.md](TELEMETRY.md) has the full metrics and spans catalog, PromQL alerts, and a dashboard layout.
 
+## Native AOT and trimming
+
+Voltaic is trim-safe and Native AOT-compatible (`IsAotCompatible`) on .NET 8 and .NET 10. Every protocol model, on every transport, is serialized from source-generated metadata, and the library build fails on any trimming or AOT warning. `src/Test.Aot` publishes as a Native AOT binary and makes real calls over JSON-RPC TCP, MCP stdio, TCP, WebSocket, Streamable HTTP, and stateless HTTP, and A2A JSON-RPC, HTTP+JSON, and gRPC.
+
+The values you give Voltaic as `object` (tool results, structured content, call parameters, error data) and the types you read with `CallAsync<T>` or `RpcParameters.Deserialize<T>()` are your own types, so under Native AOT their metadata has to come from you. Put them in a `JsonSerializerContext` and add it once, at startup:
+
+```csharp
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using Voltaic.Core;
+using Voltaic.Mcp;
+
+[JsonSerializable(typeof(AddArguments))]
+[JsonSerializable(typeof(SumResult))]
+internal partial class AppJsonContext : JsonSerializerContext { }
+
+// Before creating servers or clients.
+VoltaicJson.AddTypeInfoResolver(AppJsonContext.Default);
+
+JsonObject schema = new JsonObject
+{
+    ["type"] = "object",
+    ["properties"] = new JsonObject { ["a"] = new JsonObject { ["type"] = "number" }, ["b"] = new JsonObject { ["type"] = "number" } },
+    ["required"] = new JsonArray("a", "b")
+};
+
+server.RegisterTool("add", "Adds two numbers", schema, args =>
+{
+    AddArguments input = args?.Deserialize<AddArguments>() ?? new AddArguments();
+    return McpToolCallResult.FromStructured(new SumResult { Total = input.A + input.B });
+});
+
+SumResult sum = await jsonRpcClient.CallAsync<SumResult>("add", new AddArguments { A = 1, B = 2 });
+```
+
+- **Anonymous types cannot be source-generated.** Under Native AOT, write schemas and ad-hoc payloads as `JsonObject`/`JsonNode`, `JsonElement`, or `Dictionary<string, object?>`. These types, the primitives, arrays, lists, and dictionaries of them, and every Voltaic model are already covered.
+- **Without Native AOT nothing changes.** Reflection stays the last resolver, so anonymous types and unregistered classes keep working, and the JSON Voltaic writes is identical to v2.2.1.
+- **A type no resolver knows fails only its own call.** Under Native AOT the request gets `-32603 Internal error`, the server's `Log` event names the type, and the connection keeps working.
+- **Order:** `VoltaicJson.TypeInfoResolver` asks Voltaic's metadata first, then each resolver you added in the order added, then reflection when it is enabled. Use it as the `TypeInfoResolver` of your own `JsonSerializerOptions` to read Voltaic models from raw JSON. `A2AJson.DefaultOptions` uses it too.
+
 ## Security defaults
 
 Voltaic servers usually run on a developer workstation or next to data they expose, often without authentication. Since v2.1.0 the defaults assume a web page in the user's browser, or another host on the network, may try to reach them.
@@ -1452,6 +1493,7 @@ Most upgrades within 2.x need no code changes; code that follows the MCP specifi
 - **Handshake and liveness (v2.1.5, v2.1.7):** stream clients initialize on connect (`AutoInitialize`), and both sides ping every 30 seconds (`PingIntervalMs`, `PingFailureThreshold`).
 - **Schemas (v2.1.7 to v2.1.11):** tool schemas are checked at `RegisterTool` in their declared dialect (2020-12 or draft-07), and `pattern` uses ECMA-262 syntax and semantics.
 - **Limits (v2.1.11, v2.1.13):** `RateLimits` per client, `MaxMessageSize` on every transport, and `MaxSessions`/`MaxSessionsPerClient` on `McpHttpServer` (set `ClientIdentifier` behind a reverse proxy).
+- **Native AOT (v2.3.0):** Voltaic is `IsAotCompatible`. Nothing changes without Native AOT; under Native AOT, add a `JsonSerializerContext` for your own types with `VoltaicJson.AddTypeInfoResolver` and replace anonymous types. See [Native AOT and trimming](#native-aot-and-trimming).
 - **Telemetry (v2.2.0):** Voltaic emits metrics and traces on the `Voltaic` meter and activity source. Nothing changes until a collector subscribes. MCP stream clients add `traceparent` to `params._meta` while a span is recorded; set `VoltaicTelemetry.PropagateTraceContext = false` to stop it. See [TELEMETRY.md](TELEMETRY.md).
 
 ---
@@ -1508,7 +1550,8 @@ Check out the `src/Test.*` projects for working examples:
 - **Sample.A2AServer**: A2A Agent Card, JSON-RPC, HTTP+JSON, gRPC, streaming, push config, and extended-card sample
 - **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
 - **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
-- **Test.Shared**: Shared Touchstone descriptors and the central 853-case API/protocol matrix
+- **Test.Aot**: Native AOT smoke test with a `JsonSerializerContext`, covering every transport
+- **Test.Shared**: Shared Touchstone descriptors and the central 857-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -1584,7 +1627,7 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 853 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 857 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json
@@ -1600,6 +1643,13 @@ dotnet test src/Test.Nunit/Test.Nunit.csproj --framework net8.0
 
 # Cross-target the console runner
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.0
+
+# Native AOT smoke test: publish and run the native binary (use your runtime identifier, e.g. linux-x64, win-x64)
+dotnet publish src/Test.Aot/Test.Aot.csproj -c Release -f net10.0 -r osx-arm64 -o artifacts/aot
+./artifacts/aot/Test.Aot
+
+# The same checks without publishing (reflection-based JSON is off in this project either way)
+dotnet run --project src/Test.Aot/Test.Aot.csproj -c Release -f net10.0
 ```
 
 ---
@@ -1608,7 +1658,7 @@ dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net10.
 
 Public types are grouped by protocol namespace:
 
-- `Voltaic.Core`: `JsonRpcServer`, `JsonRpcClient`, JSON-RPC request/response/error models, TCP framing, connection models, shared authentication/error helpers, and the `OriginPolicy` and `LoopbackAddresses` access helpers.
+- `Voltaic.Core`: `JsonRpcServer`, `JsonRpcClient`, JSON-RPC request/response/error models, TCP framing, connection models, shared authentication/error helpers, the `OriginPolicy` and `LoopbackAddresses` access helpers, `VoltaicTelemetry`, and `VoltaicJson` (JSON metadata for trimming and Native AOT).
 - `Voltaic.Mcp`: MCP stdio, HTTP, TCP, and WebSocket clients/servers plus MCP tools, resources, prompts, completions, capabilities, and utility models.
 - `Voltaic.A2A`: A2A Agent Cards, task/message/artifact models, `A2AClient`, `A2AHttpJsonClient`, `A2ACardResolver`, `A2AHttpServer`, task storage, event queue, updater, and protocol errors.
 

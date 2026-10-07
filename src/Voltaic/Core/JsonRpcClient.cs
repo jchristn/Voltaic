@@ -240,7 +240,7 @@ namespace Voltaic.Core
 
                     if (response.Result != null)
                     {
-                        return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(response.Result))!;
+                        return VoltaicJsonSerializer.Deserialize<T>(VoltaicJsonSerializer.Serialize(response.Result))!;
                     }
 
                     if (response.Result == null)
@@ -558,7 +558,7 @@ namespace Voltaic.Core
                 {
                     try
                     {
-                        await SendJsonAsync(JsonSerializer.Serialize(refused), _TokenSource?.Token ?? CancellationToken.None).ConfigureAwait(false);
+                        await SendJsonAsync(VoltaicJsonSerializer.Serialize(refused), _TokenSource?.Token ?? CancellationToken.None).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -590,7 +590,7 @@ namespace Voltaic.Core
                     // Invalid elements (and an empty batch) are answered with Invalid Request errors, as JSON-RPC 2.0 requires.
                     List<JsonRpcResponse> responses = new List<JsonRpcResponse>(batch.Errors);
                     responses.AddRange(await _RequestDispatcher.DispatchBatchAsync(batch.Requests, token).ConfigureAwait(false));
-                    if (responses.Count > 0) await SendJsonAsync(JsonSerializer.Serialize(responses), token).ConfigureAwait(false);
+                    if (responses.Count > 0) await SendJsonAsync(VoltaicJsonSerializer.Serialize(responses), token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -608,7 +608,7 @@ namespace Voltaic.Core
 
         private async Task SendRequestAsync(JsonRpcRequest request, CancellationToken token = default)
         {
-            await SendJsonAsync(JsonSerializer.Serialize(request), token).ConfigureAwait(false);
+            await SendJsonAsync(VoltaicJsonSerializer.Serialize(request), token).ConfigureAwait(false);
         }
 
         private async Task SendJsonAsync(string json, CancellationToken token)
@@ -645,7 +645,7 @@ namespace Voltaic.Core
             {
                 JsonRpcResponse? response = await _RequestDispatcher.DispatchAsync(request, token).ConfigureAwait(false);
                 if (response == null) return;
-                await SendJsonAsync(JsonSerializer.Serialize(response), token).ConfigureAwait(false);
+                await SendJsonAsync(VoltaicJsonSerializer.Serialize(response), token).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -703,12 +703,12 @@ namespace Voltaic.Core
                 }
 
                 // Try to parse as response first
-                JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseString, JsonLimits.Serializer);
+                JsonRpcResponse? response = VoltaicJsonSerializer.Deserialize<JsonRpcResponse>(responseString, JsonLimits.Serializer);
                 if (response != null && response.Id != null)
                 {
                     // Extract the numeric id value when the response id is a JSON number.
                     object lookupKey = response.Id;
-                    if (Int32.TryParse(JsonSerializer.Serialize(response.Id), out int numericId))
+                    if (Int32.TryParse(VoltaicJsonSerializer.Serialize(response.Id), out int numericId))
                     {
                         lookupKey = numericId;
                     }
@@ -726,7 +726,7 @@ namespace Voltaic.Core
                 else
                 {
                     // Try to parse as notification (request without ID)
-                    JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(responseString, JsonLimits.Serializer);
+                    JsonRpcRequest? notification = VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(responseString, JsonLimits.Serializer);
                     if (notification != null && notification.Id == null)
                     {
                         // A cancellation of a request the server sent stops its handler; the notification is still raised.

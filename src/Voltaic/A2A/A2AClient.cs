@@ -62,7 +62,7 @@ namespace Voltaic.A2A
                 response.EnsureSuccessStatusCode();
 
                 using Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                AgentCard? card = await JsonSerializer.DeserializeAsync<AgentCard>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false);
+                AgentCard? card = await VoltaicJsonSerializer.DeserializeAsync<AgentCard>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false);
                 return card ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "Agent Card response was empty or invalid.");
             }
             catch (Exception ex)
@@ -322,7 +322,7 @@ namespace Voltaic.A2A
             using HttpResponseMessage response = await _HttpClient.SendAsync(request, token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             using Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            return await JsonSerializer.DeserializeAsync<AgentCard>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false)
+            return await VoltaicJsonSerializer.DeserializeAsync<AgentCard>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false)
                 ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "Extended Agent Card response was empty or invalid.");
         }
 
@@ -361,7 +361,7 @@ namespace Voltaic.A2A
         private async Task<TResult> SendJsonRpcRequestCoreAsync<TResult>(string method, object? parameters, CancellationToken token)
         {
             JsonRpcRequest request = CreateRequest(method, parameters);
-            string json = JsonSerializer.Serialize(request, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(request, A2AJson.DefaultOptions);
 
             using HttpRequestMessage httpRequest = CreatePostRequest(json);
             using HttpResponseMessage httpResponse = await _HttpClient.SendAsync(httpRequest, token).ConfigureAwait(false);
@@ -375,7 +375,7 @@ namespace Voltaic.A2A
                 httpResponse.EnsureSuccessStatusCode();
             }
 
-            JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(responseJson, A2AJson.DefaultOptions);
+            JsonRpcResponse? response = VoltaicJsonSerializer.Deserialize<JsonRpcResponse>(responseJson, A2AJson.DefaultOptions);
             if (response == null)
             {
                 throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "Invalid JSON-RPC response.");
@@ -395,7 +395,7 @@ namespace Voltaic.A2A
             // The operation covers the whole stream; failures before the first event and error events are recorded.
             using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AJsonRpc, method);
             JsonRpcRequest request = CreateRequest(method, parameters);
-            string json = JsonSerializer.Serialize(request, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(request, A2AJson.DefaultOptions);
 
             using HttpRequestMessage httpRequest = CreatePostRequest(json);
             httpRequest.Headers.Accept.ParseAdd("text/event-stream");
@@ -442,7 +442,7 @@ namespace Voltaic.A2A
 
                 if (line.Length == 0 && data.Length > 0)
                 {
-                    JsonRpcResponse? response = JsonSerializer.Deserialize<JsonRpcResponse>(data.ToString(), A2AJson.DefaultOptions);
+                    JsonRpcResponse? response = VoltaicJsonSerializer.Deserialize<JsonRpcResponse>(data.ToString(), A2AJson.DefaultOptions);
                     data.Clear();
                     if (response == null)
                     {
@@ -484,8 +484,8 @@ namespace Voltaic.A2A
                 return default!;
             }
 
-            string json = JsonSerializer.Serialize(result, A2AJson.DefaultOptions);
-            return JsonSerializer.Deserialize<TResult>(json, A2AJson.DefaultOptions)
+            string json = VoltaicJsonSerializer.Serialize(result, A2AJson.DefaultOptions);
+            return VoltaicJsonSerializer.Deserialize<TResult>(json, A2AJson.DefaultOptions)
                 ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "JSON-RPC result could not be deserialized.");
         }
 
@@ -496,7 +496,7 @@ namespace Voltaic.A2A
             JsonRpcResponse? response;
             try
             {
-                response = JsonSerializer.Deserialize<JsonRpcResponse>(body, A2AJson.DefaultOptions);
+                response = VoltaicJsonSerializer.Deserialize<JsonRpcResponse>(body, A2AJson.DefaultOptions);
             }
             catch (JsonException)
             {
@@ -655,7 +655,9 @@ namespace Voltaic.A2A
         public Task<AgentTask> CancelTaskAsync(CancelTaskRequest request, CancellationToken token = default)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
-            return PostJsonAsync<object, AgentTask>($"/tasks/{Uri.EscapeDataString(request.Id)}:cancel", new { metadata = request.Metadata }, token);
+            Dictionary<string, object?> body = new Dictionary<string, object?>();
+            if (request.Metadata != null) body["metadata"] = request.Metadata;
+            return PostJsonAsync<object, AgentTask>($"/tasks/{Uri.EscapeDataString(request.Id)}:cancel", body, token);
         }
 
         /// <summary>
@@ -676,7 +678,7 @@ namespace Voltaic.A2A
         public IAsyncEnumerable<StreamResponse> SubscribeToTaskAsync(SubscribeToTaskRequest request, CancellationToken token = default)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
-            return PostStreamingAsync($"/tasks/{Uri.EscapeDataString(request.Id)}:subscribe", new { }, token);
+            return PostStreamingAsync($"/tasks/{Uri.EscapeDataString(request.Id)}:subscribe", JsonEmptyObject.Instance, token);
         }
 
         /// <summary>
@@ -818,7 +820,7 @@ namespace Voltaic.A2A
             using HttpResponseMessage response = await _HttpClient.SendAsync(request, token).ConfigureAwait(false);
             await EnsureSuccessAsync(response, token).ConfigureAwait(false);
             using Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            return await JsonSerializer.DeserializeAsync<TResult>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false)
+            return await VoltaicJsonSerializer.DeserializeAsync<TResult>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false)
                 ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "REST response was empty or invalid.");
         }
 
@@ -838,13 +840,13 @@ namespace Voltaic.A2A
 
         private async Task<TResult> PostJsonCoreAsync<TBody, TResult>(string path, TBody body, CancellationToken token)
         {
-            string json = JsonSerializer.Serialize(body, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(body, A2AJson.DefaultOptions);
             using HttpRequestMessage request = CreateRequest(HttpMethod.Post, path);
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
             using HttpResponseMessage response = await _HttpClient.SendAsync(request, token).ConfigureAwait(false);
             await EnsureSuccessAsync(response, token).ConfigureAwait(false);
             using Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            return await JsonSerializer.DeserializeAsync<TResult>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false)
+            return await VoltaicJsonSerializer.DeserializeAsync<TResult>(stream, A2AJson.DefaultOptions, token).ConfigureAwait(false)
                 ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "REST response was empty or invalid.");
         }
 
@@ -852,7 +854,7 @@ namespace Voltaic.A2A
         {
             // The operation covers the whole stream; failures before the first event are recorded.
             using VoltaicOperation? operation = VoltaicOperation.StartClientCall(VoltaicTelemetryNames.ProtocolA2A, VoltaicTelemetryNames.TransportA2AHttpJson, A2ATelemetry.RestMethodOf("POST", path));
-            string json = JsonSerializer.Serialize(body, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(body, A2AJson.DefaultOptions);
             using HttpRequestMessage request = CreateRequest(HttpMethod.Post, path);
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
             request.Headers.Accept.ParseAdd("text/event-stream");
@@ -900,7 +902,7 @@ namespace Voltaic.A2A
 
                 if (line.Length == 0 && data.Length > 0)
                 {
-                    StreamResponse? item = JsonSerializer.Deserialize<StreamResponse>(data.ToString(), A2AJson.DefaultOptions);
+                    StreamResponse? item = VoltaicJsonSerializer.Deserialize<StreamResponse>(data.ToString(), A2AJson.DefaultOptions);
                     data.Clear();
                     yield return item ?? throw new A2AProtocolException(A2AErrorCode.InvalidAgentResponse, "Invalid REST SSE event.");
                 }
@@ -956,7 +958,7 @@ namespace Voltaic.A2A
                 return null;
             }
 
-            string json = JsonSerializer.Serialize(state.Value, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(state.Value, A2AJson.DefaultOptions);
             return json.Trim('"');
         }
     }

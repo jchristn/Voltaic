@@ -22,6 +22,12 @@ namespace Voltaic.Core
         /// <summary>
         /// Options for <see cref="JsonSerializer"/> reads and writes of message content.
         /// </summary>
-        internal static readonly JsonSerializerOptions Serializer = new JsonSerializerOptions { MaxDepth = MaxDepth };
+        internal static readonly JsonSerializerOptions Serializer = new JsonSerializerOptions { MaxDepth = MaxDepth, TypeInfoResolver = VoltaicTypeInfoResolver.Instance };
+
+        /// <summary>
+        /// The <see cref="JsonSerializer"/> defaults (<see cref="JsonSerializerOptions.Default"/>) with Voltaic's resolver,
+        /// for writes that used the default options.
+        /// </summary>
+        internal static readonly JsonSerializerOptions Plain = new JsonSerializerOptions { TypeInfoResolver = VoltaicTypeInfoResolver.Instance };
     }
 }

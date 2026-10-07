@@ -6,6 +6,7 @@ namespace Voltaic.Mcp
     using System.Linq;
     using System.Text;
     using System.Text.Json;
+    using Voltaic.Core;
 
     /// <summary>
     /// The 2026-07-28 rules for <c>x-mcp-header</c> tool parameters and for the values of the <c>Mcp-Name</c> and
@@ -31,7 +32,7 @@ namespace Voltaic.Mcp
             List<McpHeaderParameter> parameters = new List<McpHeaderParameter>();
             if (inputSchema == null) return parameters;
 
-            JsonElement root = inputSchema is JsonElement element ? element : JsonSerializer.SerializeToElement(inputSchema);
+            JsonElement root = inputSchema is JsonElement element ? element : VoltaicJsonSerializer.SerializeToElement(inputSchema);
             if (root.ValueKind != JsonValueKind.Object) return parameters;
 
             Walk(root, new List<string>(), true, parameters, strictIntegerBounds);

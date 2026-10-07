@@ -1418,19 +1418,7 @@ namespace Voltaic.Mcp
         {
             RegisterTool("echo",
                 "Echoes back the provided message",
-                new
-                {
-                    type = "object",
-                    properties = new
-                    {
-                        message = new
-                        {
-                            type = "string",
-                            description = "The message to echo back"
-                        }
-                    },
-                    required = new[] { "message" }
-                },
+                McpDiagnosticToolSchemas.Echo(),
                 (args) =>
                 {
                     McpEchoArguments? echo = args?.Deserialize<McpEchoArguments>();
@@ -1439,12 +1427,7 @@ namespace Voltaic.Mcp
 
             RegisterTool("getTime",
                 "Returns the current UTC time in ISO format",
-                new
-                {
-                    type = "object",
-                    properties = new { },
-                    required = Array.Empty<string>()
-                },
+                McpDiagnosticToolSchemas.GetTime(),
                 (_) => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
         }
 
@@ -1714,7 +1697,7 @@ namespace Voltaic.Mcp
             McpSessionState state = new McpSessionState(requireInitialize) { Owner = connection };
             state.Push = (json, token) =>
             {
-                JsonRpcRequest? notification = JsonSerializer.Deserialize<JsonRpcRequest>(json, JsonLimits.Serializer);
+                JsonRpcRequest? notification = VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(json, JsonLimits.Serializer);
                 if (notification != null) connection.Enqueue(notification);
                 return Task.CompletedTask;
             };
@@ -1906,7 +1889,7 @@ namespace Voltaic.Mcp
         private Task WriteInsufficientScopeAsync(HttpListenerContext context, object? id, string scope, string? message, string? sessionId, CancellationToken token)
         {
             JsonRpcResponse response = new JsonRpcResponse { Id = id, Error = new JsonRpcError { Code = McpInsufficientScopeException.ErrorCode, Message = message ?? "Insufficient scope" } };
-            return WriteInsufficientScopeBodyAsync(context, scope, JsonSerializer.Serialize(response), sessionId, token);
+            return WriteInsufficientScopeBodyAsync(context, scope, VoltaicJsonSerializer.Serialize(response), sessionId, token);
         }
 
         // Answers 403 with an RFC 6750 insufficient_scope challenge (plus resource_metadata when configured).
@@ -1998,7 +1981,7 @@ namespace Voltaic.Mcp
         {
             if (!IsInitializeRequest(request) || response.Result == null) return;
 
-            string? negotiatedVersion = new RpcParameters(JsonSerializer.Serialize(response.Result)).GetString("protocolVersion");
+            string? negotiatedVersion = new RpcParameters(VoltaicJsonSerializer.Serialize(response.Result)).GetString("protocolVersion");
             if (!String.IsNullOrEmpty(negotiatedVersion))
             {
                 _SessionVersions[sessionId] = negotiatedVersion!;
@@ -2051,7 +2034,7 @@ namespace Voltaic.Mcp
                 JsonRpcRequest? incomingRequest = null;
                 try
                 {
-                    incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody, JsonLimits.Serializer);
+                    incomingRequest = VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(requestBody, JsonLimits.Serializer);
                 }
                 catch (JsonException)
                 {
@@ -2260,7 +2243,7 @@ namespace Voltaic.Mcp
                                 if (notification != null)
                                 {
                                     // Logged before writing, so a message lost to a broken connection can be replayed.
-                                    SseLoggedEvent logged = streamLog.Append(JsonSerializer.Serialize(notification), streamTokenSource);
+                                    SseLoggedEvent logged = streamLog.Append(VoltaicJsonSerializer.Serialize(notification), streamTokenSource);
                                     if (streamToken.IsCancellationRequested) break;
                                     await WriteSseAsync(context.Response, $"id: {logged.EventId}\ndata: {logged.Data}\n\n", token).ConfigureAwait(false);
                                     lastSent = Math.Max(lastSent, logged.Sequence);
@@ -2860,7 +2843,7 @@ namespace Voltaic.Mcp
                 if (envelope.Method == "initialize")
                 {
                     if (envelope.IdKey != null) state.RecordFinished(envelope.IdKey);
-                    pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse
+                    pending.Add(Task.FromResult<string?>(VoltaicJsonSerializer.Serialize(new JsonRpcResponse
                     {
                         Id = envelope.ResponseId,
                         Error = new JsonRpcError { Code = -32600, Message = "Invalid Request: initialize must not be part of a JSON-RPC batch." }
@@ -2883,7 +2866,7 @@ namespace Voltaic.Mcp
                     if (envelope.Kind == McpEnvelopeKind.Request)
                     {
                         if (envelope.IdKey != null) state.RecordFinished(envelope.IdKey);
-                        pending.Add(Task.FromResult<string?>(JsonSerializer.Serialize(new JsonRpcResponse
+                        pending.Add(Task.FromResult<string?>(VoltaicJsonSerializer.Serialize(new JsonRpcResponse
                         {
                             Id = envelope.ResponseId,
                             Error = new JsonRpcError { Code = -32600, Message = $"Invalid Request: protocol version {McpProtocol.ProtocolVersion20260728} does not allow JSON-RPC batches; send the request on its own." }
@@ -3069,7 +3052,7 @@ namespace Voltaic.Mcp
             HttpAccessGuard.ApplyCorsHeaders(context, _EnableCors, _CorsHeaders);
             context.Response.StatusCode = 200;
             context.Response.ContentType = "application/json";
-            byte[] buffer = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(metadata));
+            byte[] buffer = Encoding.UTF8.GetBytes(VoltaicJsonSerializer.Serialize(metadata));
             context.Response.ContentLength64 = buffer.Length;
             await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
             context.Response.Close();
@@ -3133,7 +3116,7 @@ namespace Voltaic.Mcp
             JsonRpcRequest? incomingRequest = null;
             try
             {
-                incomingRequest = JsonSerializer.Deserialize<JsonRpcRequest>(requestBody, JsonLimits.Serializer);
+                incomingRequest = VoltaicJsonSerializer.Deserialize<JsonRpcRequest>(requestBody, JsonLimits.Serializer);
             }
             catch (JsonException)
             {
@@ -3276,7 +3259,7 @@ namespace Voltaic.Mcp
 
         private async Task SendSseNotificationAsync(HttpListenerResponse response, JsonRpcRequest notification, CancellationToken token)
         {
-            string json = JsonSerializer.Serialize(notification);
+            string json = VoltaicJsonSerializer.Serialize(notification);
             string sseMessage = $"data: {json}\n\n";
             byte[] buffer = Encoding.UTF8.GetBytes(sseMessage);
 

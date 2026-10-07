@@ -90,6 +90,7 @@ namespace Test.Shared
                 A2AProtocolSuites.Hardening(),
                 A2ACompatibilitySuites.OfficialSdkOracle(),
                 TelemetrySuites.Cases(),
+                JsonTypeInfoSuites.Cases(),
             };
 
             if (tags == null || tags.Count == 0)

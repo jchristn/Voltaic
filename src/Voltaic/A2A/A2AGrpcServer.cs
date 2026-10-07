@@ -736,7 +736,7 @@ namespace Voltaic.A2A
             context.Response.StatusCode = 200;
             context.Response.ContentType = "application/json";
             context.Response.Headers.Set(A2AProtocol.VersionHeader, A2AProtocol.ProtocolVersion);
-            string json = JsonSerializer.Serialize(value, A2AJson.DefaultOptions);
+            string json = VoltaicJsonSerializer.Serialize(value, A2AJson.DefaultOptions);
             await context.Response.Send(json, token).ConfigureAwait(false);
         }
 

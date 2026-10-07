@@ -4,6 +4,17 @@ Behavior changes that may need action when upgrading, newest first. Each table l
 
 v2.1.1 and v2.2.1 need no action (see the README's [Specification conformance](README.md#specification-conformance) section).
 
+## Upgrading to v2.3.0
+
+v2.3.0 makes Voltaic trim-safe and Native AOT-compatible. Applications that do not use trimming or Native AOT need no changes, and the JSON Voltaic writes is identical. These cases may need attention:
+
+| Change | Who is affected | What to do |
+|---|---|---|
+| Under Native AOT or trimming, Voltaic serializes application types only through a resolver the application adds | Native AOT and trimmed applications that pass their own classes as tool results, structured content, call parameters, or error data, or read them with `CallAsync<T>` or `RpcParameters.Deserialize<T>()` | Add a `JsonSerializerContext` for those types with `VoltaicJson.AddTypeInfoResolver` at startup. A type no resolver knows fails its call with `-32603`, and the server's `Log` event names it. See [Native AOT and trimming](README.md#native-aot-and-trimming). |
+| Anonymous types cannot be serialized under Native AOT | Native AOT applications that pass anonymous types as schemas, results, or parameters | Use `JsonObject`/`JsonNode`, `JsonElement`, `Dictionary<string, object?>`, or a class in your `JsonSerializerContext`. |
+| Error data Voltaic builds (for example `McpProtocolException.InvalidCursor`), the default `ToolDefinition.InputSchema`, and the `logging`/`completions` capabilities are dictionaries or an internal empty-object type instead of anonymous objects | Code that inspected these values with reflection | Serialize them, or read them as `IDictionary<string, object?>`; their JSON is unchanged. |
+| `A2AJson.DefaultOptions` has `TypeInfoResolver` set to `VoltaicJson.TypeInfoResolver` | Code that used `A2AJson.DefaultOptions` for its own types under Native AOT | Add your types with `VoltaicJson.AddTypeInfoResolver`. |
+
 ## Upgrading to v2.2.0
 
 v2.2.0 adds telemetry and needs no code changes. These cases may need attention:

@@ -253,7 +253,7 @@ namespace Voltaic.Mcp
             {
                 try
                 {
-                    await CallAsync<object?>("ping", new { }, _PingTimeoutMs, ct).ConfigureAwait(false);
+                    await CallAsync<object?>("ping", JsonEmptyObject.Instance, _PingTimeoutMs, ct).ConfigureAwait(false);
                     return true;
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
