@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>2.3.0</Version>
+		<Version>2.4.0</Version>
 		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -24,7 +24,7 @@
 		<RepositoryUrl>https://github.com/jchristn/Voltaic</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageTags>json;rpc;aot;nativeaot;trimming;websocket;websockets;http;stdio;mcp;a2a;agent2agent;agent;client;server;tcp;grpc;protobuf;ai;llm;model;context;protocol;resources;prompts;tools;streamable-http;sse;schema</PackageTags>
-		<PackageReleaseNotes>v2.3.0: Native AOT and trimming support (IsAotCompatible on net8.0 and net10.0). Voltaic serializes from source-generated metadata; applications add a JsonSerializerContext for their own types with VoltaicJson.AddTypeInfoResolver. Without AOT nothing changes and JSON output is identical. Watson 7.3.0. See CHANGELOG.md.</PackageReleaseNotes>
+		<PackageReleaseNotes>v2.4.0: McpHttpClient and McpWebsocketsClient accept a caller-supplied HttpMessageHandler (new constructors), so applications that connect to untrusted URLs can refuse redirects and check the address actually connected to (DNS rebinding). Adds API only; existing code is unchanged. See CHANGELOG.md.</PackageReleaseNotes>
 		<PackageLicenseFile>LICENSE.md</PackageLicenseFile>
 		<IncludeSymbols>True</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>

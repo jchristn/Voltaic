@@ -302,12 +302,36 @@ namespace Voltaic.Mcp
         private readonly ConcurrentDictionary<string, List<McpHeaderParameter>> _ToolHeaderParameters = new ConcurrentDictionary<string, List<McpHeaderParameter>>(StringComparer.Ordinal);
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="McpHttpClient"/> class.
+        /// Initializes a new instance of the <see cref="McpHttpClient"/> class with a default <see cref="HttpClient"/>,
+        /// which follows redirects and connects to whatever address DNS returns.
         /// </summary>
         public McpHttpClient()
         {
             VoltaicInstruments.EnsureCreated();
             _HttpClient = new HttpClient();
+            _RequestDispatcher.Log = LogMessage;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="McpHttpClient"/> class that sends every request (the JSON-RPC
+        /// POSTs, the SSE GET stream, stateless calls, <c>subscriptions/listen</c>, replies to server requests, session
+        /// DELETE, and reconnects) through <paramref name="handler"/>. Use it to control redirects, proxies,
+        /// certificates, or the connection itself, for example a <see cref="SocketsHttpHandler"/> with
+        /// <see cref="SocketsHttpHandler.AllowAutoRedirect"/> set to false and a
+        /// <see cref="SocketsHttpHandler.ConnectCallback"/> that refuses some addresses, so that a URL from a caller you
+        /// do not fully trust cannot reach internal addresses through a redirect or DNS rebinding.
+        /// Voltaic never changes the handler's settings. The <see cref="HttpClient"/> wrapping the handler is still owned
+        /// by this client, so headers set with <see cref="SetRequestHeader"/> never reach other users of the handler,
+        /// and one handler can be shared by several clients (pass false for <paramref name="disposeHandler"/>).
+        /// </summary>
+        /// <param name="handler">Handler for every request this client sends. Must not be null.</param>
+        /// <param name="disposeHandler">True (the default) to dispose <paramref name="handler"/> when this client is disposed; false to leave it usable.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="handler"/> is null.</exception>
+        public McpHttpClient(HttpMessageHandler handler, bool disposeHandler = true)
+        {
+            ArgumentNullException.ThrowIfNull(handler);
+            VoltaicInstruments.EnsureCreated();
+            _HttpClient = new HttpClient(handler, disposeHandler);
             _RequestDispatcher.Log = LogMessage;
         }
 

@@ -10,7 +10,7 @@
 
 Voltaic gives .NET applications a small, direct way to expose and consume structured agent protocols. Use it when you need JSON-RPC 2.0, MCP tools/resources/prompts, or A2A agents without adopting a larger application framework.
 
-Voltaic v2.3.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
+Voltaic v2.4.0 recognizes five MCP protocol revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and the stateless `2026-07-28`) and targets A2A protocol version `1.0`. The public API and source tree are split into `Voltaic.Core`, `Voltaic.Mcp`, and `Voltaic.A2A`.
 
 An `initialize` handshake negotiates at most the newest handshake-era revision, `2025-11-25` (configurable with `MaximumHandshakeProtocolVersion`), because the stateless `2026-07-28` revision defines no `initialize` and no sessions. Clients reach `2026-07-28` through the stateless request path instead: `server/discover` followed by per-request `MCP-Protocol-Version`, `Mcp-Method`, and `_meta` signals. That is how current clients such as Claude Code 2.1.x connect, and Voltaic's stateless responses carry the `resultType`, `ttlMs`, and `cacheScope` fields the revision requires. Version selection is driven by the `McpProtocol` registry and `McpVersionResolver`, and it behaves identically with or without an `AuthenticationHandler`. See [Protocol version negotiation](#protocol-version-negotiation).
 
@@ -45,7 +45,7 @@ You bring your business logic. Voltaic handles the protocol surface, message fra
 - Answer MCP requests from handshake-era and stateless `2026-07-28` clients on the same server, on every transport, including Multi Round-Trip input requests from tool handlers.
 - Emit OpenTelemetry-compatible metrics and traces for every server, client, tool call, session, limiter, A2A agent run, and push delivery on the `Voltaic` meter and activity source, with W3C trace propagation across every transport and no new dependencies. See [Observability](#observability).
 - Run in Native AOT and trimmed applications on .NET 8 and .NET 10: Voltaic serializes from source-generated metadata, and your own types join through `VoltaicJson.AddTypeInfoResolver`. See [Native AOT and trimming](#native-aot-and-trimming).
-- Run the same 857-case Touchstone suite through console, xUnit, and NUnit projects under `src/`, plus a Native AOT smoke test (`src/Test.Aot`) across every transport.
+- Run the same 870-case Touchstone suite through console, xUnit, and NUnit projects under `src/`, plus a Native AOT smoke test (`src/Test.Aot`) across every transport.
 
 ## MCP Endpoint Requirements
 
@@ -1231,6 +1231,58 @@ McpHttpServer lanServer = new McpHttpServer("+", 8080);
 
 The TCP and stdio transports stay unauthenticated by design; strict framing is what stops browsers from talking to them.
 
+### Supplying the HTTP handler (connecting to untrusted URLs)
+
+When an application connects a client to a URL chosen by someone it does not fully trust (a tenant, a user, a registry entry), checking the URL's address before connecting is not enough: the server can answer with a redirect to an internal address such as a cloud metadata service at `169.254.169.254`, and the host name can resolve to a different, blocked address by the time the client connects (DNS rebinding). Since v2.4.0 every Voltaic HTTP-based client lets the application supply the transport that closes both gaps:
+
+| Client | How to supply it |
+|---|---|
+| `McpHttpClient` | `new McpHttpClient(handler, disposeHandler: true)`: every request (JSON-RPC POSTs, the SSE GET, stateless calls, `subscriptions/listen`, replies to server requests, session DELETE, reconnects) goes through `handler` |
+| `McpWebsocketsClient` | `new McpWebsocketsClient(handler, disposeHandler: true)`: every upgrade request goes through `handler`, which must be a `SocketsHttpHandler` (or delegating handlers over one) |
+| `A2AClient`, `A2AHttpJsonClient`, `A2AGrpcClient`, `A2ACardResolver` | Pass an `HttpClient` built on the handler (the constructors' optional `httpClient` parameter) |
+| `JsonRpcClient`, `McpTcpClient` | No redirects exist on these transports; resolve and check the host yourself and pass the checked IP address to `ConnectAsync` |
+
+Voltaic never changes the handler's settings, and the parameterless constructors keep their behavior (redirects followed). Pass `disposeHandler: false` to share one handler between clients.
+
+```csharp
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
+using Voltaic.Mcp;
+
+SocketsHttpHandler handler = new SocketsHttpHandler
+{
+    AllowAutoRedirect = false,
+    ConnectCallback = async (context, token) =>
+    {
+        // Resolve here, so the address checked is the address connected to.
+        IPAddress[] addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, token);
+        IPAddress address = addresses.FirstOrDefault(IsAllowed)
+            ?? throw new HttpRequestException($"{context.DnsEndPoint.Host} resolves only to blocked addresses.");
+
+        Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), token);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+};
+
+using McpHttpClient client = new McpHttpClient(handler);
+await client.ConnectStreamableAsync(tenantSuppliedUrl);
+
+// IsAllowed is your policy, for example: refuse loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7),
+// link-local (169.254/16, fe80::/10), and unspecified addresses.
+```
+
+A refused address fails the connect; the exception the callback threw is the `InnerException` of the `HttpRequestException`.
+
 ### Sessions
 
 On the handshake-era Streamable HTTP path, session IDs are always generated by the server:
@@ -1493,6 +1545,7 @@ Most upgrades within 2.x need no code changes; code that follows the MCP specifi
 - **Handshake and liveness (v2.1.5, v2.1.7):** stream clients initialize on connect (`AutoInitialize`), and both sides ping every 30 seconds (`PingIntervalMs`, `PingFailureThreshold`).
 - **Schemas (v2.1.7 to v2.1.11):** tool schemas are checked at `RegisterTool` in their declared dialect (2020-12 or draft-07), and `pattern` uses ECMA-262 syntax and semantics.
 - **Limits (v2.1.11, v2.1.13):** `RateLimits` per client, `MaxMessageSize` on every transport, and `MaxSessions`/`MaxSessionsPerClient` on `McpHttpServer` (set `ClientIdentifier` behind a reverse proxy).
+- **Caller-supplied HTTP handler (v2.4.0):** new constructors only; nothing changes for existing code. See [Supplying the HTTP handler](#supplying-the-http-handler-connecting-to-untrusted-urls).
 - **Native AOT (v2.3.0):** Voltaic is `IsAotCompatible`. Nothing changes without Native AOT; under Native AOT, add a `JsonSerializerContext` for your own types with `VoltaicJson.AddTypeInfoResolver` and replace anonymous types. See [Native AOT and trimming](#native-aot-and-trimming).
 - **Telemetry (v2.2.0):** Voltaic emits metrics and traces on the `Voltaic` meter and activity source. Nothing changes until a collector subscribes. MCP stream clients add `traceparent` to `params._meta` while a span is recorded; set `VoltaicTelemetry.PropagateTraceContext = false` to stop it. See [TELEMETRY.md](TELEMETRY.md).
 
@@ -1551,7 +1604,7 @@ Check out the `src/Test.*` projects for working examples:
 - **Test.A2AServer**: Manual A2A server harness with JSON-RPC, HTTP+JSON, gRPC, task inspection, and push config commands
 - **Test.A2AClient**: Manual A2A client for Agent Card discovery, JSON-RPC, HTTP+JSON, gRPC, streaming, and push config calls
 - **Test.Aot**: Native AOT smoke test with a `JsonSerializerContext`, covering every transport
-- **Test.Shared**: Shared Touchstone descriptors and the central 857-case API/protocol matrix
+- **Test.Shared**: Shared Touchstone descriptors and the central 870-case API/protocol matrix
 - **Test.Automated**: Touchstone console runner
 - **Test.Xunit** / **Test.Nunit**: Touchstone adapter projects for `dotnet test`
 
@@ -1627,7 +1680,7 @@ dotnet build src/Voltaic/Voltaic.csproj
 # Run Touchstone console tests
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0
 
-# The shared suite currently projects 857 cases through the console, xUnit, and NUnit runners
+# The shared suite currently projects 870 cases through the console, xUnit, and NUnit runners
 
 # Export Touchstone JSON results
 dotnet run --project src/Test.Automated/Test.Automated.csproj --framework net8.0 -- --results artifacts/test-results/voltaic-touchstone.json

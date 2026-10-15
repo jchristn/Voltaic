@@ -5,6 +5,7 @@ namespace Voltaic.Mcp
     using System.Linq;
     using System.Collections.Generic;
     using System.IO;
+    using System.Net.Http;
     using System.Net.WebSockets;
     using System.Text;
     using System.Text.Json;
@@ -97,9 +98,11 @@ namespace Voltaic.Mcp
         private int _PingFailureThreshold = 1;
         private McpPinger? _Pinger;
         private readonly SemaphoreSlim _SendLock = new SemaphoreSlim(1, 1);
+        private readonly HttpMessageInvoker? _Invoker;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="McpWebsocketsClient"/> class.
+        /// Initializes a new instance of the <see cref="McpWebsocketsClient"/> class. The WebSocket upgrade request
+        /// connects to whatever address DNS returns.
         /// </summary>
         public McpWebsocketsClient()
         {
@@ -107,6 +110,24 @@ namespace Voltaic.Mcp
             _PendingRequests = new ConcurrentDictionary<object, ClientPendingRequest>();
             _RequestDispatcher.Log = LogMessage;
             _RequestDispatcher.AcceptsBatches = () => McpClientHandshake.AllowsBatches(_ProtocolVersion);
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="McpWebsocketsClient"/> class that sends the WebSocket upgrade
+        /// request of every <see cref="ConnectAsync"/> through <paramref name="handler"/>. Use it to control the
+        /// connection, for example a <see cref="SocketsHttpHandler"/> whose <see cref="SocketsHttpHandler.ConnectCallback"/>
+        /// refuses some addresses, so that a URL from a caller you do not fully trust cannot reach internal addresses
+        /// through DNS rebinding. The handler must be a <see cref="SocketsHttpHandler"/>, or delegating handlers over one,
+        /// because the upgraded connection is read from the response stream. Voltaic never changes the handler's settings,
+        /// and one handler can be shared by several clients (pass false for <paramref name="disposeHandler"/>).
+        /// </summary>
+        /// <param name="handler">Handler for the upgrade request. Must not be null.</param>
+        /// <param name="disposeHandler">True (the default) to dispose <paramref name="handler"/> when this client is disposed; false to leave it usable.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="handler"/> is null.</exception>
+        public McpWebsocketsClient(HttpMessageHandler handler, bool disposeHandler = true) : this()
+        {
+            ArgumentNullException.ThrowIfNull(handler);
+            _Invoker = new HttpMessageInvoker(handler, disposeHandler);
         }
 
         /// <summary>
@@ -158,7 +179,8 @@ namespace Voltaic.Mcp
                 }
 
                 Uri uri = new Uri(url);
-                await _WebSocket.ConnectAsync(uri, token).ConfigureAwait(false);
+                if (_Invoker != null) await _WebSocket.ConnectAsync(uri, _Invoker, token).ConfigureAwait(false);
+                else await _WebSocket.ConnectAsync(uri, token).ConfigureAwait(false);
 
                 _TokenSource = new CancellationTokenSource();
                 CancellationToken receiveToken = _TokenSource.Token;
@@ -635,6 +657,7 @@ namespace Voltaic.Mcp
                     _TokenSource?.Dispose();
                     _WebSocket?.Dispose();
                     _SendLock.Dispose();
+                    _Invoker?.Dispose();
                 }
             }
         }

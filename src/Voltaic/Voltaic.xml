@@ -8592,8 +8592,26 @@
         </member>
         <member name="M:Voltaic.Mcp.McpHttpClient.#ctor">
             <summary>
-            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpHttpClient"/> class.
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpHttpClient"/> class with a default <see cref="T:System.Net.Http.HttpClient"/>,
+            which follows redirects and connects to whatever address DNS returns.
             </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpHttpClient.#ctor(System.Net.Http.HttpMessageHandler,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpHttpClient"/> class that sends every request (the JSON-RPC
+            POSTs, the SSE GET stream, stateless calls, <c>subscriptions/listen</c>, replies to server requests, session
+            DELETE, and reconnects) through <paramref name="handler"/>. Use it to control redirects, proxies,
+            certificates, or the connection itself, for example a <see cref="T:System.Net.Http.SocketsHttpHandler"/> with
+            <see cref="P:System.Net.Http.SocketsHttpHandler.AllowAutoRedirect"/> set to false and a
+            <see cref="P:System.Net.Http.SocketsHttpHandler.ConnectCallback"/> that refuses some addresses, so that a URL from a caller you
+            do not fully trust cannot reach internal addresses through a redirect or DNS rebinding.
+            Voltaic never changes the handler's settings. The <see cref="T:System.Net.Http.HttpClient"/> wrapping the handler is still owned
+            by this client, so headers set with <see cref="M:Voltaic.Mcp.McpHttpClient.SetRequestHeader(System.String,System.String)"/> never reach other users of the handler,
+            and one handler can be shared by several clients (pass false for <paramref name="disposeHandler"/>).
+            </summary>
+            <param name="handler">Handler for every request this client sends. Must not be null.</param>
+            <param name="disposeHandler">True (the default) to dispose <paramref name="handler"/> when this client is disposed; false to leave it usable.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="handler"/> is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpHttpClient.SetRequestHeader(System.String,System.String)">
             <summary>
@@ -13391,8 +13409,23 @@
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsClient.#ctor">
             <summary>
-            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpWebsocketsClient"/> class.
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpWebsocketsClient"/> class. The WebSocket upgrade request
+            connects to whatever address DNS returns.
             </summary>
+        </member>
+        <member name="M:Voltaic.Mcp.McpWebsocketsClient.#ctor(System.Net.Http.HttpMessageHandler,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:Voltaic.Mcp.McpWebsocketsClient"/> class that sends the WebSocket upgrade
+            request of every <see cref="M:Voltaic.Mcp.McpWebsocketsClient.ConnectAsync(System.String,System.Threading.CancellationToken)"/> through <paramref name="handler"/>. Use it to control the
+            connection, for example a <see cref="T:System.Net.Http.SocketsHttpHandler"/> whose <see cref="P:System.Net.Http.SocketsHttpHandler.ConnectCallback"/>
+            refuses some addresses, so that a URL from a caller you do not fully trust cannot reach internal addresses
+            through DNS rebinding. The handler must be a <see cref="T:System.Net.Http.SocketsHttpHandler"/>, or delegating handlers over one,
+            because the upgraded connection is read from the response stream. Voltaic never changes the handler's settings,
+            and one handler can be shared by several clients (pass false for <paramref name="disposeHandler"/>).
+            </summary>
+            <param name="handler">Handler for the upgrade request. Must not be null.</param>
+            <param name="disposeHandler">True (the default) to dispose <paramref name="handler"/> when this client is disposed; false to leave it usable.</param>
+            <exception cref="T:System.ArgumentNullException">Thrown when <paramref name="handler"/> is null.</exception>
         </member>
         <member name="M:Voltaic.Mcp.McpWebsocketsClient.SetRequestHeader(System.String,System.String)">
             <summary>

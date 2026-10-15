@@ -5,6 +5,7 @@ namespace Test.Aot
     using System.Diagnostics;
     using System.Linq;
     using System.Net;
+    using System.Net.Http;
     using System.Net.Sockets;
     using System.Text.Json;
     using System.Threading;
@@ -123,6 +124,12 @@ namespace Test.Aot
             await McpChecksAsync(new WebSocketCaller(client)).ConfigureAwait(false);
             Check("automatic initialize", client.InitializeResult != null);
 
+            using McpWebsocketsClient handlerClient = new McpWebsocketsClient(new SocketsHttpHandler { AllowAutoRedirect = false });
+            Check("connect through a caller-supplied handler", await handlerClient.ConnectAsync($"ws://localhost:{port}/mcp").ConfigureAwait(false));
+            JsonElement handlerPong = await handlerClient.CallAsync<JsonElement>("ping").ConfigureAwait(false);
+            Check("ping through a caller-supplied handler", handlerPong.ValueKind == JsonValueKind.Object);
+            handlerClient.Disconnect();
+
             client.Disconnect();
             server.Stop();
             stop.Cancel();
@@ -140,6 +147,12 @@ namespace Test.Aot
             using McpHttpClient client = new McpHttpClient();
             Check("connect and initialize", await client.ConnectStreamableAsync($"http://localhost:{port}").ConfigureAwait(false));
             await McpChecksAsync(new HttpCaller(client)).ConfigureAwait(false);
+
+            using McpHttpClient handlerClient = new McpHttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
+            Check("connect through a caller-supplied handler", await handlerClient.ConnectStreamableAsync($"http://localhost:{port}").ConfigureAwait(false));
+            JsonElement handlerPong = await handlerClient.CallAsync<JsonElement>("ping").ConfigureAwait(false);
+            Check("ping through a caller-supplied handler", handlerPong.ValueKind == JsonValueKind.Object);
+            handlerClient.Disconnect();
 
             client.Disconnect();
             server.Stop();

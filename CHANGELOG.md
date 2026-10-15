@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.4.0
+Lets applications supply the HTTP transport of the MCP HTTP and WebSocket clients, so a client pointed at a URL from someone the application does not fully trust cannot be steered to an internal address (for example a cloud metadata service) by a redirect or by DNS rebinding. Adds API only: existing code compiles and behaves exactly as before. See the README's [Supplying the HTTP handler](README.md#supplying-the-http-handler-connecting-to-untrusted-urls).
+
+### Added
+- `McpHttpClient(HttpMessageHandler handler, bool disposeHandler = true)`. Every request the client sends goes through the handler: the JSON-RPC POSTs (Streamable HTTP and legacy `/rpc`), the SSE GET (`/mcp` and `/events`), stateless (`2026-07-28`) calls, `subscriptions/listen`, replies to server requests, session DELETE, and reconnects. Voltaic still owns the `HttpClient` around the handler, so `SetRequestHeader` never affects other users of a shared handler.
+- `McpWebsocketsClient(HttpMessageHandler handler, bool disposeHandler = true)`. Every WebSocket upgrade request, including reconnects, goes through the handler (`ClientWebSocket.ConnectAsync` with an `HttpMessageInvoker`); it must be a `SocketsHttpHandler` or delegating handlers over one.
+- Voltaic never changes the handler's settings: redirects, proxies, certificates, and the connect callback are the caller's choice. The parameterless constructors are unchanged (the HTTP client still follows redirects).
+- README: the HTTP-based clients and how each one takes a caller-supplied transport (the A2A clients already accept an `HttpClient`; the TCP clients have no redirects and take a checked IP address).
+
+### Tests
+- New `Security.ClientHandler` suite (13 cases): null handlers rejected; the handler sees every streamable, legacy, and stateless request type, the SSE GET, and the session DELETE; with `AllowAutoRedirect = false` a 302 fails the connect and the redirect target is never contacted (HTTP and WebSocket), while the parameterless constructor still follows it; a `ConnectCallback` that refuses `127.0.0.2` fails the connect with its exception as the inner exception and nothing reaches the server (HTTP and WebSocket), and the same policy connects to allowed addresses; `disposeHandler` ownership on both clients, including a handler shared across clients and reconnects.
+- `Test.Aot` connects through a caller-supplied `SocketsHttpHandler` on Streamable HTTP and WebSocket; 73 of 73 checks pass as native binaries on net8.0 and net10.0 (osx-arm64).
+- 870 cases pass on net8.0 and net10.0 through the console, xUnit, and NUnit runners.
+
 ## v2.3.0
 Native AOT and trimming support. Applications that do not use Native AOT or trimming need no changes, and the JSON Voltaic writes is identical. See the README's [Native AOT and trimming](README.md#native-aot-and-trimming) and [UPGRADING.md](UPGRADING.md#upgrading-to-v230).
 
